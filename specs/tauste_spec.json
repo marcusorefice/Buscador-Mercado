@@ -1,0 +1,26 @@
+{
+  "market_name": "Tauste Supermercado",
+  "base_url": "https://www.flipsnack.com/taustesupermercado/",
+  "data_origin": "Visual Inserts via FlipSnack Portal",
+  "scraping_method": "Automated Screenshot Photography (Selenium)",
+  "regionalization": {
+    "city_filter": "jundia",
+    "target_element": "a.flip-card strong"
+  },
+  "selectors_mapping": {
+    "pamphlet_cards": "a.flip-card",
+    "iframe_player": "player-iframe",
+    "next_button_id": "btn-next"
+  },
+  "special_rules": [
+    "A detecção de fim de encarte é feita via comparação de Hash MD5 da imagem (se a foto atual for idêntica à anterior, o loop encerra).",
+    "Necessário switch_to.frame para acessar o player do FlipSnack.",
+    "Utiliza tempos de espera (sleep) para garantir a renderização das animações de virada de página.",
+    "A filtragem regional é feita por busca de texto (case insensitive) nos títulos dos cards disponíveis."
+  ],
+  "technical_dependencies": {
+    "automation": "Selenium (Headless Chrome)",
+    "verification": "hashlib (MD5 checks)",
+    "timing": "WebDriverWait + Explicit Sleeps"
+  }
+}

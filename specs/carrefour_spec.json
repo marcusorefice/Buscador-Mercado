@@ -1,0 +1,41 @@
+{
+  "market_name": "Carrefour",
+  "base_url": "https://mercado.carrefour.com.br/",
+  "data_origin": "VTEX Remix Stream (.data endpoint)",
+  "scraping_method": "Hybrid (Playwright Session + Async API Requests)",
+  "regionalization": {
+    "cluster_id": "28617",
+    "region_id": "InYyLjc5MDlFOEZDNjU2N0M3OTU5NjA4MDFCQTU5RDFFMEQ3Ig==",
+    "cep_jundiai": "13211160",
+    "session_file": "carrefour_session.json",
+    "cep_cookie_value": "IkhpcGVyIEp1bmRpYcOtIg=="
+  },
+  "pagination": {
+    "page_size": 50,
+    "max_pages_per_sort": 25
+  },
+  "selectors_mapping": {
+    "root_path": "routes/colecao.$collectionId",
+    "product_name": "node.name / node.productName",
+    "brand": "node.brand.name",
+    "image_url": "node.image[0].url / node.items[0].images[0].imageUrl",
+    "price_retail": "offers.offers[0].listPrice / commertialOffer.ListPrice",
+    "price_final": "offers.offers[0].price / commertialOffer.Price",
+    "valid_until": "offers.offers[0].priceValidUntil"
+  },
+  "special_rules": [
+    "Necessita da função 'reconstruir_json_remix' para decodificar o mapeamento de índices do stream VTEX.",
+    "Utiliza automação Playwright para contornar proteções e capturar cookies de sessão regionalizados.",
+    "Implementa cache de sessão em arquivo JSON para minimizar a abertura do navegador.",
+    "A 'Condição' é definida como 'MEU CARREFOUR (CPF)' sempre que o preço final for inferior ao preço de varejo.",
+    "Executa varredura em duas frentes (price_asc e price_desc) para superar o limite de paginação e maximizar o volume de itens únicos.",
+    "Conversão dinâmica de datas ISO para o formato brasileiro (DD/MM/AAAA) no campo de validade."
+  ],
+  "technical_dependencies": {
+    "browser_automation": "Playwright (chromium/headless)",
+    "playwright_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "request_engine": "curl_cffi (impersonate chrome124)",
+    "session_management": "Cookie Cache & Session Testing",
+    "concurrency": 8
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "market_name": "Fort Atacadista",
+  "base_url": "https://www.fortatacadista.com.br/ofertas/",
+  "data_origin": "Visual Inserts (PDF/JPG)",
+  "scraping_method": "Selenium UI Navigation + File Download",
+  "regionalization": {
+    "state": "SP",
+    "city": "Jundiaí",
+    "store_name": "Jundiaí | SP | Fort Atacadista 635"
+  },
+  "selectors_mapping": {
+    "state_select_id": "tabloide-estados",
+    "city_select_id": "tabloide-cidades",
+    "store_select_id": "tabloide-lojas",
+    "tabloid_links": ".tabloid-link"
+  },
+  "special_rules": [
+    "Navegação obrigatória por menus suspensos (Select) para carregar os encartes regionais.",
+    "Requer Poppler para conversão de PDFs (localizado em /poppler-25.12.0/Library/bin).",
+    "Os PDFs originais são excluídos após a conversão para economizar espaço em disco.",
+    "Utiliza verify=False nas requisições do 'requests' para evitar erros de SSL no download dos arquivos."
+  ],
+  "technical_dependencies": {
+    "automation": "Selenium (Headless Chrome)",
+    "download": "requests (urllib3.disable_warnings)",
+    "image_processing": "pdf2image (DPI 150)",
+    "logging": "utils.setup_logging()"
+  }
+}

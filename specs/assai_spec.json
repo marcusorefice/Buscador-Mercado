@@ -1,0 +1,27 @@
+{
+  "market_name": "Assaí Atacadista",
+  "base_url": "https://www.assai.com.br/ofertas/sao-paulo/assai-jundiai",
+  "data_origin": "Visual Inserts (PDF/Images) via Cloudfront",
+  "scraping_method": "Selenium + PDF Conversion",
+  "selectors_mapping": {
+    "location_trigger": "a.btn.seletor-loja",
+    "state_selector": "select.estado (Value: 24)",
+    "region_selector": "select.regiao (Value: 2477)",
+    "store_selector": "select.loja (Value: 217)",
+    "empty_status_check": ".ofertas-tab-validade",
+    "insert_tabs": "div.ofertas-tab button",
+    "media_links": "a[data-fancybox='ofertas']",
+    "next_button": "button.slick-next"
+  },
+  "special_rules": [
+    "Requer Poppler (localizado em /poppler-25.12.0/Library/bin) para conversão de PDF.",
+    "A detecção de 'sem encarte' é feita via texto na classe .ofertas-tab-validade.",
+    "Os links de imagem são filtrados para conter 'cloudfront'.",
+    "A extração não é de texto puro, mas de arquivos que serão enviados para OCR/IA posteriormente."
+  ],
+  "technical_dependencies": {
+    "rendering": "Headless Chrome (Selenium)",
+    "download_engine": "curl_cffi (impersonate chrome)",
+    "image_processing": "pdf2image (DPI 150)"
+  }
+}

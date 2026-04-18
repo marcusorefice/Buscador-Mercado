@@ -1,0 +1,21 @@
+{
+  "market_name": "Roldão Atacadista",
+  "base_url": "https://roldao.com.br/ofertas/",
+  "data_origin": "Visual Inserts (Direct JPEG via WordPress)",
+  "scraping_method": "Regex-based HTML Scanning (Requests)",
+  "selectors_mapping": {
+    "image_regex": "https?://roldao\\.com\\.br/wp-content/uploads/[^\"']+\\-scaled\\.jpeg",
+    "filter_keywords": ["ROLDAO-", "ESPECIAL-"]
+  },
+  "special_rules": [
+    "Não utiliza Selenium; a extração é feita via leitura de texto puro do HTML.",
+    "Os links de imagem são encontrados através de Regex no diretório de uploads do WordPress.",
+    "Necessário desativar avisos de SSL (urllib3.disable_warnings) devido a certificados inseguros no servidor de origem.",
+    "Diferente do Assaí/Fort, este mercado entrega JPEGs diretos, eliminando a necessidade de conversão de PDF."
+  ],
+  "technical_dependencies": {
+    "request_engine": "requests (verify=False)",
+    "parser": "re (Regex engine)",
+    "file_management": "os (garantir_pasta e unlink)"
+  }
+}

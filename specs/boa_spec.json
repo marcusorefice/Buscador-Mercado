@@ -1,0 +1,42 @@
+{
+  "market_name": "Boa Supermercados",
+  "base_url": "https://www.boasupermercados.com.br/",
+  "api_endpoint": "/api/graphql",
+  "data_origin": "GraphQL API (GetProductsQuery / ClientProductQuery)",
+  "scraping_method": "Two-Step Async GraphQL (Listing + Price Deep Dive)",
+  "regionalization": {
+    "region_id": "v2.BD821CBD8067F03D236A5416A87F4B3B",
+    "cep_jundiai": "13211-745",
+    "channel": "1",
+    "cluster_id": "2510"
+  },
+  "pagination": {
+    "max_pages": 12
+  },
+  "selectors_mapping": {
+    "root_path": "data.search.products.edges",
+    "product_name": "node.name",
+    "brand": "node.brand",
+    "image_url": "node.items[0].images[0].imageUrl",
+    "price_retail": "price.listPrice",
+    "price_final": "price.salesPrice",
+    "club_price": "price.clubeAmigoPrice",
+    "card_price": "price.cartonistaPrice"
+  },
+  "special_rules": [
+    "Executa uma chamada 'GetProductsQuery' para listar os IDs e uma segunda 'ClientProductQuery' para extrair o preço real.",
+    "A 'Condição' é priorizada na ordem: CLUBE +AMIGO > CARTONISTA > LEVE MAIS > 1un.",
+    "O 'price_final' deve sempre refletir o menor valor disponível entre Clube, Cartão ou Oferta Geral.",
+    "Utiliza tratamento de erros para ignorar produtos com estoque zerado (availability: 'outOfStock').",
+    "Aplica a função 'extrair_medidas_inteligente' para separar peso/volume do nome bruto do produto."
+  ],
+  "technical_dependencies": {
+    "request_engine": "curl_cffi (AsyncSession)",
+    "impersonation": "chrome120",
+    "concurrency": {
+      "page_semaphore": 5,
+      "api_semaphore": 15
+    },
+    "data_shaping": "Deduplicação via Dicionário de Produtos para evitar repetições entre categorias"
+  }
+}

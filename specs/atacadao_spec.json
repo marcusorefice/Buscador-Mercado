@@ -1,0 +1,41 @@
+{
+  "market_name": "Atacadão",
+  "base_url": "https://www.atacadao.com.br/",
+  "api_endpoint": "/api/graphql",
+  "data_origin": "GraphQL API (operationName: ProductsQuery)",
+  "scraping_method": "Async API Requests (curl_cffi)",
+  "regionalization": {
+    "seller_id": "atacadaobr633",
+    "region_id": "U1cjYXRhY2FkYW9icjYzMw==",
+    "cluster_ofertas": "312",
+    "cep_jundiai": "13211-772",
+    "cookie_name": "regionalization"
+  },
+  "pagination": {
+    "page_size": 50,
+    "max_pages": 40
+  },
+  "selectors_mapping": {
+    "root_path": "data.search.products.edges",
+    "product_name": "node.name",
+    "brand": "node.brand.name",
+    "category_original": "node.categoryTree[-1].name",
+    "image_url": "node.items[0].images[0].imageUrl / node.image[0].url",
+    "price_retail": "node.offers.highPrice",
+    "price_final": "node.offers.lowPrice",
+    "wholesale_condition": "node.offers.offers[].minQuantity"
+  },
+  "special_rules": [
+    "Fixa a loja de Jundiaí injetando o cookie 'regionalization' formatado como JSON string no domínio.",
+    "Lógica de preço duplo: Preço Varejo (highPrice) e Preço Atacado (lowPrice).",
+    "A 'Condição' de atacado é extraída percorrendo o array 'offers' para identificar o 'minQuantity' associado ao menor preço.",
+    "Paginação via 'offset' utilizando o parâmetro 'after' codificado dentro das variáveis do GraphQL.",
+    "Tratamento de imagem em duas camadas (Caminho 1: items/images; Caminho 2: nó raiz da imagem)."
+  ],
+  "technical_dependencies": {
+    "request_engine": "curl_cffi (AsyncSession)",
+    "impersonation": "chrome",
+    "session_management": "Regionalization Cookie Injection",
+    "concurrency": "asyncio.gather (execução paralela de offsets)"
+  }
+}

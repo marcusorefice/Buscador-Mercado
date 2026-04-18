@@ -1,0 +1,39 @@
+{
+  "market_name": "São Vicente",
+  "base_url": "https://www.svicente.com.br/",
+  "api_endpoint": "/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Search-UpdateGrid",
+  "data_origin": "Salesforce Demandware API (Search-UpdateGrid)",
+  "scraping_method": "Async API Requests (curl_cffi)",
+  "regionalization": {
+    "cgid": "ofertas-header",
+    "pmid": "FPP_030|FPV_030|M_030",
+    "details": "Filtro de categoria para ofertas regionalizadas e pmid para precificação de loja física."
+  },
+  "pagination": {
+    "page_size": 200
+  },
+  "selectors_mapping": {
+    "root_path": "productsSearchResult",
+    "product_name": "productName / name",
+    "brand": "brand",
+    "image_url": "images (medium/large/small) com prepend de domínio",
+    "price_retail": "price.list.value (ou price.sales.value)",
+    "price_final": "price.sales.value",
+    "club_price_raw": "flagtypes[flagType:facil-pra-voce].valueFlagType"
+  },
+  "special_rules": [
+    "Identifica o preço do Clube 'Fácil pra Você' através do array 'flagtypes', que contém o valor promocional formatado como string.",
+    "Lógica de Atacado/Varejo para Clube: o preço comum de venda (sales) vira o 'Varejo' e o valor da flag de fidelidade assume o 'Atacado'.",
+    "Conversão de Moeda: Limpa o prefixo 'R$', remove pontos de milhar e converte a vírgula decimal para ponto (float).",
+    "A 'Condição' é definida como 'CLUBE SV' se a flag for detectada; se não, busca promoções de quantidade em 'promotions' ou aplica o fallback '1un'.",
+    "Paginação via 'start' e 'sz' (tamanho 200) disparada simultaneamente após a primeira chamada de contagem.",
+    "Tratamento de imagem em cascata buscando a melhor resolução disponível nos nós 'medium', 'large' ou 'small'."
+  ],
+  "technical_dependencies": {
+    "request_engine": "curl_cffi (AsyncSession)",
+    "impersonation": "chrome120",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "concurrency": 5,
+    "data_shaping": "Deduplicação final via dicionário de nomes de produtos para evitar repetições de página"
+  }
+}

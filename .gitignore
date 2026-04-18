@@ -1,0 +1,26 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data and Cache files
+data/
+temp_imagens/
+temp_json_cache/
+*.json
+!specs/*.json
+*.log
+*.sqlite
+*.db
+*.xlsx
+*.csv
+
+# Dependencies/Others
+poppler-*/

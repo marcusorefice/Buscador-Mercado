@@ -1,0 +1,40 @@
+{
+  "market_name": "Pão de Açúcar",
+  "base_url": "https://www.paodeacucar.com/",
+  "api_endpoint": "https://api.vendas.gpa.digital/pa/special-page",
+  "data_origin": "GPA Digital / Linx API (special-page)",
+  "scraping_method": "Async API Requests (POST)",
+  "regionalization": {
+    "store_id": "461",
+    "description": "Jundiaí - 9 de Julho",
+    "terms": "ofertasdodia-pao2023"
+  },
+  "pagination": {
+    "page_size": 50
+  },
+  "selectors_mapping": {
+    "root_path": "products",
+    "product_name": "name",
+    "brand": "brand",
+    "image_url": "productImages[0] (com prepend do domínio)",
+    "price_retail": "priceFrom",
+    "price_final": "price",
+    "promo_node": "productPromotions / productPromotion"
+  },
+  "special_rules": [
+    "Utiliza o endpoint de 'special-page' com o parceiro 'linx' para obter ofertas de alta performance.",
+    "Implementa lógica de promoção de quantidade extraindo 'promotionQuantityBuy' e 'promotionQuantityPayFor' para gerar o rótulo 'LEVE X PAGUE Y'.",
+    "A 'Condição' é definida como 'CLIENTE MAIS' sempre que o preço de venda for inferior ao 'priceFrom'.",
+    "Realiza a reconstrução da URL da imagem adicionando o prefixo do domínio principal ao caminho relativo retornado pela API.",
+    "Paginação controlada pelos parâmetros 'page' e 'resultsPerPage' (configurado para 50 itens por chamada).",
+    "Aplica uma pausa (sleep 0.3) entre páginas para evitar bloqueios por excesso de requisições na API Linx."
+  ],
+  "technical_dependencies": {
+    "request_engine": "curl_cffi (AsyncSession)",
+    "impersonation": "chrome120",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "payload_format": "JSON (POST)",
+    "rate_limit_delay": 0.3,
+    "data_shaping": "Deduplicação final via dicionário de IDs de produtos"
+  }
+}

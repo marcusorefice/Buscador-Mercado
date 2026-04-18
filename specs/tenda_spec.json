@@ -1,0 +1,26 @@
+{
+  "market_name": "Tenda Atacado",
+  "base_url": "https://www.tendaatacado.com.br/institucional/nossas-lojas/jundiai",
+  "data_origin": "Digital Catalog (Direct Image Source)",
+  "scraping_method": "Selenium Carousel Navigation + Requests Download",
+  "regionalization": {
+    "city": "Jundiaí",
+    "direct_url": "https://www.tendaatacado.com.br/institucional/nossas-lojas/jundiai"
+  },
+  "selectors_mapping": {
+    "cover_trigger": "img.folder",
+    "image_element": "img#image",
+    "next_button_script": "span.next-icon / .slick-next"
+  },
+  "special_rules": [
+    "O scraper deve clicar na capa do folheto para ativar o visualizador de imagens.",
+    "A captura é feita pegando o atributo 'src' da imagem atual e clicando no botão 'next'.",
+    "O loop encerra se o botão de próximo não for clicado ou se a URL da imagem voltar a ser igual à primeira (indica que o carrossel reiniciou).",
+    "Utiliza verify=False no download via Requests para ignorar certificados SSL expirados no servidor de imagens."
+  ],
+  "technical_dependencies": {
+    "automation": "Selenium (Headless Chrome)",
+    "download": "requests (verify=False)",
+    "error_handling": "JavaScript Injection para cliques forçados em botões ocultos"
+  }
+}

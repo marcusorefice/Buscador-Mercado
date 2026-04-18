@@ -1,0 +1,47 @@
+{
+  "market_name": "Oba Hortifruti",
+  "base_url": "https://www.obahortifruti.com.br/",
+  "api_endpoint": "/api/catalog_system/pub/products/search",
+  "data_origin": "VTEX Catalog System API (pub/products/search)",
+  "scraping_method": "Async API Requests (curl_cffi)",
+  "regionalization": {
+    "cluster_id": "977",
+    "description": "Foco no Cluster principal de ofertas regionalizadas para Jundiaí"
+  },
+  "selectors_mapping": {
+    "root_path": "Root Array (JSON List)",
+    "product_name": "productName",
+    "brand": "brand",
+    "image_url": "items[0].images[0].imageUrl",
+    "price_retail": "items[0].sellers[0].commertialOffer.ListPrice",
+    "price_final": "items[0].sellers[0].commertialOffer.Price",
+    "unit_raw": "items[0].measurementUnit"
+  },
+  "pagination": {
+    "page_size": 50,
+    "max_items": 600
+  },
+  "special_rules": [
+    {
+      "name": "blacklist_terms",
+      "values": [
+        "SEM GLÚTEN", "APROVEITE", "LANÇAMENTOS", "OFERTAS", "COMPRA DA SEMANA", 
+        "INTEGRAL", "SEM LACTOSE", "ORGÂNICO", "VEGANO", "VEGETARIANO", 
+        "PRODUTOS CURVA A", "PRODUTOS CURVA B", "CURVA A/B - HORTIFRUTI", "MAIS VENDIDOS"
+      ]
+    },
+    "Captura condições dinâmicas através de três camadas: clusterHighlights (Preço Verde), Teasers (Leve/Pague) e productClusters.",
+    "A 'Condição' é priorizada pela ordem: Teasers > Highlights > Clusters; se vazia após o filtro, define como '1un'.",
+    "Implementa paginação baseada em deslocamento (_from / _to) com limite de segurança de 600 itens para o loop de ofertas.",
+    "Normaliza unidades de medida identificando 'KG' no campo measurementUnit para diferenciar de unidades padrão.",
+    "Aplica pausa (sleep 0.3) entre requisições de página para respeitar o rate limit da infraestrutura VTEX."
+  ],
+  "technical_dependencies": {
+    "request_engine": "curl_cffi (AsyncSession)",
+    "impersonation": "chrome120",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "concurrency": "Processamento sequencial por lotes",
+    "rate_limit_delay": 0.3,
+    "data_shaping": "Deduplicação via Dicionário de Produtos (Produto -> Objeto)"
+  }
+}

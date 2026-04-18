@@ -1,0 +1,41 @@
+{
+  "market_name": "Covabra",
+  "base_url": "https://www.covabra.com.br/",
+  "api_endpoint": "/api/catalog_system/pub/products/search",
+  "data_origin": "VTEX Catalog Search API (catalog_system)",
+  "scraping_method": "REST API Requests (curl_cffi)",
+  "regionalization": {
+    "clusters_alvo": [
+      "480",
+      "605",
+      "618",
+      "638"
+    ],
+    "region_jundiai": "Mapeada via Cluster IDs específicos da região"
+  },
+  "pagination": {
+    "page_size": 50
+  },
+  "selectors_mapping": {
+    "root_path": "Root Array (JSON List)",
+    "product_name": "productName",
+    "brand": "brand",
+    "category_original": "categories[0] (parsed via split)",
+    "image_url": "items[0].images[0].imageUrl",
+    "price_retail": "items[0].sellers[0].commertialOffer.ListPrice",
+    "price_final": "items[0].sellers[0].commertialOffer.Price"
+  },
+  "special_rules": [
+    "Utiliza filtragem por 'productClusterIds' no parâmetro 'fq' para capturar ofertas regionalizadas.",
+    "Implementa paginação simples através dos parâmetros '_from' e '_to' (limite de 50 itens por cluster).",
+    "Extrai a categoria original do site navegando na árvore de categorias retornada no nó 'categories'.",
+    "A 'Condição' é fixada como 'OFERTA' para todos os itens capturados nos clusters de promoção.",
+    "Realiza a limpeza do nome do produto e extração de medidas utilizando a biblioteca modular 'utils'."
+  ],
+  "technical_dependencies": {
+    "request_engine": "curl_cffi (Session)",
+    "impersonation": "chrome110",
+    "data_shaping": "Deduplicação final por nome de produto para garantir unicidade na planilha",
+    "time_management": "Python datetime para registro de Data_Hora da captura"
+  }
+}
