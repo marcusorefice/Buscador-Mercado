@@ -6,7 +6,7 @@ import re
 import warnings
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
 
 # Oculta avisos de depreciação para manter o terminal limpo
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -35,8 +35,16 @@ CLUSTER_ID = REGIONALIZATION.get("cluster_id", "2510")
 MAX_PAGES = CONFIG.get("pagination", {}).get("max_pages", 12)
 
 CONCURRENCY = CONFIG.get("technical_dependencies", {}).get("concurrency", {})
-PAGE_SEMAPHORE = CONCURRENCY.get("page_semaphore", 5)
-API_SEMAPHORE = CONCURRENCY.get("api_semaphore", 15)
+try:
+    PAGE_SEMAPHORE = int(CONCURRENCY.get("page_semaphore", 5))
+except (ValueError, TypeError):
+    logger.warning(f"Valor de 'page_semaphore' inválido. Usando valor padrão 5.")
+    PAGE_SEMAPHORE = 5
+try:
+    API_SEMAPHORE = int(CONCURRENCY.get("api_semaphore", 15))
+except (ValueError, TypeError):
+    logger.warning(f"Valor de 'api_semaphore' inválido. Usando valor padrão 15.")
+    API_SEMAPHORE = 15
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 
 async def _buscar_preco_calculado(session: AsyncSession, product_id: str, sem_api: asyncio.Semaphore):
@@ -125,13 +133,43 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int, sem_pag: 
                             condicao = "EXCLUSIVO CARTÃO BOA"
                             break
 
+                # --- NOVA LÓGICA DE TAXONOMIA ---
+                cat_tree = p.get('categoryTree', [])
+                cat_site = ""
+                subcategoria = "N/A"
+                tipo_produto = "N/A"
+
+                if isinstance(cat_tree, list) and cat_tree:
+                    if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
+                    if len(cat_tree) > 1: subcategoria = cat_tree[1].get('name', 'N/A').upper()
+                    if len(cat_tree) > 2: tipo_produto = cat_tree[2].get('name', 'N/A').upper()
+                
+                if cat_site in CATEGORIAS_IGNORADAS:
+                    continue
+
+                categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_cru, cat_site))
+
                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
-                img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
+                
+                # Lógica de extração de imagem mais robusta
+                img = 'SEM IMAGEM'
+                image_data = p.get('image')
+                if isinstance(image_data, list) and image_data:
+                    first_image = image_data[0]
+                    if isinstance(first_image, dict):
+                        img = first_image.get('url', 'SEM IMAGEM')
+                    elif isinstance(first_image, str):
+                        img = first_image
                 if img.startswith("//"): img = "https:" + img
 
+                # Lógica de extração de marca mais robusta
+                marca_data = p.get('brand')
+                marca = marca_data.get('name', 'OUTROS') if isinstance(marca_data, dict) else str(marca_data or 'OUTROS')
+
                 lista_final.append({
-                    "Mercado": NOME_MERCADO, "Categoria": padronizar_categoria(nome_cru), 
-                    "Produto": nome_limpo, "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
+                    "Mercado": NOME_MERCADO, "Categoria": categoria,
+                    "subcategoria": subcategoria, "tipo_produto": tipo_produto,
+                    "Produto": nome_limpo, "Marca": marca.upper(),
                     "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','), "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
                     "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao,
                     "Validade": "VER NO SITE", "Data_Hora": agora, "Link_Imagem": img
@@ -152,9 +190,5 @@ async def motor_extracao_boa():
     logger.info(f"✅ Finalizado! {len(lista_unica)} produtos do {NOME_MERCADO} capturados.")
     return lista_unica
 
-def extrair_dados():
-    if os.name == 'nt': asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(motor_extracao_boa())
-
-if __name__ == '__main__':
-    extrair_dados()
+async def extrair_dados():
+    return await motor_extracao_boa()

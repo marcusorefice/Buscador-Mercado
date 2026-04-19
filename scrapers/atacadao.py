@@ -1,11 +1,11 @@
 import os
 import json
-import urllib.parse
-import asyncio
 import warnings
+import asyncio
+import urllib.parse
 from curl_cffi import requests
 from datetime import datetime
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -37,24 +37,25 @@ MAX_PAGES = PAGINATION.get("max_pages", 40)
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome")
 
-async def buscar_pagina_atacadao(session, offset):
-    variables = {
-        "first": PAGE_SIZE, "after": str(offset), "sort": "score_desc", "term": "",
-        "selectedFacets": [
-            {"key": "productClusterIds", "value": CLUSTER_OFERTAS},
-            {"key": "region-id", "value": REGION_ID},
-            {"key": "channel", "value": f'{{"salesChannel":"1","seller":"{SELLER_ID}","regionId":"{REGION_ID}"}}'},
-            {"key": "locale", "value": "pt-BR"}
-        ]
-    }
-    variables_str = urllib.parse.quote(json.dumps(variables, separators=(',', ':')))
-    url = f"{URL_BASE}?operationName=ProductsQuery&variables={variables_str}"
-    try:
-        response = await session.get(url, timeout=15)
-        return response.json().get('data', {}).get('search', {}).get('products', {}).get('edges', [])
-    except Exception as e:
-        logger.error(f"  [{NOME_MERCADO}] Erro na página com offset {offset}: {e}")
-        return []
+async def buscar_pagina_atacadao(session, offset, sem):
+    async with sem:
+        variables = {
+            "first": PAGE_SIZE, "after": str(offset), "sort": "score_desc", "term": "",
+            "selectedFacets": [
+                {"key": "productClusterIds", "value": CLUSTER_OFERTAS},
+                {"key": "region-id", "value": REGION_ID},
+                {"key": "channel", "value": f'{{"salesChannel":"1","seller":"{SELLER_ID}","regionId":"{REGION_ID}"}}'},
+                {"key": "locale", "value": "pt-BR"}
+            ]
+        }
+        variables_str = urllib.parse.quote(json.dumps(variables, separators=(',', ':')))
+        url = f"{URL_BASE}?operationName=ProductsQuery&variables={variables_str}"
+        try:
+            response = await session.get(url, timeout=15)
+            return response.json().get('data', {}).get('search', {}).get('products', {}).get('edges', [])
+        except Exception as e:
+            logger.error(f"  [{NOME_MERCADO}] Erro na página com offset {offset}: {e}")
+            return []
 
 async def motor_extracao_atacadao():
     logger.info(f"🚀 Iniciando extração para {NOME_MERCADO} Jundiaí...")
@@ -63,10 +64,11 @@ async def motor_extracao_atacadao():
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     
     cookie_str = f'{{"salesChannel":"1","postalCode":"{CEP_JUNDIAI}","seller":"{SELLER_ID}"}}'
-    
+    sem = asyncio.Semaphore(10) # Limita a 10 requisições simultâneas
+
     async with requests.AsyncSession(impersonate=IMPERSONATE) as session:
         session.cookies.set("regionalization", cookie_str, domain="www.atacadao.com.br")
-        tarefas = [buscar_pagina_atacadao(session, off) for off in offsets_alvo]
+        tarefas = [buscar_pagina_atacadao(session, off, sem) for off in offsets_alvo]
         resultados = await asyncio.gather(*tarefas)
         
         for bloco in resultados:
@@ -78,14 +80,12 @@ async def motor_extracao_atacadao():
 
                     # --- CAPTURA DE IMAGEM (SCANNER EM PROFUNDIDADE) ---
                     imagem_url = ""
-                    # Caminho 1: items -> images -> imageUrl
                     items_list = p.get('items', [])
                     if items_list and isinstance(items_list, list) and len(items_list) > 0:
                         images = items_list[0].get('images', [])
                         if images and isinstance(images, list) and len(images) > 0:
                             imagem_url = images[0].get('imageUrl') or images[0].get('url')
                     
-                    # Caminho 2 (Fallback): image direto no nó
                     if not imagem_url:
                         img_node = p.get('image')
                         if isinstance(img_node, list) and len(img_node) > 0:
@@ -93,17 +93,25 @@ async def motor_extracao_atacadao():
                         elif isinstance(img_node, str):
                             imagem_url = img_node
 
-                    # Limpeza Final da URL
                     imagem_url = imagem_url if imagem_url else "SEM IMAGEM"
 
-                    # Marca e Categorização
-                    cat_site = ""
-                    # Tenta extrair a categoria original do nó 'categoryTree' ou 'categories'
+                    # --- LÓGICA DE TAXONOMIA ---
                     cat_tree = p.get('categoryTree', [])
-                    if cat_tree and isinstance(cat_tree, list):
-                        cat_site = cat_tree[-1].get('name', '')
+                    cat_site = ""
+                    subcategoria = "N/A"
+                    tipo_produto = "N/A"
+
+                    if isinstance(cat_tree, list) and cat_tree:
+                        if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
+                        if len(cat_tree) > 1: subcategoria = cat_tree[1].get('name', 'N/A').upper()
+                        if len(cat_tree) > 2: tipo_produto = cat_tree[2].get('name', 'N/A').upper()
+
+                    if cat_site in CATEGORIAS_IGNORADAS:
+                        continue # Pula para o próximo produto
+
+                    categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_cru, cat_site))
+
                     marca_str = p.get('brand', {}).get('name', 'OUTROS') if isinstance(p.get('brand'), dict) else str(p.get('brand', 'OUTROS'))
-                    cat_final = padronizar_categoria(nome_cru, cat_site)
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
                     # --- LÓGICA DE PREÇO ---
@@ -123,7 +131,9 @@ async def motor_extracao_atacadao():
                     
                     lista_final.append({
                         "Mercado": NOME_MERCADO, 
-                        "Categoria": cat_final, 
+                        "Categoria": categoria, 
+                        "subcategoria": subcategoria,
+                        "tipo_produto": tipo_produto,
                         "Produto": nome_limpo,
                         "Marca": marca_str.upper(), 
                         "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
@@ -138,12 +148,11 @@ async def motor_extracao_atacadao():
                     })
                 except: continue
 
-    # Deduplicação Final para não repetir itens entre as páginas
+    # Deduplicação por nome do produto
     lista_unica = list({v['Produto']: v for v in lista_final}.values())
     logger.info(f"✅ Total de {len(lista_unica)} produtos processados no {NOME_MERCADO}.")
     return lista_unica
 
-def extrair_dados():
+async def extrair_dados():
     """Ponto de entrada para o main.py"""
-    if os.name == 'nt': asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(motor_extracao_atacadao())
+    return await motor_extracao_atacadao()

@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from curl_cffi import requests
 from playwright.async_api import async_playwright
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -33,7 +33,12 @@ PAGE_SIZE = PAGINATION.get("page_size", 50)
 MAX_PAGES_PER_SORT = PAGINATION.get("max_pages_per_sort", 25)
 
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
-CONCURRENCY = TECHNICAL_DEPS.get("concurrency", 8)
+raw_concurrency = TECHNICAL_DEPS.get("concurrency", 8)
+try:
+    CONCURRENCY = int(raw_concurrency)
+except (ValueError, TypeError):
+    logger.warning(f"Valor de 'concurrency' inválido ('{raw_concurrency}'). Usando valor padrão 8.")
+    CONCURRENCY = 8
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome124")
 PLAYWRIGHT_USER_AGENT = TECHNICAL_DEPS.get("playwright_user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -203,6 +208,23 @@ async def extrair_lote(session, ordem, pagina, sem, agora):
                     if p_v <= 0 or p_v < p_a: p_v = p_a
 
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+
+                    # --- NOVA LÓGICA DE TAXONOMIA ---
+                    cat_tree = item.get('categoryTree', [])
+                    cat_site = ""
+                    subcategoria = "N/A"
+                    tipo_produto = "N/A"
+
+                    if isinstance(cat_tree, list) and cat_tree:
+                        if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
+                        if len(cat_tree) > 1: subcategoria = cat_tree[1].get('name', 'N/A').upper()
+                        if len(cat_tree) > 2: tipo_produto = cat_tree[2].get('name', 'N/A').upper()
+                    
+                    if cat_site in CATEGORIAS_IGNORADAS:
+                        continue
+
+                    categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_cru, cat_site))
+
                     marca = item.get('brand', 'OUTROS')
                     if isinstance(marca, dict): marca = marca.get('name', 'OUTROS')
                     
@@ -216,7 +238,8 @@ async def extrair_lote(session, ordem, pagina, sem, agora):
                             validade = validade_iso
 
                     lote.append({
-                        "Mercado": NOME_MERCADO, "Categoria": padronizar_categoria(nome_cru),
+                        "Mercado": NOME_MERCADO, "Categoria": categoria,
+                        "subcategoria": subcategoria, "tipo_produto": tipo_produto,
                         "Produto": nome_limpo, "Marca": str(marca).upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
@@ -254,7 +277,5 @@ async def motor_principal():
     logger.info(f"✅ Finalizado! {len(lista_unica)} produtos únicos do {NOME_MERCADO} processados.")
     return lista_unica
 
-def extrair_dados():
-    if os.name == 'nt':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(motor_principal())
+async def extrair_dados():
+    return await motor_principal()

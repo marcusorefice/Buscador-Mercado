@@ -6,8 +6,9 @@ from curl_cffi.requests import AsyncSession
 from utils import (
     padronizar_categoria, 
     extrair_medidas_inteligente, 
-    setup_logging,
-    read_json_file
+    setup_logging, 
+    read_json_file,
+    MAPA_PARA_APP, CATEGORIAS_IGNORADAS
 )
 
 logger = setup_logging()
@@ -93,11 +94,27 @@ async def motor_extracao_oba():
                         if not sellers: continue
                         
                         oferta = sellers[0].get('commertialOffer', {})
-                        p_venda = float(oferta.get('Price', 0))
+                        p_venda = float(oferta.get('Price', 0.0))
                         p_varejo = float(oferta.get('ListPrice', p_venda))
 
                         if p_venda <= 0: continue
                         if p_varejo < p_venda: p_varejo = p_venda
+
+                        # --- NOVA LÓGICA DE TAXONOMIA ---
+                        cat_tree = p.get('categoryTree', [])
+                        cat_site = ""
+                        subcategoria = "N/A"
+                        tipo_produto = "N/A"
+
+                        if isinstance(cat_tree, list) and cat_tree:
+                            if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
+                            if len(cat_tree) > 1: subcategoria = cat_tree[1].get('name', 'N/A').upper()
+                            if len(cat_tree) > 2: tipo_produto = cat_tree[2].get('name', 'N/A').upper()
+                        
+                        if cat_site in CATEGORIAS_IGNORADAS:
+                            continue
+                        
+                        categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_bruto, cat_site))
 
                         # --- LÓGICA DE FILTRAGEM DE CONDIÇÕES ---
                         condicoes_uteis = []
@@ -132,7 +149,7 @@ async def motor_extracao_oba():
                             txt_condicao = " | ".join(sorted(list(set(condicoes_uteis))))
                         else:
                             # Se não sobrou nada após o filtro, define como 1un
-                            txt_condicao = "1un"
+                            txt_condicao = "1 UN"
 
                         # Imagem e Unidade
                         img_url = sku.get('images', [{}])[0].get('imageUrl', '')
@@ -144,7 +161,9 @@ async def motor_extracao_oba():
                         
                         lista_final.append({
                             "Mercado": NOME_MERCADO,
-                            "Categoria": padronizar_categoria(nome_bruto),
+                            "Categoria": categoria,
+                            "subcategoria": subcategoria,
+                            "tipo_produto": tipo_produto,
                             "Produto": nome_limpo,
                             "Marca": marca,
                             "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
@@ -173,8 +192,6 @@ async def motor_extracao_oba():
     logger.info(f"🏆 Finalizado! {len(lista_unica)} ofertas únicas capturadas com sucesso.")
     return lista_unica
 
-def extrair_dados():
+async def extrair_dados():
     """Ponto de entrada para o orquestrador síncrono"""
-    if os.name == 'nt':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(motor_extracao_oba())
+    return await motor_extracao_oba()

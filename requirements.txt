@@ -80,3 +80,12 @@ websocket-client==1.9.0
 websockets==16.0
 wsproto==1.3.2
 yfinance==1.2.0
+fastapi
+uvicorn[standard]
+pandas
+selenium
+requests
+pdf2image
+curl_cffi
+playwright
+python-dotenv

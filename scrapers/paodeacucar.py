@@ -6,8 +6,9 @@ from curl_cffi.requests import AsyncSession
 from utils import (
     padronizar_categoria, 
     extrair_medidas_inteligente, 
-    setup_logging,
-    read_json_file
+    setup_logging, 
+    read_json_file,
+    MAPA_PARA_APP, CATEGORIAS_IGNORADAS
 )
 
 logger = setup_logging()
@@ -102,6 +103,23 @@ async def motor_extracao_paodeacucar():
 
                         if p_venda <= 0: continue
 
+                        # --- NOVA LÓGICA DE TAXONOMIA ---
+                        categorias_api = p.get('categories', []) # Ex: ["/Mercearia/Biscoitos/"]
+                        cat_site = ""
+                        subcategoria = "N/A"
+                        tipo_produto = "N/A"
+
+                        if categorias_api and isinstance(categorias_api, list) and categorias_api[0]:
+                            partes_cat = categorias_api[0].strip('/').split('/')
+                            if len(partes_cat) > 0: cat_site = partes_cat[0].upper()
+                            if len(partes_cat) > 1: subcategoria = partes_cat[1].upper()
+                            if len(partes_cat) > 2: tipo_produto = partes_cat[2].upper()
+
+                        if cat_site in CATEGORIAS_IGNORADAS:
+                            continue
+
+                        categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_bruto, cat_site))
+
                         # --- LÓGICA DE CONDIÇÕES ---
                         condicoes = []
                         
@@ -132,7 +150,9 @@ async def motor_extracao_paodeacucar():
                         
                         lista_final.append({
                             "Mercado": NOME_MERCADO,
-                            "Categoria": padronizar_categoria(nome_bruto),
+                            "Categoria": categoria,
+                            "subcategoria": subcategoria,
+                            "tipo_produto": tipo_produto,
                             "Produto": nome_limpo,
                             "Marca": str(p.get('brand', 'PRÓPRIA')).upper(),
                             "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
@@ -157,7 +177,5 @@ async def motor_extracao_paodeacucar():
     logger.info(f"🏆 SUCESSO! {len(lista_unica)} ofertas únicas capturadas do {NOME_MERCADO}.")
     return lista_unica
 
-def extrair_dados():
-    if os.name == 'nt':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(motor_extracao_paodeacucar())
+async def extrair_dados():
+    return await motor_extracao_paodeacucar()

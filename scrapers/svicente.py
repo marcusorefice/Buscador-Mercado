@@ -4,7 +4,7 @@ import warnings
 import json
 from curl_cffi.requests import AsyncSession
 from datetime import datetime
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -29,7 +29,12 @@ URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
 TAMANHO_PAGINA = CONFIG.get("pagination", {}).get("page_size", 200)
 PMID = CONFIG.get("regionalization", {}).get("pmid", "FPP_030|FPV_030|M_030")
 CGID_OFERTAS = CONFIG.get("regionalization", {}).get("cgid", "ofertas-header")
-CONCURRENCY = CONFIG.get("technical_dependencies", {}).get("concurrency", 5)
+raw_concurrency = CONFIG.get("technical_dependencies", {}).get("concurrency", 5)
+try:
+    CONCURRENCY = int(raw_concurrency)
+except (ValueError, TypeError):
+    logger.warning(f"Valor de 'concurrency' inválido ('{raw_concurrency}'). Usando valor padrão 5.")
+    CONCURRENCY = 5
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 USER_AGENT = CONFIG.get("technical_dependencies", {}).get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -80,7 +85,7 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                     # --- LÓGICA SNIPER: BUSCA PREÇO DO CLUBE NAS FLAGS ---
                     valor_varejo = p_tabela
                     valor_atacado = p_venda
-                    condicao = "1un"
+                    condicao = "1 UN"
 
                     # Varre a lista de 'flagtypes' (onde o preço do clube se esconde)
                     flags = p.get('flagtypes', [])
@@ -98,13 +103,31 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                                     condicao = "CLUBE SV"
 
                     # Se não for clube, checa promoções de quantidade (Leve Mais)
-                    if condicao == "1un":
+                    if condicao == "1 UN":
                         if promos := p.get('promotions', []):
                             for pr in promos:
                                 msg = pr.get('calloutMsg', '').replace('<br/>', ' ').strip().upper()
                                 if any(x in msg for x in ["LEVE", "PAGUE", "A PARTIR"]):
                                     condicao = msg
                                     break
+
+                    # --- NOVA LÓGICA DE TAXONOMIA ---
+                    # Salesforce Commerce Cloud não costuma mandar a árvore inteira no produto.
+                    cat_site = ""
+                    subcategoria = "N/A"
+                    tipo_produto = "N/A"
+
+                    # Tentativa de extrair de um 'categoryTree' se existir (pouco provável, mas seguro)
+                    cat_tree = p.get('categoryTree', [])
+                    if isinstance(cat_tree, list) and cat_tree:
+                        if len(cat_tree) > 0 and cat_tree[0].get('name'): cat_site = cat_tree[0].get('name').upper()
+                        if len(cat_tree) > 1 and cat_tree[1].get('name'): subcategoria = cat_tree[1].get('name').upper()
+                        if len(cat_tree) > 2 and cat_tree[2].get('name'): tipo_produto = cat_tree[2].get('name').upper()
+
+                    if cat_site in CATEGORIAS_IGNORADAS:
+                        continue
+                    
+                    categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_bruto, p.get('categoryName', cat_nome)))
 
                     # Metadados e Limpeza
                     img_url = ""
@@ -121,7 +144,9 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
 
                     produtos_categoria.append({
                         "Mercado": NOME_MERCADO,
-                        "Categoria": padronizar_categoria(nome_bruto, p.get('categoryName', cat_nome)),
+                        "Categoria": categoria,
+                        "subcategoria": subcategoria,
+                        "tipo_produto": tipo_produto,
                         "Produto": nome_limpo,
                         "Marca": marca,
                         "Preço Varejo": f"R$ {valor_varejo:.2f}".replace('.', ','),
@@ -144,7 +169,5 @@ async def motor_extracao_svicente():
         # Foca apenas na categoria de ofertas
         return await processar_categoria(session, CGID_OFERTAS, "OFERTAS", asyncio.Semaphore(CONCURRENCY), agora)
 
-def extrair_dados():
-    if os.name == 'nt':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(motor_extracao_svicente())
+async def extrair_dados():
+    return await motor_extracao_svicente()

@@ -89,27 +89,121 @@ def clean_price_string(price_str):
         logger.warning(f"Não foi possível converter '{price_str}' para float após limpeza. Retornando 0.0.")
         return 0.0
 
+# --- 4. Mapeamento e Padronização de Categorias ---
+
+# Mapeamento das categorias do site para as categorias do App
+MAPA_PARA_APP = {
+    # Itens de Mercado
+    "MERCEARIA": "Mercearia e Despensa",
+    "PADARIA E MATINAIS": "Laticínios, Ovos e Matinais",
+    "FRIOS E CONGELADOS": "Congelados e Pratos Prontos",
+    "CARNES, AVES E PEIXES": "Açougue e Peixaria",
+    "HORTIFRÚTI": "Hortifrúti",
+    "BEBIDAS": "Bebidas",
+    "LIMPEZA": "Limpeza",
+    "HIGIENE E PERFUMARIA": "Higiene e Cuidado Pessoal",
+    
+    # Bazar e Utilidades
+    "UTILIDADES DOMÉSTICAS": "Bazar e utilidades",
+    "ELETRÔNICOS E ELETROPORTÁTEIS": "Bazar e utilidades",
+    "DESCARTÁVEIS E EMBALAGENS": "Bazar e utilidades",
+    "PAPELARIA": "Bazar e utilidades"
+}
+
+CATEGORIAS_IGNORADAS = {"AUTOMOTIVO", "PET SHOP", "JARDINAGEM", "ESPORTE E LAZER", "VESTUÁRIO", "CAFETERIA"}
+
 def padronizar_categoria(nome, cat_site=""):
     n, c = str(nome).upper(), str(cat_site).upper()
     regras = {
-        "Higiene e Perfumaria": ["SABONETE", "DENTAL", "SHAMPOO", "CONDICIONADOR", "DOVE", "REXONA", "COLGATE", "FRALDA", "ABSORVENTE", "PAPEL HIGIÊNICO", "GILLETTE"],
-        "Limpeza": ["DETERGENTE", "SABÃO", "OMO", "TIXAN", "VEJA", "YPÊ", "AMACIANTE", "DESINFETANTE", "SBP", "BOMBRIL", "LIXO", "CLORO", "PANO", "PERFEX"],
-        "Bebidas": ["ÁGUA", "REFRIGERANTE", "COCA", "GUARANÁ", "CERVEJA", "VINHO", "WHISKY", "SUCO", "TANG", "MONSTER", "RED BULL", "GATORADE", "WHEY"],
-        "Laticínios, Ovos e Frios": ["LEITE", "QUEIJO", "IOGURTE", "QUALY", "MARGARINA", "REQUEIJÃO", "PRESUNTO", "MORTADELA", "SALSICHA", "DANONE"],
-        "Açougue e Peixaria": ["CARNE", "ACÉM", "BISTECA", "FRANGO", "ASA", "COXA", "LINGUIÇA", "PEIXE", "ATUM", "SARDINHA"],
-        "Mercearia": ["ARROZ", "FEIJÃO", "CAFÉ", "AÇÚCAR", "ÓLEO", "AZEITE", "MACARRÃO", "MOLHO", "TOMATE", "BISCOITO", "WAFER", "PASSATEMPO", "BAUDUCCO", "NESCAU", "TODDY", "CHOCOLATE"],
+        "Mercearia e Despensa": ["ARROZ", "FEIJÃO", "CAFÉ", "AÇÚCAR", "ÓLEO", "AZEITE", "MACARRÃO", "MOLHO", "BISCOITO", "WAFER", "PASSATEMPO", "BAUDUCCO", "NESCAU", "TODDY", "CHOCOLATE"],
+        "Laticínios, Ovos e Matinais": ["LEITE", "QUEIJO", "IOGURTE", "QUALY", "MARGARINA", "REQUEIJÃO", "PRESUNTO", "MORTADELA", "SALSICHA", "DANONE", "OVOS"],
         "Congelados e Pratos Prontos": ["PIZZA", "LASANHA", "NUGGETS", "HAMBÚRGUER", "SORVETE", "AÇAÍ", "DAUCY", "VEGETAIS", "CONGELADO"],
-        "Bazar e Utilidades": ["TRAMONTINA", "MARINEX", "ASSADEIRA", "FRIGIDEIRA", "FILME PVC", "PAPEL ALUMÍNIO"]
+        "Açougue e Peixaria": ["CARNE", "ACÉM", "BISTECA", "FRANGO", "ASA", "COXA", "LINGUIÇA", "PEIXE", "ATUM", "SARDINHA"],
+        "Hortifrúti": ["FRUTAS", "LEGUMES", "VERDURAS", "CEBOLA", "BATATA", "TOMATE", "ALFACE", "CENOURA", "UVA", "MORANGO", "BANANA", "MACA", "LARANJA"],
+        "Bebidas": ["ÁGUA", "REFRIGERANTE", "COCA", "GUARANÁ", "CERVEJA", "VINHO", "WHISKY", "SUCO", "TANG", "MONSTER", "RED BULL", "GATORADE", "WHEY"],
+        "Limpeza": ["DETERGENTE", "SABÃO", "OMO", "TIXAN", "VEJA", "YPÊ", "AMACIANTE", "DESINFETANTE", "SBP", "BOMBRIL", "LIXO", "CLORO", "PANO", "PERFEX"],
+        "Higiene e Cuidado Pessoal": ["SABONETE", "DENTAL", "SHAMPOO", "CONDICIONADOR", "DOVE", "REXONA", "COLGATE", "FRALDA", "ABSORVENTE", "PAPEL HIGIÊNICO", "GILLETTE"],
+        "Bazar e utilidades": ["TRAMONTINA", "MARINEX", "ASSADEIRA", "FRIGIDEIRA", "FILME PVC", "PAPEL ALUMÍNIO"]
     }
     for cat, termos in regras.items():
         if any(t in n for t in termos) or any(t in c for t in termos): return cat
-    return "Mercearia"
+    return "Mercearia e Despensa"
 
 def extrair_medidas_inteligente(nome_produto):
     nome = str(nome_produto).upper()
     match = re.search(r'(\d+(?:[\.,]\d+)?)\s*(G|KG|ML|L|UN)\b', nome)
     if match: return nome.replace(match.group(0), "").strip(), match.group(1).replace(',', '.'), match.group(2)
     return nome, "1", "UN"
+
+def remover_frases_duplicadas(texto: str) -> str:
+    """
+    Remove blocos de palavras adjacentes que se repetem em uma string.
+    Funciona de forma recursiva para limpar múltiplas repetições.
+    Ex: 'BISCOITO OBA BEM QUERER OBA BEM QUERER' -> 'BISCOITO OBA BEM QUERER'
+    Ex: 'PNEU PNEU ARO 13 ARO 13' -> 'PNEU ARO 13'
+    """
+    if not isinstance(texto, str) or not texto:
+        return ""
+
+    palavras = texto.split()
+    # Se for muito curto, não há o que fazer.
+    if len(palavras) < 2:
+        return texto
+
+    # Itera de blocos de palavras maiores para os menores (até 1 palavra)
+    for tamanho_bloco in range(len(palavras) // 2, 0, -1):
+        # Itera pela lista de palavras para encontrar blocos adjacentes
+        for i in range(len(palavras) - (2 * tamanho_bloco) + 1):
+            bloco1 = palavras[i : i + tamanho_bloco]
+            bloco2 = palavras[i + tamanho_bloco : i + (2 * tamanho_bloco)]
+            
+            if bloco1 == bloco2:
+                del palavras[i + tamanho_bloco : i + (2 * tamanho_bloco)]
+                return remover_frases_duplicadas(" ".join(palavras))
+    
+    return " ".join(palavras)
+
+def validar_e_limpar_produtos(produtos, logger):
+    """
+    Valida uma lista de produtos, removendo itens inválidos e limpando dados.
+    Um produto é considerado inválido se não tiver nome ou um preço de atacado válido.
+    Esta função é um utilitário geral e não depende de pandas.
+    """
+    if not produtos:
+        return []
+
+    produtos_validos = []
+    # Placeholders em minúsculas para comparação case-insensitive
+    placeholders_comuns = ['produto indisponível', 'item não encontrado', 'carregando...']
+
+    logger.info(f"\n🛡️  Iniciando validação e limpeza de {len(produtos)} produtos coletados...")
+    
+    for produto in produtos:
+        nome_produto = produto.get("Produto")
+        if isinstance(nome_produto, str):
+            nome_produto = nome_produto.strip()
+        
+        # Limpeza de frases duplicadas no nome do produto
+        nome_produto = remover_frases_duplicadas(nome_produto)
+        
+        # Remove a marca do final do nome do produto, se houver repetição.
+        marca = produto.get("Marca")
+        if isinstance(nome_produto, str) and isinstance(marca, str) and marca and marca.upper() != 'PRÓPRIA':
+            if nome_produto.upper().endswith(marca.upper()):
+                nome_produto = nome_produto[:-len(marca)].strip(' -')
+
+        preco_atacado_str = produto.get("Preço Atacado", "")
+        
+        # Validação do Nome e Preço (campos essenciais para a chave do DB)
+        if not nome_produto or nome_produto.lower() in placeholders_comuns or clean_price_string(preco_atacado_str) <= 0:
+            logger.debug(f"Descartando item inválido: Mercado='{produto.get('Mercado', 'N/A')}', Produto='{nome_produto}', Preço='{preco_atacado_str}'")
+            continue
+            
+        produto['Produto'] = nome_produto # Garante que a versão limpa do nome seja usada
+        produtos_validos.append(produto)
+
+    logger.info(f"✅ Validação concluída: {len(produtos_validos)} de {len(produtos)} produtos são válidos e seguirão para o salvamento.")
+    return produtos_validos
 
 # --- 4. Funções de Cache de Download ---
 CACHE_DOWNLOADS_FILE = os.path.join('data', 'cache_downloads.json')

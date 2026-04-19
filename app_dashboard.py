@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 import os
 import re
 
@@ -22,32 +23,39 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-PASTA_RAIZ = os.path.dirname(os.path.abspath(__file__))
-ARQUIVO_FINAL = os.path.join(PASTA_RAIZ, 'RELATORIO_FINAL_COMPARADOR.xlsx')
+DB_NOME = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'monitoramento_Jundiai.db')
 
 @st.cache_data
 def carregar_dados():
-    if os.path.exists(ARQUIVO_FINAL):
-        df = pd.read_excel(ARQUIVO_FINAL)
-        df.fillna("", inplace=True)
+    """Carrega os dados diretamente do banco de dados SQLite."""
+    if not os.path.exists(DB_NOME):
+        return pd.DataFrame()
+
+    conn = sqlite3.connect(DB_NOME)
+    try:
+        # A query simples 'SELECT *' é suficiente, o pandas lida com os nomes das colunas
+        df = pd.read_sql_query("SELECT * FROM ofertas", conn)
+    finally:
+        conn.close()
+
+    df.fillna("", inplace=True)
+    
+    def tratar_melhor_preco(row):
+        def limpar(val):
+            try:
+                if not val or str(val).lower() == 'nan': return 0.0
+                return float(str(val).replace('R$', '').replace('.', '').replace(',', '.').strip())
+            except: return 0.0
+
+        varejo = limpar(row.get('Preço Varejo', 0))
+        atacado = limpar(row.get('Preço Atacado', 0))
+
+        if atacado == 0: return varejo
+        if varejo == 0: return atacado
+        return min(varejo, atacado)
         
-        def tratar_melhor_preco(row):
-            def limpar(val):
-                try:
-                    if not val or str(val).lower() == 'nan': return 0.0
-                    return float(str(val).replace('R$', '').replace('.', '').replace(',', '.').strip())
-                except: return 0.0
-
-            varejo = limpar(row.get('Preço Varejo', 0))
-            atacado = limpar(row.get('Preço Atacado', 0))
-
-            if atacado == 0: return varejo
-            if varejo == 0: return atacado
-            return min(varejo, atacado)
-            
-        df['Preço Numérico'] = df.apply(tratar_melhor_preco, axis=1)
-        return df
-    return pd.DataFrame()
+    df['Preço Numérico'] = df.apply(tratar_melhor_preco, axis=1)
+    return df
 
 df = carregar_dados()
 
@@ -62,7 +70,7 @@ with col_titulo:
     st.markdown("Encontre o menor preço nos supermercados de Jundiaí.")
 
 if df.empty:
-    st.warning(f"⚠️ Nenhuma base de dados encontrada em: {ARQUIVO_FINAL}")
+    st.warning(f"⚠️ Nenhuma base de dados encontrada em: {DB_NOME}")
     st.stop()
 
 # ==========================================
@@ -141,7 +149,7 @@ configuracao_colunas = {
     "Produto": st.column_config.TextColumn("Produto", width="large"),
     "Marca": st.column_config.TextColumn("Marca", width="medium"),
     "Tamanho": st.column_config.TextColumn("Vol/Peso", width="small"),
-    "Condição": st.column_config.TextColumn("Condição", width="medium"),
+    "Condição": st.column_config.TextColumn("Condição da Oferta", width="medium"),
     "Preço Numérico": st.column_config.NumberColumn("Preço Atual", format="R$ %.2f", width="small"),
 }
 
@@ -154,11 +162,13 @@ if not df_filtrado.empty:
         campeao = df_filtrado.iloc[0]
         preco_formatado = f"{campeao['Preço Numérico']:.2f}".replace('.', ',')
         cond = str(campeao['Condição']).strip()
-        
-        # O banner não vai ficar apitando se a condição for o padrão "1 UN"
-        alerta_cond = f" ⚠️ *(Requer: {cond})*" if cond and cond.upper() not in ['NAN', '1 UN'] else ""
-        
-        st.success(f"🏆 **MELHOR OPÇÃO:** {campeao['Produto']} por **R$ {preco_formatado}** no **{campeao['Mercado']}**{alerta_cond}")
+
+        # Lógica do banner de destaque aprimorada para exibir a condição claramente.
+        texto_condicao = ""
+        if cond and cond.upper() not in ['NAN', '1 UN', '']:
+            texto_condicao = f" (condição: **{cond}**)"
+
+        st.success(f"🏆 **MELHOR OPÇÃO:** {campeao['Produto']} por **R$ {preco_formatado}** no **{campeao['Mercado']}**{texto_condicao}")
         st.markdown("#### 📋 Ranking de Preços nos outros mercados:")
     else:
         st.markdown("#### 📋 Todas as Ofertas (Do mais barato ao mais caro):")

@@ -1,58 +1,61 @@
-import os
-import time
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
+import json
+import asyncio
+from curl_cffi import requests
 
-def inspecionar_site():
-    url = "https://www.assai.com.br/ofertas/sao-paulo/assai-jundiai"
-    print(f"📡 Iniciando inspeção em: {url}")
+SESSION_FILE = r"D:\Mercado\data\atacadao_session.json"
 
-    options = Options()
-    options.add_argument('--headless=new')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
+async def testar_passatempo_jundiai():
+    with open(SESSION_FILE, 'r') as f:
+        cookies = json.load(f)
+    
+    # O SEGREDO: Definir o segmento exato de Jundiaí (Seller 633)
+    # Esse cookie é o que realmente define a loja na plataforma VTEX
+    vtex_segment = "eyJjYW1wYWlnbnMiOm51bGwsImNoYW5uZWwiOiIxIiwicHJpY2VUYWJsZSI6bnVsbCwicmVnaW9uSWQiOm51bGwsInV0bV9jYW1wYWlnbiI6bnVsbCwidXRtX21lZGl1bSI6bnVsbCwidXRtX3NvdXJjZSI6bnVsbCwidXRtaV9jYW1wYWlnbiI6bnVsbCwidXRtaV9wYWdlIjpudWxsLCJ1dG1pX3BhcnQiOm51bGwsImN1cnJlbmN5Q29kZSI6IkJSTCIsImN1cnJlbmN5U3ltYm9sIjoiUiQiLCJjb3VudHJ5Q29kZSI6IkJSQSIsImN1bHR1cmVJbmZvIjoicHQtQlIiLCJhZG1pbkN1bHR1cmVJbmZvIjoicHQtQlIiLCJjaGFubmVsUHJpdmFjeSI6InB1YmxpYyJ9"
 
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    cookies['vtex_segment'] = vtex_segment
+    cookies['regionalization'] = "%7B%22salesChannel%22%3A%221%22%2C%22postalCode%22%3A%2213211-772%22%2C%22seller%22%3A%22atacadaobr633%22%7D"
 
-    try:
-        driver.get(url)
-        print("⏳ Aguardando 10 segundos para carregamento completo...")
-        time.sleep(10)
+    # Buscando o Passatempo com o parâmetro de Sales Channel (sc=1)
+    url = "https://www.atacadao.com.br/api/catalog_system/pub/products/search?ft=passatempo chocolate 130g&sc=1"
 
-        # 1. Capturar Print da Tela (O que o robô vê)
-        driver.save_screenshot("visao_do_robo.png")
-        print("📸 Screenshot salvo como 'visao_do_robo.png'. Abra este arquivo para ver a página.")
+    async with requests.AsyncSession(impersonate="chrome124") as session:
+        for n, v in cookies.items():
+            session.cookies.set(n, v, domain="www.atacadao.com.br")
 
-        # 2. Listar todos os links de Encarte (data-fancybox)
-        print("\n🔎 Buscando links de encartes (padrão fancybox):")
-        links_encarte = driver.find_elements(By.CSS_SELECTOR, 'a[data-fancybox="ofertas"]')
-        if not links_encarte:
-            print("❌ Nenhum link com data-fancybox='ofertas' encontrado.")
-        for idx, link in enumerate(links_encarte):
-            href = link.get_attribute('href')
-            print(f"   [{idx+1}] Link: {href}")
+        headers = {
+            "Accept": "application/json",
+            "vtex-segment": vtex_segment, # Forçando o cabeçalho de segmento
+            "Referer": "https://www.atacadao.com.br/"
+        }
 
-        # 3. Listar todas as imagens da página
-        print("\n🖼️ Listando todas as imagens (<img>) detectadas:")
-        todas_imgs = driver.find_elements(By.TAG_NAME, 'img')
-        for idx, img in enumerate(todas_imgs[:15]): # Limitado as 15 primeiras
-            src = img.get_attribute('src')
-            alt = img.get_attribute('alt')
-            print(f"   [{idx+1}] Alt: {alt} | Src: {src}")
+        print("🔍 Tentando 'espetar' o Seller 633 de Jundiaí...")
+        res = await session.get(url, headers=headers)
+        produtos = res.json()
 
-        # 4. Verificar mensagem de "Sem Encarte"
-        print("\n⚠️ Verificando mensagens de status:")
-        possiveis_avisos = driver.find_elements(By.CSS_SELECTOR, ".ofertas-tab-validade, .msg-vazio, .no-results")
-        for aviso in possiveis_avisos:
-            if aviso.is_displayed():
-                print(f"   🚩 AVISO VISÍVEL: {aviso.text.strip()}")
+        for p in produtos:
+            nome = p['productName'].upper()
+            if "CHOCOLATE" in nome and "130G" in nome:
+                item = p['items'][0]
+                seller_data = item['sellers'][0]
+                comm = seller_data['commertialOffer']
+                
+                print(f"\n🎯 PRODUTO: {p['productName']}")
+                print(f"🏪 LOJA (Seller): {seller_data.get('sellerId')}")
+                
+                # Se o Seller ainda for 1, a VTEX está ignorando nossa regionalização
+                if seller_data.get('sellerId') == "1":
+                    print("⚠️ Alerta: Ainda no Seller 1. O preço de atacado pode não aparecer.")
 
-    finally:
-        driver.quit()
-        print("\n✅ Inspeção finalizada.")
+                specs = comm.get('PriceSpecifications', [])
+                print(f"💰 Preço Base: R$ {comm.get('Price'):.2f}")
+                
+                if specs:
+                    print("--- Tabela de Preços ---")
+                    for s in sorted(specs, key=lambda x: x.get('NumberOfInstallments', 1)):
+                        qtd = s.get('NumberOfInstallments')
+                        valor = s.get('Value')
+                        print(f"🔹 {qtd} un. ou + -> R$ {valor:.2f}")
+                return
 
 if __name__ == "__main__":
-    inspecionar_site()
+    asyncio.run(testar_passatempo_jundiai())

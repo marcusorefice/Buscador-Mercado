@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from curl_cffi import requests
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
 
 logger = setup_logging()
 
@@ -56,10 +56,23 @@ def extrair_dados():
                         nome_original = str(p.get('productName', '')).upper().strip()
                         if not nome_original: continue
 
+                        # --- NOVA LÓGICA DE TAXONOMIA ---
                         categorias_vtex = p.get('categories', [])
-                        cat_site = categorias_vtex[0].split('/')[-2] if categorias_vtex else ""
+                        cat_site = ""
+                        subcategoria = "N/A"
+                        tipo_produto = "N/A"
+
+                        if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
+                            partes_cat = categorias_vtex[0].strip('/').split('/')
+                            if len(partes_cat) > 0: cat_site = partes_cat[0].upper()
+                            if len(partes_cat) > 1: subcategoria = partes_cat[1].upper()
+                            if len(partes_cat) > 2: tipo_produto = partes_cat[2].upper()
                         
-                        categoria_final = padronizar_categoria(nome_original, cat_site)
+                        if cat_site in CATEGORIAS_IGNORADAS:
+                            continue
+
+                        categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_original, cat_site))
+
                         nome_limpo, qv, med = extrair_medidas_inteligente(nome_original)
 
                         # Dados de Preço e Oferta
@@ -78,7 +91,9 @@ def extrair_dados():
 
                         lista_final.append({
                             "Mercado": NOME_MERCADO,
-                            "Categoria": categoria_final,
+                            "Categoria": categoria,
+                            "subcategoria": subcategoria,
+                            "tipo_produto": tipo_produto,
                             "Produto": nome_limpo,
                             "Marca": marca,
                             "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),

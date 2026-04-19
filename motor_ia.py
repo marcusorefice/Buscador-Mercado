@@ -142,7 +142,7 @@ class MotorIA:
                 # Mapeamento das chaves curtas (p, m, pv, pa, cd, v)
                 p_bruto = str(item.get("p", "")).upper().strip()
                 marca = str(item.get("m", "")).upper().strip()
-                if marca in ["", "NONE", "N/A"]: marca = "PRÓPRIA"
+                if marca in ["", "NONE", "N/A", "NAN"]: marca = "PRÓPRIA"
 
                 # Categorização LOCAL (Economiza Tokens da IA)
                 # Usa a junção de nome e marca para uma categoria mais precisa
@@ -169,13 +169,15 @@ class MotorIA:
                     p_varejo, p_atacado = p_atacado, p_varejo # Inverte se a IA se confundiu
 
                 # Tratamento especial para a condição do cartão Vuon
-                condicao = str(item.get("cd", "1un")).upper()
+                condicao = str(item.get("cd", "1 UN")).upper()
                 if "VUON" in condicao:
                     condicao = "VUON CARD"
 
                 lista_formatada.append({
                     "Mercado": nome_mercado,
                     "Categoria": categoria,
+                    "subcategoria": "N/A",
+                    "tipo_produto": "N/A",
                     "Produto": nome_limpo, # Agora sem a marca
                     "Marca": marca,
                     "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
@@ -185,7 +187,7 @@ class MotorIA:
                     "Unidade": "UN",
                     "Condição": condicao,
                     "Validade": str(item.get("v", "VER ENCARTE")).upper(),
-                    "Data_Hora": agora,
+                    "Data_Hora": item.get("data_hora", agora), # Mantém consistência se vier do cache
                     "Link_Imagem": "SEM IMAGEM"
                 })
             except Exception as e:
