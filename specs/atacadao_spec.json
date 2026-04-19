@@ -1,42 +1,41 @@
 {
   "market_name": "Atacadão",
   "base_url": "https://www.atacadao.com.br/",
-  "api_endpoint": "/api/graphql",
-  "data_origin": "GraphQL API (operationName: ProductsQuery)",
-  "scraping_method": "Async API Requests (curl_cffi)",
+  "api_endpoint": "/api/catalog_system/pub/products/search",
+  "data_origin": "VTEX Catalog System API (REST)",
+  "scraping_method": "Two-step async process: maps all category IDs, then fetches products for each category in parallel.",
   "regionalization": {
     "seller_id": "atacadaobr633",
-    "region_id": "U1cjYXRhY2FkYW9icjYzMw==",
-    "cluster_ofertas": "312",
     "cep_jundiai": "13211-772",
-    "cookie_name": "regionalization"
+    "cookie_name": "regionalization",
+    "description": "Injects a regionalization cookie to force Jundiaí prices and stock."
   },
   "pagination": {
+    "method": "Full pagination within each category ID.",
     "page_size": 50,
-    "max_pages": 40
+    "details": "For each category, it fetches all products by incrementing the '_from' parameter until an empty response is received."
   },
   "selectors_mapping": {
-    "root_path": "data.search.products.edges",
-    "product_name": "node.name",
-    "brand": "node.brand.name",
-    "category_original": "node.categoryTree[-1].name",
-    "image_url": "node.items[0].images[0].imageUrl / node.image[0].url",
-    "price_retail": "node.offers.highPrice",
-    "price_final": "node.offers.lowPrice",
-    "wholesale_condition": "node.offers.offers[].minQuantity"
+    "root_path": "Root JSON Array from the search endpoint",
+    "product_name": "productName",
+    "brand": "brand",
+    "category_original": "categories[0] (string path like '/Mercearia/Doces/')",
+    "image_url": "items[0].images[0].imageUrl",
+    "price_retail": "items[0].sellers[0].commertialOffer.ListPrice",
+    "price_final": "items[0].sellers[0].commertialOffer.Price",
+    "wholesale_condition": "Derived from 'PriceSpecifications' (priority) or 'Teasers' nodes."
   },
   "special_rules": [
-    "Fixa a loja de Jundiaí injetando o cookie 'regionalization' formatado como JSON string no domínio.",
-    "Lógica de preço duplo: Preço Varejo (highPrice) e Preço Atacado (lowPrice).",
-    "A 'Condição' de atacado é extraída percorrendo o array 'offers' para identificar o 'minQuantity' associado ao menor preço.",
-    "Paginação via 'offset' utilizando o parâmetro 'after' codificado dentro das variáveis do GraphQL.",
-    "Tratamento de imagem em duas camadas (Caminho 1: items/images; Caminho 2: nó raiz da imagem)."
+    "Relies on a pre-existing session file (atacadao_session.json) for authentication cookies.",
+    "First, it hits the '/api/catalog_system/pub/category/tree/3' endpoint to get a full map of department IDs.",
+    "Then, it fetches all products for each relevant category ID using the 'fq=C:{id}' parameter.",
+    "Implements a robust price extraction logic, checking 'PriceSpecifications' for quantity-based discounts and falling back to 'Teasers' for promotional texts.",
+    "Injects a 'regionalization' cookie on every run to ensure prices and stock are from the Jundiaí store."
   ],
   "technical_dependencies": {
     "request_engine": "curl_cffi (AsyncSession)",
     "impersonation": "chrome",
-    "session_management": "Playwright Session Capture + Cookie Cache",
-    "playwright_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "concurrency": 5
+    "session_management": "Loads session from 'atacadao_session.json' and injects regionalization cookie.",
+    "concurrency": 10
   }
 }
