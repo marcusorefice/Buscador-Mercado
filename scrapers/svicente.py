@@ -1,10 +1,11 @@
 import os
 import asyncio
 import warnings
-import json
+import re
 from curl_cffi.requests import AsyncSession
+from bs4 import BeautifulSoup
 from datetime import datetime
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -28,7 +29,7 @@ API_ENDPOINT = CONFIG.get("api_endpoint", "/on/demandware.store/Sites-SaoVicente
 URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
 TAMANHO_PAGINA = CONFIG.get("pagination", {}).get("page_size", 200)
 PMID = CONFIG.get("regionalization", {}).get("pmid", "FPP_030|FPV_030|M_030")
-CGID_OFERTAS = CONFIG.get("regionalization", {}).get("cgid", "ofertas-header")
+
 raw_concurrency = CONFIG.get("technical_dependencies", {}).get("concurrency", 5)
 try:
     CONCURRENCY = int(raw_concurrency)
@@ -45,6 +46,39 @@ headers = {
     "Referer": f"{BASE_URL_CONFIG}/ofertas"
 }
 
+async def get_category_links(session):
+    """Obtém todas as subcategorias do menu para garantir a taxonomia."""
+    try:
+        res = await session.get(f"{BASE_URL_CONFIG}/", headers={"User-Agent": USER_AGENT}, timeout=30)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        links = soup.find_all('a', href=True)
+        cats = {}
+        for a in links:
+            t = a.get_text(strip=True)
+            h = a['href']
+            if t.startswith('Ver Tudo em '):
+                cat_name = t.replace('Ver Tudo em ', '').strip().upper()
+                if h not in cats.values():
+                     cats[cat_name] = h
+        return cats
+    except Exception as e:
+        logger.error(f"Erro ao buscar categorias do menu principal: {e}")
+        return {}
+
+async def fetch_true_cgid(session, url_path, cat_name, semaforo):
+    """Acessa a URL da categoria para extrair o CGID real interno do Demandware."""
+    async with semaforo:
+        url = f"{BASE_URL_CONFIG}{url_path}" if url_path.startswith('/') else url_path
+        try:
+            resp = await session.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+            cgid_match = re.search(r'cgid=([^\"&\']+)', resp.text)
+            if cgid_match:
+                true_cgid = cgid_match.group(1).split('\\')[0].split("'")[0]
+                return true_cgid, cat_name
+        except Exception:
+            pass
+        return None, cat_name
+
 async def buscar_pagina_svicente(session, cgid, start):
     params = {"cgid": cgid, "pmid": PMID, "start": start, "sz": TAMANHO_PAGINA}
     try:
@@ -52,17 +86,17 @@ async def buscar_pagina_svicente(session, cgid, start):
         if response.status_code == 200:
             return response.json()
     except Exception as e:
-        logger.error(f"  [São Vicente] Erro na página {start}: {e}")
+        logger.error(f"  [São Vicente] Erro na página {start} (CGID: {cgid}): {e}")
     return None
 
 async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
     async with semaforo:
-        logger.info(f"📡 [São Vicente] Sincronizando categoria: {cat_nome}")
-        
         data_inicial = await buscar_pagina_svicente(session, cgid, 0)
         if not data_inicial: return []
 
         total_produtos = data_inicial.get('productSearch', {}).get('count', 0)
+        if total_produtos == 0: return []
+        
         tarefas = [buscar_pagina_svicente(session, cgid, start) for start in range(0, total_produtos, TAMANHO_PAGINA)]
         resultados_paginas = await asyncio.gather(*tarefas)
         
@@ -87,22 +121,20 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                     valor_atacado = p_venda
                     condicao = "1 UN"
 
-                    # Varre a lista de 'flagtypes' (onde o preço do clube se esconde)
                     flags = p.get('flagtypes', [])
                     for f in flags:
                         if f.get('flagType') == "facil-pra-voce":
-                            raw_val = f.get('valueFlagType', "") # Ex: "R$ 18,90"
+                            raw_val = f.get('valueFlagType', "")
                             if raw_val:
                                 try:
-                                    # Limpa o "R$" e converte a vírgula para ponto
                                     p_clube = float(raw_val.replace('R$', '').replace('.', '').replace(',', '.').strip())
-                                    valor_varejo = p_venda     # Preço comum vai para Varejo
-                                    valor_atacado = p_clube    # Preço Clube vai para Atacado
+                                    valor_varejo = p_venda
+                                    valor_atacado = p_clube
                                     condicao = "CLUBE SV"
                                 except:
                                     condicao = "CLUBE SV"
 
-                    # Se não for clube, checa promoções de quantidade (Leve Mais)
+                    # Checa promoções de quantidade (Leve Mais)
                     if condicao == "1 UN":
                         if promos := p.get('promotions', []):
                             for pr in promos:
@@ -110,24 +142,19 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                                 if any(x in msg for x in ["LEVE", "PAGUE", "A PARTIR"]):
                                     condicao = msg
                                     break
+                    
+                    # Filtra apenas ofertas
+                    if condicao == "1 UN" and p_venda >= p_tabela:
+                        continue
 
-                    # --- NOVA LÓGICA DE TAXONOMIA ---
-                    # Salesforce Commerce Cloud não costuma mandar a árvore inteira no produto.
-                    cat_site = ""
-                    subcategoria = "N/A"
+                    # --- NOVA LÓGICA DE TAXONOMIA (Garante Bypass da IA) ---
+                    subcategoria = formatar_nome_categoria(cat_nome)
                     tipo_produto = "N/A"
-
-                    # Tentativa de extrair de um 'categoryTree' se existir (pouco provável, mas seguro)
-                    cat_tree = p.get('categoryTree', [])
-                    if isinstance(cat_tree, list) and cat_tree:
-                        if len(cat_tree) > 0 and cat_tree[0].get('name'): cat_site = cat_tree[0].get('name').upper()
-                        if len(cat_tree) > 1 and cat_tree[1].get('name'): subcategoria = cat_tree[1].get('name').upper()
-                        if len(cat_tree) > 2 and cat_tree[2].get('name'): tipo_produto = cat_tree[2].get('name').upper()
-
-                    if cat_site in CATEGORIAS_IGNORADAS:
+                    
+                    if cat_nome in CATEGORIAS_IGNORADAS:
                         continue
                     
-                    categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_bruto, p.get('categoryName', cat_nome)))
+                    categoria = MAPA_PARA_APP.get(cat_nome, padronizar_categoria(nome_bruto, cat_nome))
 
                     # Metadados e Limpeza
                     img_url = ""
@@ -135,7 +162,7 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                     for size in ['medium', 'large', 'small']:
                         if size in imgs and imgs[size]:
                             img_url = imgs[size][0].get('url', "")
-                            if img_url.startswith('/'): img_url = "https://www.svicente.com.br" + img_url
+                            if img_url.startswith('/'): img_url = f"{BASE_URL_CONFIG}{img_url}"
                             break
 
                     marca = p.get('brand', 'PRÓPRIA').upper()
@@ -161,13 +188,51 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                     })
                 except: continue
         
+        if produtos_categoria:
+            logger.info(f"   ✓ {cat_nome}: {len(produtos_categoria)} ofertas encontradas.")
+            
         return produtos_categoria
 
 async def motor_extracao_svicente():
+    logger.info(f"🚀 Iniciando extração com Taxonomia Dinâmica para {NOME_MERCADO}...")
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    
     async with AsyncSession(impersonate=IMPERSONATE) as session:
-        # Foca apenas na categoria de ofertas
-        return await processar_categoria(session, CGID_OFERTAS, "OFERTAS", asyncio.Semaphore(CONCURRENCY), agora)
+        # 1. Obtém as categorias do site
+        logger.info(f"📡 Buscando links de categorias no site...")
+        cat_links = await get_category_links(session)
+        logger.info(f"   ✓ Encontradas {len(cat_links)} subcategorias no menu.")
+        
+        if not cat_links:
+            logger.warning("Não foi possível carregar as categorias do site.")
+            return []
+            
+        # 2. Descobre o CGID real de cada categoria para buscar os produtos corretos
+        logger.info(f"📡 Resolvendo CGIDs internos...")
+        semaforo_cgid = asyncio.Semaphore(15) # Mais concorrência para as chamadas HTML
+        tasks_cgid = [fetch_true_cgid(session, url_path, cat_name, semaforo_cgid) for cat_name, url_path in cat_links.items()]
+        cgid_results = await asyncio.gather(*tasks_cgid)
+        
+        valid_cgids = [(true_cgid, cat_name) for true_cgid, cat_name in cgid_results if true_cgid]
+        logger.info(f"   ✓ Resolvidos {len(valid_cgids)} CGIDs válidos.")
+
+        # 3. Faz a extração paginada de ofertas em cada categoria válida
+        logger.info(f"📡 Buscando ofertas em todas as categorias...")
+        semaforo_api = asyncio.Semaphore(CONCURRENCY)
+        tasks_ofertas = [processar_categoria(session, cgid, cat_name, semaforo_api, agora) for cgid, cat_name in valid_cgids]
+        resultados_finais = await asyncio.gather(*tasks_ofertas)
+        
+        lista_produtos = [p for sublist in resultados_finais for p in sublist]
+
+    if not lista_produtos:
+        logger.warning(f"Nenhum produto foi capturado para o {NOME_MERCADO}.")
+        return []
+
+    # Remove duplicados por nome de produto mantendo o primeiro encontrado (evita duplicação se o item pertencer a >1 categoria)
+    lista_unica = list({v['Produto']: v for v in lista_produtos}.values())
+    logger.info(f"✅ Finalizado! {len(lista_unica)} ofertas únicas capturadas no {NOME_MERCADO}.")
+    return lista_unica
 
 async def extrair_dados():
+    """Interface para o Orquestrador Main"""
     return await motor_extracao_svicente()

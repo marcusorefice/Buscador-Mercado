@@ -249,8 +249,8 @@ async def main():
         # "Carrefour": carrefour.extrair_dados,
         # "Covabra": covabra.extrair_dados,
         # "Oba Hortifruti": oba.extrair_dados,
-        "Pão de Açúcar": paodeacucar.extrair_dados,
-        # "São Vicente": svicente.extrair_dados
+        # "Pão de Açúcar": paodeacucar.extrair_dados,
+        "São Vicente": svicente.extrair_dados
     }
 
     # 1. Chamar os scrapers em paralelo

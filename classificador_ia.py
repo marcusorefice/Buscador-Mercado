@@ -295,18 +295,15 @@ def classificar_taxonomia_com_ia(lista_produtos_dict):
                     # Pega a URL da imagem do dicionário original do lote
                     imagem_url = "SEM IMAGEM"
                     for p_orig_nome, p_orig_info in chunk_dict.items():
+                        # Compara a versão limpa do nome que veio da IA com a versão limpa do nome original
                         if normalizar_para_cache(p_orig_nome) == chave_ia:
                             imagem_url = p_orig_info.get("Link_Imagem", "SEM IMAGEM")
+                            # Agora sim, preenchemos o mapa que o orquestrador vai ler
+                            mapa_final_taxonomia[p_orig_nome] = taxonomia_padronizada
                             break
 
-                    biblioteca[chave_ia] = {**biblioteca.get(chave_ia, {}), **taxonomia_padronizada}
-                    if "imagem" not in biblioteca[chave_ia] or biblioteca[chave_ia]["imagem"] == "SEM IMAGEM":
-                        biblioteca[chave_ia]["imagem"] = imagem_url
-                    
-                    # Atualiza o mapa para os produtos originais correspondentes neste lote
-                    for p_orig, c_orig in chunk_dict.items():
-                        if c_orig == chave_ia:
-                            mapa_final_taxonomia[p_orig] = taxonomia_padronizada
+                    # Salva na biblioteca para consultas futuras (Cache)
+                    biblioteca[chave_ia] = {**taxonomia_padronizada, "imagem": imagem_url}
                 
                 salvar_biblioteca(biblioteca)
                 logger.info(f"   - Lote {lote_atual} concluído. Cache atualizado.")
