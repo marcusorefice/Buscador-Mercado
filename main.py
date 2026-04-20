@@ -73,6 +73,9 @@ def inicializar_db():
           INSERT INTO ofertas_fts(rowid, Produto, Marca, Categoria, subcategoria) VALUES (new.id, new.Produto, new.Marca, new.Categoria, new.subcategoria);
         END;
     ''')
+    
+    cursor.execute("PRAGMA optimize;") # Otimiza índices
+    conn.commit()
     conn.close()
 
 def salvar_resultados(produtos_finais):
@@ -241,12 +244,12 @@ async def main():
         # "Tenda Atacado": tenda.extrair_dados,
         # "Roldão Atacadista": roldao.extrair_dados,
         # "Tauste Supermercado": tauste.extrair_dados,
-        "Atacadão": atacadao.extrair_dados,
+        # "Atacadão": atacadao.extrair_dados,
         # "Boa Supermercados": boa.extrair_dados,
         # "Carrefour": carrefour.extrair_dados,
         # "Covabra": covabra.extrair_dados,
         # "Oba Hortifruti": oba.extrair_dados,
-        # "Pão de Açúcar": paodeacucar.extrair_dados,
+        "Pão de Açúcar": paodeacucar.extrair_dados,
         # "São Vicente": svicente.extrair_dados
     }
 
@@ -291,12 +294,24 @@ async def main():
         # Passa a lista de dicionários de produtos, não apenas os nomes, para que a imagem seja salva no cache
         mapa_taxonomia = await asyncio.to_thread(classificar_taxonomia_com_ia, produtos_para_ia)
 
+        # Carregamos a biblioteca atualizada para usar como rede de segurança
+        from classificador_ia import carregar_biblioteca, normalizar_para_cache
+        biblioteca = carregar_biblioteca()
+
         # Aplica a taxonomia de volta
         for produto in produtos_para_ia:
-            nome_produto = produto.get("Produto")
-            taxonomia = mapa_taxonomia.get(nome_produto)
+            nome_original = produto.get("Produto")
+            
+            # 1. Tenta o nome exato que a IA devolveu
+            taxonomia = mapa_taxonomia.get(nome_original)
+            
+            # 2. Se falhou, tenta buscar pelo nome "limpo" na biblioteca (REDE DE SEGURANÇA)
+            if not taxonomia:
+                chave_norm = normalizar_para_cache(nome_original)
+                taxonomia = biblioteca.get(chave_norm)
+
             if taxonomia:
-                produto["Categoria"] = taxonomia.get("Categoria", produto.get("Categoria", "OUTROS"))
+                produto["Categoria"] = taxonomia.get("Categoria", "MERCEARIA")
                 produto["subcategoria"] = taxonomia.get("subcategoria", "OUTROS")
                 produto["tipo_produto"] = taxonomia.get("tipo_produto", "OUTROS")
         

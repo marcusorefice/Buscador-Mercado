@@ -5,7 +5,7 @@ import asyncio
 import urllib.parse
 from curl_cffi import requests
 from datetime import datetime
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -103,8 +103,8 @@ async def motor_extracao_atacadao():
 
                     if isinstance(cat_tree, list) and cat_tree:
                         if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
-                        if len(cat_tree) > 1: subcategoria = cat_tree[1].get('name', 'N/A').upper()
-                        if len(cat_tree) > 2: tipo_produto = cat_tree[2].get('name', 'N/A').upper()
+                        if len(cat_tree) > 1: subcategoria = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
+                        if len(cat_tree) > 2: tipo_produto = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
 
                     if cat_site in CATEGORIAS_IGNORADAS:
                         continue # Pula para o próximo produto

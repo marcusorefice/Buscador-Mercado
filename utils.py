@@ -95,26 +95,44 @@ def clean_price_string(price_str):
 MAPA_PARA_APP = {
     # Itens de Mercado
     "MERCEARIA": "Mercearia e Despensa",
+    "ALIMENTOS": "Mercearia e Despensa",
+    "ALIMENTOS BÁSICOS": "Mercearia e Despensa",
     "PADARIA E MATINAIS": "Laticínios, Ovos e Matinais",
+    "PADARIA": "Laticínios, Ovos e Matinais",
+    "LATICÍNIOS": "Laticínios, Ovos e Matinais",
+    "FRIOS E LATICÍNIOS": "Laticínios, Ovos e Matinais",
     "FRIOS E CONGELADOS": "Congelados e Pratos Prontos",
+    "CONGELADOS": "Congelados e Pratos Prontos",
     "CARNES, AVES E PEIXES": "Açougue e Peixaria",
+    "AÇOUGUE": "Açougue e Peixaria",
+    "PEIXARIA": "Açougue e Peixaria",
     "HORTIFRÚTI": "Hortifrúti",
+    "HORTIFRUTI": "Hortifrúti",
     "BEBIDAS": "Bebidas",
     "LIMPEZA": "Limpeza",
+    "PRODUTOS DE LIMPEZA": "Limpeza",
     "HIGIENE E PERFUMARIA": "Higiene e Cuidado Pessoal",
+    "HIGIENE E BELEZA": "Higiene e Cuidado Pessoal",
+    "CUIDADOS PESSOAIS": "Higiene e Cuidado Pessoal",
+    "BEBÊ": "Higiene e Cuidado Pessoal",
     
     # Bazar e Utilidades
     "UTILIDADES DOMÉSTICAS": "Bazar e utilidades",
     "ELETRÔNICOS E ELETROPORTÁTEIS": "Bazar e utilidades",
     "DESCARTÁVEIS E EMBALAGENS": "Bazar e utilidades",
-    "PAPELARIA": "Bazar e utilidades"
+    "PAPELARIA": "Bazar e utilidades",
+    "CASA E LAZER": "Bazar e utilidades",
+    "BAZAR": "Bazar e utilidades",
+    "PET SHOP": "Pet Shop",
+    "PET": "Pet Shop"
 }
 
-CATEGORIAS_IGNORADAS = {"AUTOMOTIVO", "PET SHOP", "JARDINAGEM", "ESPORTE E LAZER", "VESTUÁRIO", "CAFETERIA"}
+CATEGORIAS_IGNORADAS = {"AUTOMOTIVO", "JARDINAGEM", "ESPORTE E LAZER", "VESTUÁRIO", "CAFETERIA"}
 
 def padronizar_categoria(nome, cat_site=""):
     n, c = str(nome).upper(), str(cat_site).upper()
     regras = {
+        "Pet Shop": ["RAÇÃO", "GATO", "CACHORRO", "PET", "AREIA", "SACHÊ", "WHISKAS", "PEDIGREE", "FRISKIES", "PURINA"],
         "Mercearia e Despensa": ["ARROZ", "FEIJÃO", "CAFÉ", "AÇÚCAR", "ÓLEO", "AZEITE", "MACARRÃO", "MOLHO", "BISCOITO", "WAFER", "PASSATEMPO", "BAUDUCCO", "NESCAU", "TODDY", "CHOCOLATE"],
         "Laticínios, Ovos e Matinais": ["LEITE", "QUEIJO", "IOGURTE", "QUALY", "MARGARINA", "REQUEIJÃO", "PRESUNTO", "MORTADELA", "SALSICHA", "DANONE", "OVOS"],
         "Congelados e Pratos Prontos": ["PIZZA", "LASANHA", "NUGGETS", "HAMBÚRGUER", "SORVETE", "AÇAÍ", "DAUCY", "VEGETAIS", "CONGELADO"],
@@ -129,11 +147,83 @@ def padronizar_categoria(nome, cat_site=""):
         if any(t in n for t in termos) or any(t in c for t in termos): return cat
     return "Mercearia e Despensa"
 
+def formatar_nome_categoria(texto: str) -> str:
+    """
+    Formata um nome de categoria/subcategoria para um formato mais legível.
+    Ex: 'LEITE-E-DERIVADOS' -> 'Leite e Derivados'
+    Ex: 'BEBIDAS-ALCOOLICAS' -> 'Bebidas Alcoolicas'
+    """
+    if not isinstance(texto, str) or not texto or texto.upper() == "N/A":
+        return "N/A"
+    
+    # Substitui hífens e underscores por espaços e remove espaços extras
+    texto_limpo = texto.replace('-', ' ').replace('_', ' ').strip()
+    
+    # Aplica capitalização de título (Title Case) e lida com palavras pequenas
+    palavras = texto_limpo.lower().split()
+    palavras_capitalizadas = []
+    palavras_a_ignorar = ['e', 'de', 'da', 'do', 'dos', 'das', 'a', 'o', 'as', 'os']
+    for p in palavras:
+        if p in palavras_a_ignorar:
+            palavras_capitalizadas.append(p)
+        else:
+            palavras_capitalizadas.append(p.capitalize())
+
+    return " ".join(palavras_capitalizadas)
+
 def extrair_medidas_inteligente(nome_produto):
     nome = str(nome_produto).upper()
-    match = re.search(r'(\d+(?:[\.,]\d+)?)\s*(G|KG|ML|L|UN)\b', nome)
+    # Adicionamos: CAPS (Cápsulas), FLS (Folhas), POTS (Potes), LTS (Litros)
+    match = re.search(r'(\d+(?:[\.,]\d+)?)\s*(G|KG|ML|L|LTS|UN|CAPS|FLS|POTS)\b', nome)
     if match: return nome.replace(match.group(0), "").strip(), match.group(1).replace(',', '.'), match.group(2)
     return nome, "1", "UN"
+
+def otimizar_nome_produto(nome: str) -> str:
+    """Simplifica nomes de produtos muito longos, focando em Marca + Formato + Sabor."""
+    if not isinstance(nome, str): return nome
+    n = nome.upper()
+    
+    # Remove símbolos de marca registrada que poluem o nome (ex: NESTLÉ®)
+    n = re.sub(r'[®©™\xae\u2122\u00a9]', '', n)
+
+    # --- Regras para Ração Úmida / Pet Shop ---
+    termos_pet = ["RAÇÃO", "ÚMID", "SACHÊ", "SACHE", "GATO", "CÃO", "CÃES", "CACHORRO", "FRISKIES", "PURINA", "WHISKAS", "DOG CHOW", "CAT CHOW"]
+    if any(t in n for t in termos_pet):
+        # Substituições de palavras desnecessárias e jargões comerciais
+        replaces = [
+            ("RAÇÃO ÚMIDA PARA", ""), ("RAÇÃO ÚMIDA", ""), 
+            ("ALIMENTO ÚMIDO PARA", ""), ("ALIMENTO ÚMIDO", ""),
+            ("NESTLÉ PURINA", ""), ("NESTLE PURINA", ""), 
+            ("NESTLÉ", ""), ("NESTLE", ""), ("PURINA", ""),
+            ("EXTRALIFE", ""), ("DE TODOS OS TAMANHOS", ""), ("TODOS OS TAMANHOS", ""),
+            ("100% COMPLETO E BALANCEADO", ""), ("COMPLETO E BALANCEADO", ""),
+            ("SABOR", ""), ("AO MOLHO", ""), ("EM GELEIA", ""), 
+            (" PARA ", " "), (" COM ", " ")
+        ]
+        for velho, novo in replaces:
+            n = n.replace(velho, novo)
+            
+        n = n.replace("CACHORROS", "CÃES").replace("CACHORRO", "CÃES")
+        n = n.replace("CÃES CÃES", "CÃES").replace("GATOS GATOS", "GATOS")
+        
+        # Adiciona "SACHÊ" no início se não existir
+        if "SACHÊ" not in n and "SACHE" not in n:
+            marcas_sache = ["FRISKIES", "WHISKAS", "PEDIGREE", "FANCY FEAST", "DOG CHOW", "CAT CHOW"]
+            if any(m in n for m in marcas_sache) and any(a in n for a in ["GATO", "CÃO"]):
+                n = "SACHÊ " + n
+                
+        # Deduplicação agressiva de palavras (ex: FRANGO ADULTOS FRANGO -> FRANGO ADULTOS)
+        palavras = n.split()
+        vistos = set()
+        palavras_unicas = []
+        for p in palavras:
+            if p not in vistos or len(p) <= 2: # Permite conectivos como E/DE repetirem
+                vistos.add(p)
+                palavras_unicas.append(p)
+        n = " ".join(palavras_unicas)
+    
+    # Limpa espaços extras deixados pelos replaces
+    return re.sub(r'\s+', ' ', n).strip()
 
 def remover_frases_duplicadas(texto: str) -> str:
     """
@@ -183,6 +273,9 @@ def validar_e_limpar_produtos(produtos, logger):
         if isinstance(nome_produto, str):
             nome_produto = nome_produto.strip()
         
+        # Otimização de nomes muito longos (ex: Ração Úmida -> Sachê)
+        nome_produto = otimizar_nome_produto(nome_produto)
+        
         # Limpeza de frases duplicadas no nome do produto
         nome_produto = remover_frases_duplicadas(nome_produto)
         
@@ -191,6 +284,24 @@ def validar_e_limpar_produtos(produtos, logger):
         if isinstance(nome_produto, str) and isinstance(marca, str) and marca and marca.upper() != 'PRÓPRIA':
             if nome_produto.upper().endswith(marca.upper()):
                 nome_produto = nome_produto[:-len(marca)].strip(' -')
+
+        # Proteção Blindada: Corrige itens de Pet Shop classificados erroneamente como Açougue
+        if isinstance(nome_produto, str):
+            is_pet = False
+            marcas_pet = ["FRISKIES", "WHISKAS", "PEDIGREE", "PURINA", "DOG CHOW", "CAT CHOW", "FANCY FEAST"]
+            if any(m in nome_produto for m in marcas_pet):
+                is_pet = True
+            elif "RAÇÃO" in nome_produto or ("SACHÊ" in nome_produto and any(x in nome_produto for x in ["GATO", "CÃO", "CACHORRO"])):
+                is_pet = True
+                
+            if is_pet:
+                produto["Categoria"] = "Pet Shop"
+                sub_atual = str(produto.get("subcategoria", "")).upper()
+                tipo_atual = str(produto.get("tipo_produto", "")).upper()
+                if sub_atual in ["CARNES", "AVES", "PEIXARIA", "AÇOUGUE", "N/A", "OUTROS"]:
+                    produto["subcategoria"] = "CÃES E GATOS"
+                if tipo_atual in ["CARNE BOVINA", "FRANGO", "PEIXE", "N/A", "OUTROS", "CARNES"]:
+                    produto["tipo_produto"] = "ALIMENTO ÚMIDO" if "SACHÊ" in nome_produto else "RAÇÃO"
 
         preco_atacado_str = produto.get("Preço Atacado", "")
         

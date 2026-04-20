@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from curl_cffi import requests
 from playwright.async_api import async_playwright
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS
+from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -215,10 +215,17 @@ async def extrair_lote(session, ordem, pagina, sem, agora):
                     subcategoria = "N/A"
                     tipo_produto = "N/A"
 
-                    if isinstance(cat_tree, list) and cat_tree:
+                    if isinstance(cat_tree, list) and len(cat_tree) > 0 and isinstance(cat_tree[0], dict):
                         if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
-                        if len(cat_tree) > 1: subcategoria = cat_tree[1].get('name', 'N/A').upper()
-                        if len(cat_tree) > 2: tipo_produto = cat_tree[2].get('name', 'N/A').upper()
+                        if len(cat_tree) > 1: subcategoria = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
+                        if len(cat_tree) > 2: tipo_produto = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
+                    elif 'categories' in item and isinstance(item['categories'], list) and len(item['categories']) > 0:
+                        # Extrai as categorias a partir da string de rota mais completa (geralmente o índice 0)
+                        # Ex: "/Higiene e Perfumaria/Cuidados Pessoais/Papel Higiênico/"
+                        parts = [p for p in item['categories'][0].split('/') if p]
+                        if len(parts) > 0: cat_site = parts[0].upper()
+                        if len(parts) > 1: subcategoria = formatar_nome_categoria(parts[1])
+                        if len(parts) > 2: tipo_produto = formatar_nome_categoria(parts[2])
                     
                     if cat_site in CATEGORIAS_IGNORADAS:
                         continue
