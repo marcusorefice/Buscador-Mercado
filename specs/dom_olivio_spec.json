@@ -1,0 +1,25 @@
+{
+  "market_name": "Dom Olívio",
+  "base_url": "https://www.domolivio.com.br/",
+  "api_endpoint": "/api/graphql",
+  "data_origin": "API (GRAPHQL)",
+  "scraping_method": "Async API Requests (GraphQL)",
+  "regionalization": {
+    "cluster_id": "2085",
+    "cep_jundiai": "13211-745",
+    "channel": "1",
+    "price_channel": "2",
+    "region_id": null
+  },
+  "pagination": {
+    "max_pages": 25
+  },
+  "api_hashes": {
+    "get_products": "ae50c5a735b1464f0ba48be4f2b32f7289ce6284",
+    "client_product": "47aa22eb750cb2c529e5eeafb921bfeadb67db71"
+  },
+  "technical_dependencies": {
+    "request_engine": "curl_cffi (AsyncSession)",
+    "impersonation": "chrome120"
+  }
+}

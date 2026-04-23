@@ -3,6 +3,13 @@ import json
 import logging
 import os
 from datetime import datetime
+import threading
+
+# --- Global Lock for WebDriverManager ---
+# This lock prevents a race condition when multiple scrapers running in parallel
+# (especially synchronous ones in threads) try to access or install the
+# chromedriver simultaneously via webdriver-manager.
+webdriver_manager_lock = threading.Lock()
 
 # --- 1. Configuração de logging padrão ---
 def setup_logging(log_file=os.path.join('data', 'app.log'), level=logging.INFO):
@@ -132,7 +139,7 @@ CATEGORIAS_IGNORADAS = {"AUTOMOTIVO", "JARDINAGEM", "ESPORTE E LAZER", "VESTUÁR
 def padronizar_categoria(nome, cat_site=""):
     n, c = str(nome).upper(), str(cat_site).upper()
     regras = {
-        "Pet Shop": ["RAÇÃO", "GATO", "CACHORRO", "PET", "AREIA", "SACHÊ", "WHISKAS", "PEDIGREE", "FRISKIES", "PURINA"],
+        "Pet Shop": ["RAÇÃO", "GATO", "CACHORRO", "PET", "AREIA", "WHISKAS", "PEDIGREE", "FRISKIES", "PURINA"],
         "Mercearia e Despensa": ["ARROZ", "FEIJÃO", "CAFÉ", "AÇÚCAR", "ÓLEO", "AZEITE", "MACARRÃO", "MOLHO", "BISCOITO", "WAFER", "PASSATEMPO", "BAUDUCCO", "NESCAU", "TODDY", "CHOCOLATE"],
         "Laticínios, Ovos e Matinais": ["LEITE", "QUEIJO", "IOGURTE", "QUALY", "MARGARINA", "REQUEIJÃO", "PRESUNTO", "MORTADELA", "SALSICHA", "DANONE", "OVOS"],
         "Congelados e Pratos Prontos": ["PIZZA", "LASANHA", "NUGGETS", "HAMBÚRGUER", "SORVETE", "AÇAÍ", "DAUCY", "VEGETAIS", "CONGELADO"],
@@ -303,6 +310,42 @@ def validar_e_limpar_produtos(produtos, logger):
                 if tipo_atual in ["CARNE BOVINA", "FRANGO", "PEIXE", "N/A", "OUTROS", "CARNES"]:
                     produto["tipo_produto"] = "ALIMENTO ÚMIDO" if "SACHÊ" in nome_produto else "RAÇÃO"
 
+        # Proteção Anti-Sprite Fantasma: Corrige bebidas alcoólicas categorizadas como refrigerante
+        if isinstance(nome_produto, str):
+            is_alcoholic = False
+            # Lista expandida para maior cobertura
+            termos_alcoolicos = ["ALCOÓLICA", "VODKA", "GIN", "WHISKY", "CACHAÇA", "TEQUILA", "LICOR", "SKYY", "ABSOLUT", "SMIRNOFF", "ICE"]
+            
+            # Verifica nome e marca
+            nome_upper = nome_produto.upper()
+            marca_upper = str(marca).upper() if marca else ""
+
+            if any(termo in nome_upper or termo in marca_upper for termo in termos_alcoolicos):
+                is_alcoholic = True
+
+            if is_alcoholic:
+                # Se for alcoólico, garante que a taxonomia não seja de refrigerante
+                sub_atual = str(produto.get("subcategoria", "")).upper()
+                tipo_atual = str(produto.get("tipo_produto", "")).upper()
+                
+                # Palavras-chave que indicam erro de categoria
+                termos_errados = ["REFRIGERANTE", "SPRITE", "COCA-COLA", "FANTA", "GUARANÁ"]
+
+                if any(termo in sub_atual for termo in termos_errados):
+                    logger.warning(f"Correção de taxonomia: '{nome_produto}' é alcoólico mas estava como subcategoria '{produto.get('subcategoria')}'. Resetando.")
+                    produto["subcategoria"] = "Bebidas Alcoólicas"
+                
+                if any(termo in tipo_atual for termo in termos_errados):
+                    logger.warning(f"Correção de taxonomia: '{nome_produto}' é alcoólico mas estava como tipo de produto '{produto.get('tipo_produto')}'. Resetando.")
+                    produto["tipo_produto"] = "Prontas para Beber"
+
+        # Proteção Anti-Pet Shop Falso: Corrige itens comuns categorizados como Pet Shop
+        if produto.get("Categoria") == "Pet Shop" and isinstance(nome_produto, str):
+            termos_nao_pet = ["REFRIGERANTE", "CERVEJA", "SUCO", "ÁGUA", "LEITE", "ARROZ", "FEIJÃO", "MACARRÃO", "SABÃO", "DETERGENTE", "SHAMPOO"]
+            if any(termo in nome_produto.upper() for termo in termos_nao_pet) and not any(pet_term in nome_produto.upper() for pet_term in ["CÃES", "GATO", "PET"]):
+                logger.warning(f"Correção de categoria: '{nome_produto}' estava como 'Pet Shop'. Reclassificando.")
+                produto["Categoria"] = padronizar_categoria(nome_produto, "")
+
         preco_atacado_str = produto.get("Preço Atacado", "")
         
         # Validação do Nome e Preço (campos essenciais para a chave do DB)
@@ -315,52 +358,3 @@ def validar_e_limpar_produtos(produtos, logger):
 
     logger.info(f"✅ Validação concluída: {len(produtos_validos)} de {len(produtos)} produtos são válidos e seguirão para o salvamento.")
     return produtos_validos
-
-# --- 4. Funções de Cache de Download ---
-CACHE_DOWNLOADS_FILE = os.path.join('data', 'cache_downloads.json')
-
-def filtrar_imagens_por_cache(imagens, nome_mercado, logger):
-    """
-    Filtra uma lista de imagens, removendo aquelas que já foram processadas no dia.
-    Retorna a lista de imagens a serem processadas e um dicionário com as novas entradas para o cache.
-    """
-    logger.info(f"Verificando cache de downloads para {len(imagens)} imagens de '{nome_mercado}'...")
-    cache_downloads = read_json_file(CACHE_DOWNLOADS_FILE, default_value={})
-    hoje = datetime.now().strftime("%Y-%m-%d")
-    
-    imagens_para_processar = []
-    novas_entradas_cache = {}
-    
-    if nome_mercado not in cache_downloads:
-        cache_downloads[nome_mercado] = {}
-
-    for img_path in imagens:
-        try:
-            nome_arquivo = os.path.basename(img_path)
-            tamanho_arquivo = os.path.getsize(img_path)
-            
-            entrada_cache = cache_downloads[nome_mercado].get(nome_arquivo)
-            
-            if entrada_cache and entrada_cache.get("size") == tamanho_arquivo and entrada_cache.get("processed_date") == hoje:
-                logger.info(f"   CACHE HIT: '{nome_arquivo}' ({tamanho_arquivo} bytes) já processado hoje. Pulando.")
-                continue
-            else:
-                logger.info(f"   CACHE MISS: '{nome_arquivo}' ({tamanho_arquivo} bytes) é novo ou modificado. Será processado.")
-                imagens_para_processar.append(img_path)
-                novas_entradas_cache[nome_arquivo] = {
-                    "size": tamanho_arquivo,
-                    "processed_date": hoje
-                }
-        except FileNotFoundError:
-            logger.warning(f"   Arquivo '{img_path}' não encontrado durante verificação de cache. Pulando.")
-            continue
-            
-    return imagens_para_processar, novas_entradas_cache, cache_downloads
-
-def atualizar_cache_downloads(cache_downloads, nome_mercado, novas_entradas_cache, logger):
-    """Atualiza e salva o arquivo de cache de downloads."""
-    logger.info("Processamento de IA bem-sucedido. Atualizando cache de downloads...")
-    if nome_mercado not in cache_downloads:
-        cache_downloads[nome_mercado] = {}
-    cache_downloads[nome_mercado].update(novas_entradas_cache)
-    write_json_file(CACHE_DOWNLOADS_FILE, cache_downloads)

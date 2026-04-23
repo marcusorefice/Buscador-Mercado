@@ -142,20 +142,18 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                                 if any(x in msg for x in ["LEVE", "PAGUE", "A PARTIR"]):
                                     condicao = msg
                                     break
-                    
-                    # Filtra apenas ofertas
-                    if condicao == "1 UN" and p_venda >= p_tabela:
-                        continue
 
-                    # --- NOVA LÓGICA DE TAXONOMIA (Garante Bypass da IA) ---
-                    subcategoria = formatar_nome_categoria(cat_nome)
+                    # --- LÓGICA DE TAXONOMIA ---
+                    subcategoria = "N/A"
                     tipo_produto = "N/A"
                     
                     if cat_nome in CATEGORIAS_IGNORADAS:
                         continue
                     
-                    categoria = MAPA_PARA_APP.get(cat_nome, padronizar_categoria(nome_bruto, cat_nome))
-
+                    # Usa o contexto completo (nome do produto + categoria do menu) para uma categorização mais precisa.
+                    full_context = f"{nome_bruto} {cat_nome}"
+                    categoria = padronizar_categoria(full_context, cat_nome)
+                    
                     # Metadados e Limpeza
                     img_url = ""
                     imgs = p.get('images', {})

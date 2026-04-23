@@ -8,7 +8,8 @@ from utils import (
     extrair_medidas_inteligente, 
     setup_logging, 
     read_json_file,
-    MAPA_PARA_APP, CATEGORIAS_IGNORADAS
+    MAPA_PARA_APP, CATEGORIAS_IGNORADAS,
+    formatar_nome_categoria
 )
 
 logger = setup_logging()
@@ -31,7 +32,7 @@ CLUSTER_ID = CONFIG.get("regionalization", {}).get("cluster_id", "977")
 
 PAGINATION = CONFIG.get("pagination", {})
 PAGE_SIZE = PAGINATION.get("page_size", 50)
-MAX_ITEMS = PAGINATION.get("max_items", 600)
+MAX_ITEMS = PAGINATION.get("max_items", 1500) # Aumentado de 600 para 1500
 
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
@@ -101,21 +102,24 @@ async def motor_extracao_oba():
                         if p_varejo < p_venda: p_varejo = p_venda
 
                         # --- NOVA LÓGICA DE TAXONOMIA ---
-                        cat_tree = p.get('categoryTree', [])
+                        categorias_vtex = p.get('categories', [])
                         cat_site = ""
                         subcategoria = "N/A"
                         tipo_produto = "N/A"
 
-                        if isinstance(cat_tree, list) and cat_tree:
-                            if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
-                            if len(cat_tree) > 1: subcategoria = cat_tree[1].get('name', 'N/A').upper()
-                            if len(cat_tree) > 2: tipo_produto = cat_tree[2].get('name', 'N/A').upper()
+                        if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
+                            partes_cat = categorias_vtex[0].strip('/').split('/')
+                            if len(partes_cat) > 0: cat_site = partes_cat[0].upper()
+                            if len(partes_cat) > 1: subcategoria = formatar_nome_categoria(partes_cat[1])
+                            if len(partes_cat) > 2: tipo_produto = formatar_nome_categoria(partes_cat[2])
                         
                         if cat_site in CATEGORIAS_IGNORADAS:
                             continue
                         
-                        categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_bruto, cat_site))
-
+                        # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
+                        full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
+                        categoria = padronizar_categoria(full_context, cat_site)
+                        
                         # --- LÓGICA DE FILTRAGEM DE CONDIÇÕES ---
                         condicoes_uteis = []
                         
@@ -124,14 +128,14 @@ async def motor_extracao_oba():
                         if highlights:
                             for cname in highlights.values():
                                 termo = str(cname).upper().strip()
-                                if termo not in LISTA_NEGRA:
+                                if not any(lixo in termo for lixo in LISTA_NEGRA):
                                     condicoes_uteis.append(termo)
                         
                         # 2. Teasers (Promoções tipo 'Leve 2 Pague 1')
                         teasers = oferta.get('Teasers', [])
                         for t in teasers:
-                            nome_promo = t.get('<Name>', '').upper().strip()
-                            if nome_promo and nome_promo not in LISTA_NEGRA:
+                            nome_promo = t.get('Name', '').upper().strip()
+                            if nome_promo and not any(lixo in nome_promo for lixo in LISTA_NEGRA):
                                 condicoes_uteis.append(nome_promo)
                         
                         # 3. Clusters (Categorização técnica interna)
@@ -139,17 +143,28 @@ async def motor_extracao_oba():
                         if isinstance(clusters, dict):
                             for cname in clusters.values():
                                 termo = str(cname).upper().strip()
-                                # Só adiciona se for uma oferta explícita e não estiver na lista negra
-                                if "OFERTA" in termo and termo not in LISTA_NEGRA:
+                                if not any(lixo in termo for lixo in LISTA_NEGRA):
                                     condicoes_uteis.append(termo)
 
-                        # --- APLICAÇÃO DA REGRA DE FALLBACK ---
-                        if condicoes_uteis:
-                            # Une condições reais (ex: BEM QUERER | PREÇO VERDE)
-                            txt_condicao = " | ".join(sorted(list(set(condicoes_uteis))))
-                        else:
-                            # Se não sobrou nada após o filtro, define como 1un
-                            txt_condicao = "1 UN"
+                        # --- DEFININDO A CONDIÇÃO FINAL ---
+                        condicao = "1 UN"
+                        
+                        # Prioridade 1: "NA COMPRA DE X" ou "A PARTIR DE X"
+                        encontrou_promo_qtd = False
+                        for tag in condicoes_uteis:
+                            if "NA COMPRA DE" in tag or "A PARTIR DE" in tag:
+                                condicao = tag
+                                encontrou_promo_qtd = True
+                                break
+                                
+                        # Prioridade 2: MINHA HORA OBA (Clube de descontos com CPF)
+                        if not encontrou_promo_qtd:
+                            for tag in condicoes_uteis:
+                                if "MINHA HORA OBA" in tag:
+                                    condicao = "MINHA HORA OBA (CPF)"
+                                    break
+
+                        txt_condicao = condicao
 
                         # Imagem e Unidade
                         img_url = sku.get('images', [{}])[0].get('imageUrl', '')

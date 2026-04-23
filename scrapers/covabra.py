@@ -119,8 +119,10 @@ def extrair_dados():
                             if cat_site in CATEGORIAS_IGNORADAS:
                                 continue
 
-                            categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_original, cat_site))
-
+                            # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
+                            full_context = f"{nome_original} {cat_site} {subcategoria} {tipo_produto}"
+                            categoria = padronizar_categoria(full_context, cat_site)
+                            
                             nome_limpo, qv, med = extrair_medidas_inteligente(nome_original)
 
                             # Dados de Preço e Oferta

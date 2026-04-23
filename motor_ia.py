@@ -82,8 +82,8 @@ class MotorIA:
             # OTMIZAÇÃO: Abre e converte para Escala de Cinza (Preto e Branco)
             with Image.open(caminho_imagem) as raw_img:
                 img = raw_img.convert('L')
-                # Otimização de tamanho (Gemini não precisa de mais de 1600px para ler texto)
-                max_size = 1600
+                # Otimização de tamanho (Aumentado para 3000px para melhorar OCR de folhetos densos)
+                max_size = 3000
                 if max(img.size) > max_size:
                     img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         except Exception as e:
@@ -94,7 +94,7 @@ class MotorIA:
         for tentativa in range(len(self.lista_chaves)):
             try:
                 response = self.client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='models/gemini-2.5-flash-image',
                     contents=[PROMPT_OTIMIZADO, img]
                 )
 
@@ -111,7 +111,7 @@ class MotorIA:
                     try:
                         with open(caminho_cache_json, 'w', encoding='utf-8') as f:
                             json.dump(dados_json, f, ensure_ascii=False, indent=2)
-                        logger.info(f"   CACHE JSON WRITE: Resposta da IA salva em '{os.path.basename(caminho_cache_json)}'")
+                        logger.debug(f"   CACHE JSON WRITE: Resposta da IA salva em '{os.path.basename(caminho_cache_json)}'")
                     except Exception as e:
                         logger.warning(f"Não foi possível salvar a resposta da IA no cache JSON: {e}")
                 
@@ -196,21 +196,25 @@ class MotorIA:
                 
         return lista_formatada
 
-    def processar_imagens_em_lote(self, lista_imagens, nome_mercado, concorrencia=3):
-        """Processa o lote de imagens usando semáforo para evitar ban de IP/Chave."""
-        async def main():
-            # Semáforo de 3 para não estourar o limite de requisições por segundo (RPM)
-            semaforo = asyncio.Semaphore(concorrencia)
-            
-            async def worker(caminho):
-                async with semaforo:
-                    return await self._processar_imagem_async(caminho, nome_mercado)
+    async def processar_imagens_em_lote_async(self, lista_imagens, nome_mercado, concorrencia=3):
+        """Processa o lote de imagens de forma assíncrona, integrando-se a um loop de eventos existente."""
+        # Semáforo para não estourar o limite de requisições por segundo (RPM)
+        semaforo = asyncio.Semaphore(concorrencia)
+        
+        async def worker(caminho):
+            async with semaforo:
+                return await self._processar_imagem_async(caminho, nome_mercado)
 
-            tarefas = [worker(img) for img in lista_imagens]
-            resultados = await asyncio.gather(*tarefas)
-            
-            # Achata a lista
-            return [p for sublist in resultados for p in sublist]
+        tarefas = [worker(img) for img in lista_imagens]
+        resultados = await asyncio.gather(*tarefas)
+        
+        # Achata a lista
+        return [p for sublist in resultados for p in sublist]
+
+    def processar_imagens_em_lote(self, lista_imagens, nome_mercado, concorrencia=3):
+        """Wrapper síncrono para manter a compatibilidade. Inicia e fecha um novo loop de eventos."""
+        async def main():
+            return await self.processar_imagens_em_lote_async(lista_imagens, nome_mercado, concorrencia)
 
         # Configuração para Windows
         if os.name == 'nt':

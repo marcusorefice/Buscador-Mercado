@@ -5,12 +5,12 @@ from scrapers.carrefour import extrair_dados as CarrefourScraper
 from scrapers.covabra import extrair_dados as CovabraScraper
 from scrapers.oba import extrair_dados as ObaScraper
 from scrapers.paodeacucar import extrair_dados as PaoDeAcucarScraper
-from scrapers.roldao import baixar_encartes as RoldaoScraper
-from scrapers.tauste import baixar_encartes as TausteScraper
-from scrapers.tenda import baixar_encartes as TendaScraper
-from scrapers.assai import baixar_encartes as AssaiScraper
+from scrapers.roldao import extrair_dados as RoldaoScraper
+from scrapers.tauste import extrair_dados as TausteScraper
+from scrapers.tenda import extrair_dados as TendaScraper
+from scrapers.assai import extrair_dados as AssaiScraper
 from scrapers.svicente import extrair_dados as SVicenteScraper
-from scrapers.fort import baixar_encartes as FortScraper
+from scrapers.fort import extrair_dados as FortScraper
 
 __all__ = [
     'BaseScraper', 'BoaScraper', 'AtacadaoScraper', 'CarrefourScraper', 

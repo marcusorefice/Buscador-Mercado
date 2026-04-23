@@ -30,7 +30,7 @@ CEP_COOKIE_VALUE = REGIONALIZATION.get("cep_cookie_value", "IkhpcGVyIEp1bmRpYcOt
 
 PAGINATION = CONFIG.get("pagination", {})
 PAGE_SIZE = PAGINATION.get("page_size", 50)
-MAX_PAGES_PER_SORT = PAGINATION.get("max_pages_per_sort", 25)
+MAX_PAGES_PER_SORT = PAGINATION.get("max_pages_per_sort", 50) # Aumentado de 25 para 50
 
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 raw_concurrency = TECHNICAL_DEPS.get("concurrency", 8)
@@ -230,8 +230,10 @@ async def extrair_lote(session, ordem, pagina, sem, agora):
                     if cat_site in CATEGORIAS_IGNORADAS:
                         continue
 
-                    categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_cru, cat_site))
-
+                    # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
+                    full_context = f"{nome_cru} {cat_site} {subcategoria} {tipo_produto}"
+                    categoria = padronizar_categoria(full_context, cat_site)
+                    
                     marca = item.get('brand', 'OUTROS')
                     if isinstance(marca, dict): marca = marca.get('name', 'OUTROS')
                     

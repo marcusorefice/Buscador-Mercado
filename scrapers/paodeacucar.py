@@ -142,8 +142,10 @@ async def motor_extracao_paodeacucar():
                             # logger.debug(f"🚫 Pulando {nome_bruto} - Categoria ignorada: {cat_site}")
                             continue
 
-                        categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(nome_bruto, cat_site))
-
+                        # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
+                        full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
+                        categoria = padronizar_categoria(full_context, cat_site)
+                        
                         # --- LÓGICA DE CONDIÇÕES ---
                         condicoes = []
                         
@@ -198,8 +200,13 @@ async def motor_extracao_paodeacucar():
                         nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
                         
                         # USAMOS O SKU OU NOME+MARCA PARA EVITAR APAGAR ITENS REPETIDOS
-                        id_unico = f"{nome_bruto}_{p.get('brand', 'PROPRIA')}"
-
+                        # O SKU, se disponível, é um identificador único mais confiável para evitar colisões
+                        # e garantir a integridade dos dados durante a deduplicação.
+                        sku = p.get('sku')
+                        if sku:
+                            id_unico = str(sku)
+                        else:
+                            id_unico = f"{nome_bruto}_{p.get('brand', 'PROPRIA')}"
                         lista_final.append({
                             "ID_UNICO": id_unico, # Campo temporário para não perder dados
                             "Mercado": NOME_MERCADO,

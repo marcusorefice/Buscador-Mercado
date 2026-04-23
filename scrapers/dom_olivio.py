@@ -1,9 +1,9 @@
+import os
 import asyncio
 import json
 import urllib.parse
-import os
-import re
 import warnings
+import re
 from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
@@ -13,9 +13,9 @@ from utils import (
     setup_logging, 
     read_json_file, 
     MAPA_PARA_APP, 
-    CATEGORIAS_IGNORADAS
+    CATEGORIAS_IGNORADAS,
+    formatar_nome_categoria
 ) 
-from utils import formatar_nome_categoria
 
 # Silencia avisos para um log mais limpo
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -24,24 +24,24 @@ logger = setup_logging()
 # ==========================================
 # CONFIGURAÇÕES TÉCNICAS (NÃO ALTERAR)
 # ==========================================
-SPEC_FILE = os.path.join(os.path.dirname(__file__), '..', 'specs', 'boa_spec.json')
+SPEC_FILE = os.path.join(os.path.dirname(__file__), '..', 'specs', 'dom_olivio_spec.json')
 CONFIG = read_json_file(SPEC_FILE)
 
-NOME_MERCADO = CONFIG.get("market_name", "Boa Supermercados")
-BASE_URL_CONFIG = CONFIG.get("base_url", "https://www.boasupermercados.com.br/").rstrip('/')
+NOME_MERCADO = CONFIG.get("market_name", "Dom Olívio")
+BASE_URL_CONFIG = CONFIG.get("base_url", "https://www.domolivio.com.br/").rstrip('/')
 API_ENDPOINT = CONFIG.get("api_endpoint", "/api/graphql")
 URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
 
 REGIONALIZATION = CONFIG.get("regionalization", {})
-REGION_ID = REGIONALIZATION.get("region_id", "v2.BD821CBD8067F03D236A5416A87F4B3B")
+REGION_ID = REGIONALIZATION.get("region_id") # Pode ser null
 CEP_JUNDIAI = REGIONALIZATION.get("cep_jundiai", "13211-745")
 SALES_CHANNEL_SHELF = REGIONALIZATION.get("channel", "1")
-SALES_CHANNEL_PRICE = REGIONALIZATION.get("price_channel", "2") # Canal 2 é essencial para Clube +Amigo em Jundiaí
-CLUSTER_ID = REGIONALIZATION.get("cluster_id", "2510")
+SALES_CHANNEL_PRICE = REGIONALIZATION.get("price_channel", "2")
+CLUSTER_ID = REGIONALIZATION.get("cluster_id", "2085")
 
-MAX_PAGES = CONFIG.get("pagination", {}).get("max_pages", 25) # Aumentado de 12 para 25 para capturar todos os itens.
+MAX_PAGES = CONFIG.get("pagination", {}).get("max_pages", 25)
 
-# Hashes da API GraphQL (devem estar no spec file para manutenção)
+# Hashes da API GraphQL
 API_HASHES = CONFIG.get("api_hashes", {})
 GET_PRODUCTS_HASH = API_HASHES.get("get_products", "ae50c5a735b1464f0ba48be4f2b32f7289ce6284")
 CLIENT_PRODUCT_HASH = API_HASHES.get("client_product", "47aa22eb750cb2c529e5eeafb921bfeadb67db71")
@@ -70,7 +70,7 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str) -> tup
         
         try:
             res = await session.get(url, timeout=10)
-            res.raise_for_status() # Lança exceção para status 4xx/5xx
+            res.raise_for_status()
             data = res.json()
             if not isinstance(data, dict):
                 logger.warning(f"Resposta inesperada (não é um dict) para o produto ID {product_id}.")
@@ -123,7 +123,6 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                 logger.info(f"Página {pagina} do {NOME_MERCADO} não retornou produtos. Fim da lista?")
                 return []
 
-            # Busca preços detalhados para todos os itens da página
             tarefas_precos = [_buscar_preco_calculado(session, e['node']['id']) for e in edges]
             precos_finais = await asyncio.gather(*tarefas_precos)
 
@@ -131,7 +130,6 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
             agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
             def get_last_path_part(path_str: str) -> str:
-                """Extrai a última parte de um caminho URL (ex: /A/B/ -> B)"""
                 if not isinstance(path_str, str): return ""
                 parts = [part for part in path_str.split('/') if part]
                 return parts[-1] if parts else ""
@@ -141,7 +139,6 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                     p = edge['node']
                     nome_cru = p['name'].upper().strip()
                     
-                    # Definição de Preços (Fallback para a vitrine se o detalhado falhar)
                     p_v = v_varejo if v_varejo > 0 else float(p.get('offers', {}).get('highPrice', 0.0))
                     p_a = v_atacado if v_atacado > 0 else float(p.get('offers', {}).get('lowPrice', p_v))
                     
@@ -149,32 +146,77 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                     if p_v <= 0: p_v = p_a
                     if p_v < p_a: p_v = p_a
 
-                    # Lógica de Condição Especial (Jundiaí)
+                    # Lógica de Condição corrigida para refletir o padrão do Boa.
+                    # Se há diferença de preço, é uma oferta do clube.
                     condicao = "1 UN"
-                    selos = [d['name'].upper() for d in p.get('clusterHighlights', [])]
-                    selo_cartonista = any('CARTONISTA' in s or 'OFF' in s for s in selos)
                     if p_a < p_v:
-                        condicao = "EXCLUSIVO CARTÃO BOA" if selo_cartonista else "CLUBE +AMIGO CPF"
+                        condicao = "EXCLUSIVO CLUBE DOM (CPF)"
 
-                    # --- TRATAMENTO DE CATEGORIAS (HIERARQUIA) ---
-                    # O 'categoryTree' para o Boa é uma lista de strings de caminho (ex: '/BEBIDAS/').
+                    # --- LÓGICA DE TAXONOMIA (ROBUSTA) ---
                     cat_tree = p.get('categoryTree', [])
-                    categorias_extraidas = [get_last_path_part(c).upper() for c in cat_tree]
+                    cat_site = "OUTROS"
+                    subcategoria = "N/A"
+                    tipo_prod = "N/A"
 
-                    # LÓGICA DE CATEGORIA: Hierarquia direta a pedido do usuário (Nível 1 -> Categoria, Nível 2 -> Sub, etc.)
-                    cat_site = categorias_extraidas[0] if categorias_extraidas else "OUTROS"
-                    subcategoria = formatar_nome_categoria(categorias_extraidas[1]) if len(categorias_extraidas) > 1 else "N/A"
-                    tipo_prod = formatar_nome_categoria(categorias_extraidas[2]) if len(categorias_extraidas) > 2 else "N/A"
+                    # Tenta o formato de lista de dicionários (como Carrefour)
+                    if isinstance(cat_tree, list) and cat_tree and isinstance(cat_tree[0], dict):
+                        if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', 'OUTROS').upper()
+                        if len(cat_tree) > 1: subcategoria = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
+                        if len(cat_tree) > 2: tipo_prod = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
+                    # Tenta o formato de lista de strings (como Boa)
+                    elif isinstance(cat_tree, list) and cat_tree and isinstance(cat_tree[0], str):
+                        categorias_extraidas = [get_last_path_part(c).upper() for c in cat_tree]
+                        if len(categorias_extraidas) > 0: cat_site = categorias_extraidas[0] if categorias_extraidas[0] else "OUTROS"
+                        if len(categorias_extraidas) > 1: subcategoria = formatar_nome_categoria(categorias_extraidas[1])
+                        if len(categorias_extraidas) > 2: tipo_prod = formatar_nome_categoria(categorias_extraidas[2])
                     
                     if cat_site in CATEGORIAS_IGNORADAS: continue
                     
-                    # Tradução para o App GrabIt
                     # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
                     full_context = f"{nome_cru} {cat_site} {subcategoria} {tipo_prod}"
                     categoria_final = padronizar_categoria(full_context, cat_site)
+                    
+                    # --- LÓGICA DE MEDIDAS CORRIGIDA ---
+                    nome_limpo = nome_cru
+                    qv = "1"
+                    med = "UN"
+                    unidade_venda = "UN" # A maioria dos itens é vendida por unidade (pacote, bandeja, etc.)
 
-                    # Medidas e Imagem
-                    nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                    # 1. Tenta extrair a medida de campos estruturados da API (padrão VTEX/Dom Olívio)
+                    medida_extraida_api = False
+                    try:
+                        # CORREÇÃO: Os campos estão na raiz do produto 'p', não dentro de 'items'.
+                        if 'unitMultiplier' in p and 'measurementUnit' in p:
+                            unit_multiplier = float(p['unitMultiplier'])
+                            measurement_unit = p['measurementUnit'].lower()
+
+                            if measurement_unit == 'kg':
+                                if unit_multiplier < 1.0:
+                                    qv, med = str(int(unit_multiplier * 1000)), 'G'
+                                else:
+                                    qv, med = (str(int(unit_multiplier)), 'KG') if unit_multiplier.is_integer() else (str(unit_multiplier), 'KG')
+                            elif measurement_unit == 'g':
+                                qv, med = str(int(unit_multiplier)), 'G'
+                            
+                            medida_extraida_api = True
+                    except (ValueError, TypeError, IndexError, KeyError):
+                        pass
+                    
+                    # 2. Se a API não forneceu a medida, usa a extração do nome
+                    if not medida_extraida_api:
+                        nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+
+                    # 3. Lógica de Unidade de Venda (KG vs UN), especialmente para itens pesáveis
+                    if nome_cru.endswith(" KG"):
+                        unidade_venda = "KG"
+                        if qv == "1" and med == "UN":
+                            qv, med = "1", "KG"
+                    
+                    # 4. Limpeza final do nome
+                    nome_limpo = re.sub(r'\s*\d+[\.,]?\d*\s*(G|KG|L|ML|UN)\b', '', nome_limpo, flags=re.IGNORECASE).strip()
+                    if nome_limpo.endswith(" KG"):
+                        nome_limpo = nome_limpo[:-3].strip()
+
                     img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                     if img.startswith("//"): img = "https:" + img
 
@@ -187,12 +229,12 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                         "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                        "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao,
+                        "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao,
                         "Validade": "VER NO SITE", "Data_Hora": agora, "Link_Imagem": img
                     })
                 except (KeyError, TypeError, ValueError) as e:
                     logger.warning(f"Erro ao processar um produto na página {pagina}: {e}. Produto: {p.get('name', 'N/A')}")
-                    continue # Continua para o próximo produto na página
+                    continue
 
             return lista_final
         except (asyncio.TimeoutError, json.JSONDecodeError, curl_cffi.requests.errors.RequestsError) as e:
@@ -202,25 +244,24 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
             logger.error(f"Erro inesperado ao extrair página completa {pagina} do {NOME_MERCADO}: {e}", exc_info=True)
             return []
 
-async def motor_extracao_boa():
-    logger.info(f"🚀 Iniciando extração para {NOME_MERCADO} Jundiaí...")
+async def motor_extracao_dom_olivio():
+    logger.info(f"🚀 Iniciando extração para {NOME_MERCADO}...")
     async with AsyncSession(impersonate=IMPERSONATE) as session:
-        # Processa todas as páginas respeitando o semáforo de 2 em 2
         tarefas = [_extrair_pagina_completa(session, p) for p in range(1, MAX_PAGES + 1)]
         resultados = await asyncio.gather(*tarefas)
         
         lista_achatada = [item for sublist in resultados for item in sublist]
     
-    # Deduplicação Final
     if not lista_achatada:
         logger.warning(f"Nenhum produto foi capturado para o {NOME_MERCADO}.")
         return []
-        
-    lista_unica = list({v['Produto']: v for v in lista_achatada}.values())
-    logger.info(f"✅ Finalizado! {len(lista_unica)} produtos capturados no Boa Jundiaí.")
+
+    # Deduplicação por uma chave mais robusta (Produto + Marca) para evitar que
+    # produtos diferentes com nomes similares (após a limpeza) se sobreponham.
+    lista_unica = list({f"{v['Produto']}_{v['Marca']}": v for v in lista_achatada}.values())
+    logger.info(f"✅ Finalizado! {len(lista_achatada)} produtos brutos coletados, resultando em {len(lista_unica)} produtos únicos.")
     return lista_unica
 
-def extrair_dados():
+async def extrair_dados():
     """Interface para o Orquestrador Main"""
-    if os.name == 'nt': asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    return asyncio.run(motor_extracao_boa())
+    return await motor_extracao_dom_olivio()

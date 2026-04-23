@@ -11,7 +11,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from pdf2image import convert_from_path
 
-from utils import setup_logging, filtrar_imagens_por_cache, atualizar_cache_downloads
+from utils import setup_logging, webdriver_manager_lock
 from motor_ia import MotorIA
 from dotenv import load_dotenv
 import logging
@@ -70,7 +70,8 @@ def baixar_encartes(pasta_destino):
     
     options = webdriver.ChromeOptions()
     options.add_argument('--headless=new')
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    with webdriver_manager_lock:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     
     arquivos_baixados = []
     try:
@@ -128,6 +129,7 @@ def extrair_dados():
     """
     Orquestra o download dos encartes e o processamento pela IA.
     Esta função segue o padrão do `main.py`, retornando uma lista de produtos.
+    O cache de processamento da IA é gerenciado pelo MotorIA.
     """
     imagens, nome_mercado = baixar_encartes(pasta_destino="temp_imagens")
     
@@ -135,28 +137,21 @@ def extrair_dados():
         logger.warning(f"Nenhuma imagem de encarte encontrada para {nome_mercado}. O scraper será encerrado.")
         return []
         
-    # --- Bloco de Cache ---
-    imagens_para_processar, novas_entradas, cache_existente = filtrar_imagens_por_cache(imagens, nome_mercado, logger)
-    if not imagens_para_processar:
-        logger.info(f"Todas as imagens para '{nome_mercado}' já estavam em cache. Nenhum processamento de IA necessário.")
-        return []
-
-    logger.info(f"Encontradas {len(imagens_para_processar)} imagens novas de '{nome_mercado}' para serem processadas pela IA.")
+    logger.info(f"Encontradas {len(imagens)} imagens de '{nome_mercado}'. Enviando para o motor de IA (usará cache se aplicável).")
     
     # --- Bloco de integração com o motor de IA ---
     chaves_api_str = os.getenv("GEMINI_API_KEYS")
     if not chaves_api_str:
         logger.error("Chaves da API Gemini não encontradas no arquivo .env. A extração de dados das imagens será pulada.")
         return []
-
+    
     lista_chaves = [k.strip() for k in chaves_api_str.split(',') if k.strip()]
     motor_ia = MotorIA(lista_chaves=lista_chaves)
-    produtos_extraidos = motor_ia.processar_imagens_em_lote(imagens_para_processar, nome_mercado)
-
-    # --- Atualização do Cache ---
-    if produtos_extraidos:
-        atualizar_cache_downloads(cache_existente, nome_mercado, novas_entradas, logger)
-    else:
-        logger.warning("Processamento de IA não retornou produtos. O cache de downloads não será atualizado para permitir nova tentativa.")
-
+    # Processa TODAS as imagens. O motor de IA tem seu próprio cache interno para evitar reprocessamento.
+    produtos_extraidos = motor_ia.processar_imagens_em_lote(imagens, nome_mercado)
+    
+    # A lógica de cache foi movida para dentro do MotorIA, tornando o cache aqui desnecessário.
+    if not produtos_extraidos:
+        logger.warning(f"Processamento de IA não retornou produtos para {nome_mercado}.")
+    
     return produtos_extraidos

@@ -17,9 +17,8 @@ from pdf2image import convert_from_path
 
 from utils import (
     setup_logging, 
-    read_json_file, 
-    filtrar_imagens_por_cache, 
-    atualizar_cache_downloads
+    read_json_file,
+    webdriver_manager_lock
 )
 from motor_ia import MotorIA
 from dotenv import load_dotenv
@@ -74,8 +73,9 @@ def baixar_encartes(pasta_destino="temp_imagens"):
     options.add_argument('--headless=new') 
     options.add_argument('--window-size=1920,1080')
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
-    
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+    with webdriver_manager_lock:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     links_finais = []
     
     try:
@@ -117,13 +117,18 @@ def baixar_encartes(pasta_destino="temp_imagens"):
         sel_tabs, _ = _parse_selector(SELECTORS.get("insert_tabs"))
         tabs = driver.find_elements(By.CSS_SELECTOR, sel_tabs)
         
+        # Itera sobre todas as abas encontradas. Se não houver abas, o range(1) garante que o bloco rode uma vez para a página principal.
         for i in range(len(tabs) if tabs else 1):
             if tabs:
-                logger.info(f"   📑 Mudando para Aba {i+1}...")
-                driver.execute_script("arguments[0].click();", tabs[i])
-                time.sleep(3)
+                logger.info(f"   📑 Processando Aba {i+1}/{len(tabs)}...")
+                try:
+                    driver.execute_script("arguments[0].click();", tabs[i])
+                    time.sleep(3) # Aguarda a troca de conteúdo da aba
+                except Exception as e:
+                    logger.warning(f"      Não foi possível clicar na aba {i+1}. Pulando. Erro: {e}")
+                    continue
 
-            # Captura todas as páginas da aba atual
+            # Captura todas as páginas do carrossel visível (da aba atual)
             while True:
                 links_atuais = driver.execute_script("""
                     let urls = [];
@@ -173,20 +178,31 @@ def baixar_encartes(pasta_destino="temp_imagens"):
     imagens_finais.sort()
     return imagens_finais, NOME_MERCADO
 
-def extrair_dados():
-    imagens, nome = baixar_encartes()
-    if not imagens: return []
-
-    img_proc, novas, cache = filtrar_imagens_por_cache(imagens, nome, logger)
-    if not img_proc: return []
-
-    logger.info(f"🤖 {nome}: Enviando {len(img_proc)} novas imagens para a IA...")
-    chaves = [k.strip() for k in str(os.getenv("GEMINI_API_KEYS")).split(',') if k.strip()]
+async def extrair_dados():
+    """
+    Orquestra o download dos encartes e o processamento pela IA.
+    Esta função segue o padrão do `main.py`, retornando uma lista de produtos.
+    O cache de processamento da IA é gerenciado pelo MotorIA.
+    """
+    # A função de scraping (com Selenium) é bloqueante, então a executamos em uma thread.
+    imagens, nome_mercado = await asyncio.to_thread(baixar_encartes)
     
-    motor = MotorIA(lista_chaves=chaves)
-    produtos = motor.processar_imagens_em_lote(img_proc, nome)
-
-    if produtos:
-        atualizar_cache_downloads(cache, nome, novas, logger)
+    if not imagens:
+        logger.warning(f"Nenhuma imagem de encarte encontrada para {nome_mercado}. O scraper será encerrado.")
+        return []
+        
+    logger.info(f"Encontradas {len(imagens)} imagens de '{nome_mercado}'. Enviando para o motor de IA (usará cache se aplicável).")
     
-    return produtos
+    chaves_api_str = os.getenv("GEMINI_API_KEYS")
+    if not chaves_api_str:
+        logger.error("Chaves da API Gemini não encontradas no arquivo .env. A extração de dados das imagens será pulada.")
+        return []
+    
+    lista_chaves = [k.strip() for k in chaves_api_str.split(',') if k.strip()]
+    motor_ia = MotorIA(lista_chaves=lista_chaves)
+    produtos_extraidos = await motor_ia.processar_imagens_em_lote_async(imagens, nome_mercado)
+    
+    if not produtos_extraidos:
+        logger.warning(f"Processamento de IA não retornou produtos para {nome_mercado}.")
+    
+    return produtos_extraidos
