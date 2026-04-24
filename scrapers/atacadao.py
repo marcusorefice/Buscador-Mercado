@@ -120,11 +120,20 @@ async def motor_extracao_atacadao():
                                     
                                     # EAN
                                     ean_real = "N/A"
-                                    if items:
-                                        ean_real = str(items[0].get('ean', '')).strip()
-                                        if not ean_real or ean_real.lower() == "none" or len(ean_real) < 12:
-                                            ean_real = "N/A"
+                                    if items and isinstance(items, list):
+                                        item_data = items[0]
+                                        # Prioridade 1: referenceId (mais confiável em VTEX legado)
+                                        ref_ids = item_data.get('referenceId', [])
+                                        if ref_ids and isinstance(ref_ids, list):
+                                            ean_real = str(ref_ids[0].get('Value', '')).strip()
+
+                                        # Prioridade 2: campo 'ean' (fallback)
+                                        if not ean_real or len(ean_real) < 12:
+                                            ean_real = str(item_data.get('ean', '')).strip()
                                             
+                                        # Validação final para garantir que não é um ID interno ou inválido
+                                        if not ean_real or not ean_real.isdigit() or len(ean_real) < 12:
+                                            ean_real = "N/A"
                                     # Preços Legados Base
                                     sellers = items[0].get('sellers', []) if items else []
                                     co = sellers[0].get('commertialOffer', {}) if sellers else {}
