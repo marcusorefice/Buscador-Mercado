@@ -173,6 +173,10 @@ async def extrair_lote(session, ordem, pagina, sem, agora):
                     nome_cru = item.get('name', item.get('productName', '')).upper().strip()
                     if not nome_cru: continue
 
+                    # O EAN pode estar na raiz do item ou dentro do primeiro SKU em 'items'
+                    ean_sku = item.get('items', [{}])[0].get('ean')
+                    ean = str(ean_sku or item.get('ean', 'N/A')).strip()
+
                     # Preços, Validade e Imagem (Varejo e Atacado/CPF)
                     validade_iso = "Consulte no site"
                     link_imagem = "SEM IMAGEM"
@@ -247,14 +251,13 @@ async def extrair_lote(session, ordem, pagina, sem, agora):
                             validade = validade_iso
 
                     lote.append({
-                        "Mercado": NOME_MERCADO, "Categoria": categoria,
+                        "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": categoria,
                         "subcategoria": subcategoria, "tipo_produto": tipo_produto,
                         "Produto": nome_limpo, "Marca": str(marca).upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
                         "Qtd_Valor": qv, "Medida": med, "Unidade": "UN",
-                        "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN",
-                        "Validade": validade, "Data_Hora": agora,
+                        "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN", "Data_Hora": agora,
                         "Link_Imagem": link_imagem
                     })
                 except: continue

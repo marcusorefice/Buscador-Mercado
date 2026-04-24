@@ -38,8 +38,8 @@ TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 RATE_LIMIT_DELAY = TECHNICAL_DEPS.get("rate_limit_delay", 0.3)
-
-BLACKLIST_RULE = next((rule for rule in CONFIG.get("special_rules", []) if rule.get("name") == "blacklist_terms"), {})
+ 
+BLACKLIST_RULE = next((rule for rule in CONFIG.get("special_rules", []) if isinstance(rule, dict) and rule.get("name") == "blacklist_terms"), {})
 LISTA_NEGRA = BLACKLIST_RULE.get("values", [])
 
 async def motor_extracao_oba():
@@ -90,6 +90,7 @@ async def motor_extracao_oba():
                         items = p.get('items', [])
                         if not items: continue
                         sku = items[0]
+                        ean = str(sku.get('ean', 'N/A')).strip()
                         
                         sellers = sku.get('sellers', [])
                         if not sellers: continue
@@ -176,6 +177,7 @@ async def motor_extracao_oba():
                         
                         lista_final.append({
                             "Mercado": NOME_MERCADO,
+                            "EAN": ean,
                             "Categoria": categoria,
                             "subcategoria": subcategoria,
                             "tipo_produto": tipo_produto,
@@ -186,9 +188,7 @@ async def motor_extracao_oba():
                             "Qtd_Valor": qv,
                             "Medida": med,
                             "Unidade": unidade_venda,
-                            "Condição": txt_condicao,
-                            "Validade": "VER NO SITE",
-                            "Data_Hora": agora,
+                            "Condição": txt_condicao, "Data_Hora": agora,
                             "Link_Imagem": img_url
                         })
                     except Exception:

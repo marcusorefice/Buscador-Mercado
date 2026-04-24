@@ -1,19 +1,22 @@
 {
   "market_name": "Atacadão",
   "base_url": "https://www.atacadao.com.br/",
-  "api_endpoint": "/api/catalog_system/pub/products/search",
-  "data_origin": "VTEX Catalog System API (REST)",
+  "api_endpoint": "/api/graphql",
+  "data_origin": "VTEX GraphQL API (GET)",
   "scraping_method": "Two-step async process: maps all category IDs, then fetches products for each category in parallel.",
   "regionalization": {
     "seller_id": "atacadaobr633",
     "cep_jundiai": "13211-772",
     "cookie_name": "regionalization",
-    "description": "Injects a regionalization cookie to force Jundiaí prices and stock."
+    "description": "Injects a regionalization cookie to force Jundiaí prices and stock.",
+    "region_id": "U1cjYXRhY2FkYW9icjYzMw==",
+    "cluster_ofertas": "312"
   },
   "pagination": {
     "method": "Full pagination within each category ID.",
     "page_size": 50,
-    "details": "For each category, it fetches all products by incrementing the '_from' parameter until an empty response is received."
+    "details": "For each category, it fetches all products by incrementing the '_from' parameter until an empty response is received.",
+    "max_pages": 100
   },
   "selectors_mapping": {
     "root_path": "Root JSON Array from the search endpoint",
@@ -36,6 +39,7 @@
     "request_engine": "curl_cffi (AsyncSession)",
     "impersonation": "chrome",
     "session_management": "Loads session from 'atacadao_session.json' and injects regionalization cookie.",
-    "concurrency": 10
+    "concurrency": 10,
+    "playwright_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
   }
 }

@@ -12,7 +12,7 @@
   },
   "pagination": {
     "page_size": 50,
-    "max_pages_per_sort": 25
+    "max_pages_per_sort": 50
   },
   "selectors_mapping": {
     "root_path": "routes/colecao.$collectionId",
@@ -36,6 +36,7 @@
     "playwright_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "request_engine": "curl_cffi (impersonate chrome124)",
     "session_management": "Cookie Cache & Session Testing",
-    "concurrency": 8
+    "concurrency": 8,
+    "impersonation": "chrome124"
   }
 }

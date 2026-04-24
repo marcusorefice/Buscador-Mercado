@@ -110,6 +110,7 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                 try:
                     nome_bruto = p.get('productName', p.get('name', '')).upper().strip()
                     if not nome_bruto: continue
+                    ean = str(p.get('ean', 'N/A')).strip()
 
                     # --- PREÇOS PADRÃO ---
                     price_data = p.get('price', {})
@@ -169,6 +170,7 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
 
                     produtos_categoria.append({
                         "Mercado": NOME_MERCADO,
+                        "EAN": ean,
                         "Categoria": categoria,
                         "subcategoria": subcategoria,
                         "tipo_produto": tipo_produto,
@@ -179,9 +181,7 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                         "Qtd_Valor": qv,
                         "Medida": med,
                         "Unidade": unid_venda,
-                        "Condição": condicao,
-                        "Validade": "VER NO SITE",
-                        "Data_Hora": agora,
+                        "Condição": condicao, "Data_Hora": agora,
                         "Link_Imagem": img_url if img_url else "SEM IMAGEM"
                     })
                 except: continue

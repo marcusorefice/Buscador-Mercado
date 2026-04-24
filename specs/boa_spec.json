@@ -8,10 +8,11 @@
     "region_id": "v2.BD821CBD8067F03D236A5416A87F4B3B",
     "cep_jundiai": "13211-745",
     "channel": "1",
-    "cluster_id": "2510"
+    "cluster_id": "2510",
+    "price_channel": "2"
   },
   "pagination": {
-    "max_pages": 12
+    "max_pages": 25
   },
   "selectors_mapping": {
     "root_path": "data.search.products.edges",
@@ -38,5 +39,9 @@
       "api_semaphore": 15
     },
     "data_shaping": "Deduplicação via Dicionário de Produtos para evitar repetições entre categorias"
+  },
+  "api_hashes": {
+    "get_products": "ae50c5a735b1464f0ba48be4f2b32f7289ce6284",
+    "client_product": "47aa22eb750cb2c529e5eeafb921bfeadb67db71"
   }
 }

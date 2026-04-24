@@ -4,6 +4,7 @@ import { Provider as PaperProvider, DefaultTheme, Searchbar, Text } from 'react-
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { ProductList } from './components/ProductList';
+import { ProductDetailsModal } from './components/ProductDetailsModal';
 import { Product } from './types';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
@@ -30,6 +31,9 @@ export default function App() {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isModalVisible, setModalVisible] = useState(false);
 
   const categories = ['Todos', 'Higiene e Perfumaria', 'Limpeza', 'Bebidas', 'Laticínios, Ovos e Frios', 'Açougue e Peixaria', 'Mercearia', 'Congelados e Pratos Prontos', 'Bazar e Utilidades'];
   const [selectedCategory, setSelectedCategory] = useState('Todos');
@@ -72,6 +76,11 @@ export default function App() {
   const onCategoryPress = (category: string) => {
     setSelectedCategory(category);
     filterProducts(allProducts, category);
+  };
+
+  const handleProductPress = (product: Product) => {
+    setSelectedProduct(product);
+    setModalVisible(true);
   };
 
   return (
@@ -143,6 +152,7 @@ export default function App() {
               products={products}
               refreshing={loading}
               onRefresh={() => fetchProducts(searchQuery)}
+              onProductPress={handleProductPress}
               ListEmptyComponent={
                 !loading ? (
                   <View style={styles.centerContainer}>
@@ -152,6 +162,14 @@ export default function App() {
               }
             />
           )}
+
+          <ProductDetailsModal
+            visible={isModalVisible}
+            onDismiss={() => setModalVisible(false)}
+            product={selectedProduct}
+            allProducts={allProducts}
+            onSelectComparison={handleProductPress}
+          />
         </SafeAreaView>
       </PaperProvider>
     </SafeAreaProvider>

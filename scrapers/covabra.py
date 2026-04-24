@@ -50,8 +50,8 @@ def obter_precos_simulados(session, skus, cep="13211745", qtd=3):
                 tag_name = tags[0].get('name', 'DESCONTO PROGRESSIVO') if tags else 'PROMOÇÃO ATIVA'
                 
                 resultado[sku_id] = {
-                    'price': float(item.get('price', 0)) / 100,
-                    'listPrice': float(item.get('listPrice', 0)) / 100,
+                    'price': float(item.get('price') or 0) / 100,
+                    'listPrice': float(item.get('listPrice') or 0) / 100,
                     'tag_name': tag_name
                 }
             return resultado
@@ -128,6 +128,7 @@ def extrair_dados():
                             # Dados de Preço e Oferta
                             item = p.get('items', [{}])[0]
                             sku_id = str(item.get('itemId'))
+                            ean = str(item.get('ean', 'N/A')).strip()
                             seller = item.get('sellers', [{}])[0]
                             offer = seller.get('commertialOffer', {})
                             
@@ -162,6 +163,7 @@ def extrair_dados():
                             
                             lista_final.append({
                                 "Mercado": NOME_MERCADO,
+                                "EAN": ean,
                                 "Categoria": categoria,
                                 "subcategoria": subcategoria,
                                 "tipo_produto": tipo_produto,
@@ -171,9 +173,7 @@ def extrair_dados():
                                 "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
                                 "Qtd_Valor": qv,
                                 "Medida": med,
-                                "Unidade": "UN",
-                                "Condição": condicao,
-                                "Validade": "VER NO SITE",
+                                "Unidade": "UN", "Condição": condicao,
                                 "Data_Hora": agora,
                                 "Link_Imagem": img_url
                             })

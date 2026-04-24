@@ -21,6 +21,15 @@ if lista_chaves_texto:
 else:
     setup_logging().critical("Nenhuma chave de API Gemini encontrada no .env. A classificação de IA não funcionará.")
 
+# --- NOVO: Carregamento da configuração do Atacadão para o cookie ---
+# A API de sugestões do Atacadão, usada na busca rápida, agora também requer regionalização.
+ATACADAO_SPEC_FILE = os.path.join(os.path.dirname(__file__), 'specs', 'atacadao_spec.json')
+ATACADAO_CONFIG = read_json_file(ATACADAO_SPEC_FILE, default_value={})
+ATACADAO_REGIONALIZATION = ATACADAO_CONFIG.get("regionalization", {})
+ATACADAO_SELLER_ID = ATACADAO_REGIONALIZATION.get("seller_id", "atacadaobr633")
+ATACADAO_REGION_ID = ATACADAO_REGIONALIZATION.get("region_id", "U1cjYXRhY2FkYW9icjYzMw==")
+ATACADAO_CEP = ATACADAO_REGIONALIZATION.get("cep_jundiai", "13211-772")
+
 def _trocar_chave_texto():
     """Rotaciona a chave da API para classificação de texto, com lógica para chaves pagas."""
     global indice_chave_texto_atual, client, lista_chaves_texto
@@ -152,6 +161,7 @@ def _criar_entrada_biblioteca_estendida(chave_id, nome_produto, p_info, taxonomi
     """Cria um dicionário completo para a biblioteca de produtos no formato estendido."""
     
     marca = p_info.get("Marca", "")
+    ean = p_info.get("EAN", "")
     
     # Constrói a string de medida apenas se não for o padrão "1 UN"
     qtd_valor = p_info.get("Qtd_Valor", "")
@@ -190,6 +200,7 @@ def _criar_entrada_biblioteca_estendida(chave_id, nome_produto, p_info, taxonomi
         "id": chave_id,
         "nome_comum": nome_produto,
         "marca": marca,
+        "ean": ean,
         "medida": medida_str,
         "Categoria": categoria, "subcategoria": subcategoria, "tipo_produto": tipo_produto,
         "imagem": p_info.get("Link_Imagem", "SEM IMAGEM"),
@@ -379,6 +390,12 @@ async def _run_fast_lane_providers(produtos_a_buscar_dict):
     ]
 
     async with async_requests.AsyncSession(impersonate="chrome120") as session:
+        # --- INJEÇÃO DE COOKIE PARA O ATACADÃO ---
+        # A API de sugestões do Atacadão agora também requer regionalização para funcionar.
+        cookie_str = f'{{"salesChannel":"1","postalCode":"{ATACADAO_CEP}","seller":"{ATACADAO_SELLER_ID}","regionId":"{ATACADAO_REGION_ID}"}}'
+        session.cookies.set("regionalization", cookie_str, domain="www.atacadao.com.br")
+        logger.info("   - Cookie de regionalização do Atacadão injetado para a busca rápida de taxonomia.")
+
         for nome_provedor, func_provedor in provedores:
             if not termos_restantes:
                 break # Todos os itens foram classificados
@@ -413,9 +430,10 @@ async def _run_fast_lane_providers(produtos_a_buscar_dict):
 async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_global):
     """
     Classifica produtos em uma taxonomia de 3 níveis, usando cache para evitar chamadas repetidas à IA.
-    Retorna o mapa de taxonomia e a biblioteca atualizada.
+    Retorna o mapa de taxonomia, a biblioteca atualizada, um booleano indicando se o cache foi modificado,
+    e o número de itens que foram de fato enviados para a IA.
     """
-    if not lista_produtos_dict: return {}, biblioteca_global, False
+    if not lista_produtos_dict: return {}, biblioteca_global, False, 0
 
     biblioteca = biblioteca_global # Usa a biblioteca passada como argumento, que é um dicionário
     mapa_final_taxonomia = {}
@@ -428,7 +446,12 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
 
     # 1. Verificar cache
     for p_nome, p_info in produtos_a_processar.items():
-        chave = normalizar_para_cache(p_nome)
+        # Otimização: Usa o EAN como chave primária se disponível, senão usa o nome normalizado.
+        ean_produto = p_info.get("EAN")
+        chave = ean_produto if ean_produto and ean_produto != "N/A" else normalizar_para_cache(p_nome)
+
+        # Se a chave for o nome normalizado, ainda precisamos verificar se o EAN já não está no cache
+        # (caso um produto tenha sido salvo antes com EAN e agora venha sem)
         if chave in biblioteca and isinstance(biblioteca[chave], dict) and "Categoria" in biblioteca[chave]:
             # Cache HIT com formato novo
             mapa_final_taxonomia[p_nome] = biblioteca[chave]
@@ -440,7 +463,7 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
                 if not img_cache or img_cache == "SEM IMAGEM" or str(img_cache).strip() == "":
                     biblioteca[chave]["imagem"] = img_nova
                     cache_modificado = True
-        elif chave in biblioteca and "categoria" in biblioteca[chave]: # Cache HIT com formato antigo (chave 'categoria' minúscula)
+        elif chave in biblioteca and "categoria" in biblioteca[chave]: # Cache HIT com formato antigo
             # **Auto-correção da Biblioteca:**
             # Este bloco corrige em memória as entradas que estão no formato antigo.
             # Na próxima vez que o programa rodar, esta entrada já estará no formato novo, evitando reprocessamento.
@@ -469,12 +492,15 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
 
         # Processa os resultados da busca rápida
         logger.info(f"   - {len(resultados_da_busca_rapida)} produtos classificados pela busca rápida multi-provedor.")
-        for p_nome, taxonomia in resultados_da_busca_rapida.items():
-            chave = normalizar_para_cache(p_nome)
+        for p_nome, taxonomia in resultados_da_busca_rapida.items():            
             p_info = produtos_para_ia.get(p_nome, {})
-            mapa_final_taxonomia[p_nome] = taxonomia
+            ean_produto = p_info.get("EAN")
+            chave = ean_produto if ean_produto and ean_produto != "N/A" else normalizar_para_cache(p_nome)
 
-            biblioteca[chave] = _criar_entrada_biblioteca_estendida(chave, p_nome, p_info, taxonomia)
+            # Cria a entrada completa e a usa tanto para o mapa de retorno quanto para a biblioteca
+            nova_entrada = _criar_entrada_biblioteca_estendida(chave, p_nome, p_info, taxonomia)
+            biblioteca[chave] = nova_entrada
+            mapa_final_taxonomia[p_nome] = nova_entrada
             cache_modificado = True
         
         # Determina o que sobrou para a IA
@@ -504,18 +530,22 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
                         chave_biblioteca_match = nomes_biblioteca[melhor_match]
                         item_encontrado = biblioteca[chave_biblioteca_match]
                         
-                        # Usa a taxonomia do item encontrado no fuzzy match
-                        taxonomia_fuzzy = {
-                            "Categoria": item_encontrado.get("Categoria"),
-                            "subcategoria": item_encontrado.get("subcategoria"),
-                            "tipo_produto": item_encontrado.get("tipo_produto")
-                        }
-                        mapa_final_taxonomia[p_nome] = taxonomia_fuzzy
+                        # O item encontrado na biblioteca é a fonte da verdade (nome e taxonomia padronizados)
+                        mapa_final_taxonomia[p_nome] = item_encontrado
                         
-                        # Adiciona a nova variação ao cache para acelerar futuras execuções
-                        chave_nova_variacao = normalizar_para_cache(p_nome)
+                        # Adiciona a nova variação (com EAN/nome do produto atual) ao cache,
+                        # mas apontando para os dados padronizados do item encontrado.
+                        ean_produto = p_info.get("EAN")
+                        chave_nova_variacao = ean_produto if ean_produto and ean_produto != "N/A" else normalizar_para_cache(p_nome)
+
                         if chave_nova_variacao not in biblioteca:
-                            biblioteca[chave_nova_variacao] = _criar_entrada_biblioteca_estendida(chave_nova_variacao, p_nome, p_info, taxonomia_fuzzy)
+                            # Cria uma nova entrada, mas usa o nome_comum do item encontrado para padronização
+                            biblioteca[chave_nova_variacao] = _criar_entrada_biblioteca_estendida(
+                                chave_id=chave_nova_variacao,
+                                nome_produto=item_encontrado.get('nome_comum', p_nome), # Usa o nome padrão
+                                p_info=p_info, # Usa a info do produto atual (imagem, etc)
+                                taxonomia=item_encontrado # Usa a taxonomia padrão
+                            )
                             cache_modificado = True
                     else:
                         produtos_ainda_sem_match[p_nome] = p_info
@@ -532,14 +562,15 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
     
     if not produtos_para_ia_final:
         logger.info("✅ Todos os produtos foram classificados via cache ou busca rápida. Nenhuma chamada à IA foi necessária.")
-        return mapa_final_taxonomia, biblioteca, cache_modificado
+        return mapa_final_taxonomia, biblioteca, cache_modificado, 0
 
     # 3. Chamar IA em lotes para os produtos restantes
     CHUNK_SIZE = 150 # Um bom número para não estourar o limite de tokens do prompt
     lista_produtos_ia_items = list(produtos_para_ia_final.items())
     total_lotes = (len(lista_produtos_ia_items) + CHUNK_SIZE - 1) // CHUNK_SIZE
+    num_itens_para_ia = len(lista_produtos_ia_items)
 
-    logger.info(f"🧠 {len(lista_produtos_ia_items)} produtos serão enviados para a IA em {total_lotes} lotes.")
+    logger.info(f"🧠 {num_itens_para_ia} produtos serão enviados para a IA em {total_lotes} lotes.")
 
     for i in range(0, len(lista_produtos_ia_items), CHUNK_SIZE):
         lote_atual = i // CHUNK_SIZE + 1
@@ -575,8 +606,6 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
 
                 # 3. Atualizar cache e mapa de resultados para o lote atual
                 for prod_nome_ia, taxonomia in novas_taxonomias_lote.items():
-                    chave_ia = normalizar_para_cache(prod_nome_ia)
-                    
                     taxonomia_padronizada = {
                         "Categoria": str(taxonomia.get("Categoria", "OUTROS")).upper(),
                         "subcategoria": str(taxonomia.get("subcategoria", "OUTROS")).upper(),
@@ -584,21 +613,27 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
                     }
 
                     # Encontra o produto original no lote para pegar informações completas (nome exato, imagem, etc.)
-                    imagem_url = "SEM IMAGEM"
                     p_info_original = {}
                     nome_original_produto = prod_nome_ia # Fallback
+                    
+                    # Busca o produto original no lote para pegar o EAN e outros dados
                     for p_orig_nome, p_orig_info in chunk_dict.items():                        
-                        if normalizar_para_cache(p_orig_nome) == chave_ia:
+                        if normalizar_para_cache(p_orig_nome) == normalizar_para_cache(prod_nome_ia):
                             p_info_original = p_orig_info
                             nome_original_produto = p_orig_nome
-                            imagem_url = p_orig_info.get("Link_Imagem", "SEM IMAGEM")
-                            mapa_final_taxonomia[p_orig_nome] = taxonomia_padronizada
                             break
 
-                    # Salva na biblioteca para consultas futuras (Cache).
-                    biblioteca[chave_ia] = _criar_entrada_biblioteca_estendida(
+                    # Define a chave do cache: EAN se existir, senão nome normalizado.
+                    ean_produto = p_info_original.get("EAN")
+                    chave_ia = ean_produto if ean_produto and ean_produto != "N/A" else normalizar_para_cache(nome_original_produto)
+
+                    # Cria a entrada completa e a usa tanto para o mapa de retorno quanto para a biblioteca
+                    nova_entrada = _criar_entrada_biblioteca_estendida(
                         chave_ia, nome_original_produto, p_info_original, taxonomia_padronizada
                     )
+                    biblioteca[chave_ia] = nova_entrada
+                    # O mapa de retorno usa o nome original do produto como chave
+                    mapa_final_taxonomia[nome_original_produto] = nova_entrada
                     cache_modificado = True
                 
                 logger.info(f"   - Lote {lote_atual} concluído. Cache atualizado.")
@@ -619,4 +654,4 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_dict, biblioteca_glo
             continue # Pula para o próximo lote
             
     logger.info(f"✅ Classificação por IA concluída.")
-    return mapa_final_taxonomia, biblioteca, cache_modificado
+    return mapa_final_taxonomia, biblioteca, cache_modificado, num_itens_para_ia

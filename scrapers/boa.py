@@ -139,6 +139,7 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
             for edge, (v_varejo, v_atacado) in zip(edges, precos_finais):
                 try:
                     p = edge['node']
+                    ean = str(p.get('ean', 'N/A')).strip()
                     nome_cru = p['name'].upper().strip()
                     
                     # Definição de Preços (Fallback para a vitrine se o detalhado falhar)
@@ -180,6 +181,7 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
 
                     lista_final.append({
                         "Mercado": NOME_MERCADO,
+                        "EAN": ean,
                         "Categoria": categoria_final,
                         "subcategoria": subcategoria,
                         "tipo_produto": tipo_prod,
@@ -187,8 +189,7 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                         "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                        "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao,
-                        "Validade": "VER NO SITE", "Data_Hora": agora, "Link_Imagem": img
+                        "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img
                     })
                 except (KeyError, TypeError, ValueError) as e:
                     logger.warning(f"Erro ao processar um produto na página {pagina}: {e}. Produto: {p.get('name', 'N/A')}")

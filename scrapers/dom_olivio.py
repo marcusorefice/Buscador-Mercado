@@ -138,6 +138,7 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                 try:
                     p = edge['node']
                     nome_cru = p['name'].upper().strip()
+                    ean = str(p.get('ean', 'N/A')).strip()
                     
                     p_v = v_varejo if v_varejo > 0 else float(p.get('offers', {}).get('highPrice', 0.0))
                     p_a = v_atacado if v_atacado > 0 else float(p.get('offers', {}).get('lowPrice', p_v))
@@ -222,6 +223,7 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
 
                     lista_final.append({
                         "Mercado": NOME_MERCADO,
+                        "EAN": ean,
                         "Categoria": categoria_final,
                         "subcategoria": subcategoria,
                         "tipo_produto": tipo_prod,
@@ -229,8 +231,7 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                         "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                        "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao,
-                        "Validade": "VER NO SITE", "Data_Hora": agora, "Link_Imagem": img
+                        "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img
                     })
                 except (KeyError, TypeError, ValueError) as e:
                     logger.warning(f"Erro ao processar um produto na página {pagina}: {e}. Produto: {p.get('name', 'N/A')}")

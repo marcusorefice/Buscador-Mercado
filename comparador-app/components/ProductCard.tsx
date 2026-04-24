@@ -3,8 +3,49 @@ import { View, StyleSheet, Image } from 'react-native';
 import { Card, Text, Title } from 'react-native-paper';
 import { Product } from '../types';
 
+// --- INÍCIO DA LÓGICA DE LOGOS ---
+// A lógica foi movida para este arquivo para resolver um erro de importação persistente.
+
+type MarketName = 
+  | 'Assaí Atacadista'
+  | 'Atacadão'
+  | 'Boa Supermercados'
+  | 'Carrefour'
+  | 'Covabra'
+  | 'Dom Olívio'
+  | 'Fort Atacadista'
+  | 'Oba Hortifruti'
+  | 'Pão de Açúcar'
+  | 'Roldão Atacadista'
+  | 'São Vicente'
+  | 'Tauste Supermercado'
+  | 'Tenda Atacado'
+  | 'Default';
+
+const marketLogos: Record<MarketName, any> = {
+  'Assaí Atacadista': require('../assets/logos/assai.png'),
+  'Atacadão': require('../assets/logos/atacadao.png'),
+  'Boa Supermercados': require('../assets/logos/boa.png'),
+  'Carrefour': require('../assets/logos/carrefour.png'),
+  'Covabra': require('../assets/logos/covabra.png'),
+  'Dom Olívio': require('../assets/logos/dom_olivio.png'),
+  'Fort Atacadista': require('../assets/logos/fort.png'),
+  'Oba Hortifruti': require('../assets/logos/oba.png'),
+  'Pão de Açúcar': require('../assets/logos/pao_de_acucar.png'),
+  'Roldão Atacadista': require('../assets/logos/roldao.png'),
+  'São Vicente': require('../assets/logos/sao_vicente.png'),
+  'Tauste Supermercado': require('../assets/logos/tauste.png'),
+  'Tenda Atacado': require('../assets/logos/tenda.png'),
+  'Default': require('../assets/logos/default.png'), // Um logo padrão
+};
+
+export const getMarketLogo = (marketName: string) => {
+  return marketLogos[marketName as MarketName] || marketLogos.Default;
+};
+// --- FIM DA LÓGICA DE LOGOS ---
 interface ProductCardProps {
   product: Product;
+  onPress?: () => void;
 }
 
 const capitalize = (str: string | null): string => {
@@ -18,28 +59,7 @@ const parsePrice = (priceStr: string): number => {
   return isNaN(val) ? 0 : val;
 };
 
-const marketLogos: { [key: string]: string } = {
-  'OBA HORTIFRUTI': 'https://www.plataformaneo.com.br/wp-content/uploads/2023/07/logo-oba-hortifruti-g-1.png',
-  'SÃO VICENTE': 'https://www.svicente.com.br/arquivos/logo-sao-vicente-horizontal.png',
-  'PÃO DE AÇÚCAR': 'https://logodownload.org/wp-content/uploads/2014/07/pao-de-acucar-logo-1.png',
-  'CARREFOUR': 'https://logodownload.org/wp-content/uploads/2014/11/carrefour-logo-1.png',
-  'ATACADÃO': 'https://logodownload.org/wp-content/uploads/2019/11/atacadao-logo-1.png',
-  'ASSAÍ ATACADISTA': 'https://logodownload.org/wp-content/uploads/2020/09/assai-atacadista-logo-1.png',
-  'TAUSTE SUPERMERCADO': 'https://www.tauste.com.br/static/media/logo-tauste.43a69d75.svg',
-};
-
-const MarketLogoDisplay = ({ marketName }: { marketName: string | null }) => {
-  const normalizedMarketName = marketName?.toUpperCase().trim() || '';
-  const logoUri = marketLogos[normalizedMarketName];
-  if (logoUri) return <Image source={{ uri: logoUri }} style={styles.storeLogo} resizeMode="contain" />;
-  return (
-    <View style={styles.storeIconFallback}>
-      <Text style={styles.storeIconText}>{marketName ? marketName.charAt(0).toUpperCase() : 'M'}</Text>
-    </View>
-  );
-};
-
-export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
+export const ProductCard: React.FC<ProductCardProps> = ({ product, onPress }) => {
   const titleText = `${capitalize(product.Produto)}${product.Marca ? ` ${capitalize(product.Marca)}` : ''}`;
   
   const varejoStr = product.Preco_Varejo ? product.Preco_Varejo.replace(/[R$\s]/gi, '') : '';
@@ -61,7 +81,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const hasCondition = condition && !['1 UN', 'NAN', 'NONE', ''].includes(condition);
 
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} onPress={onPress}>
       <View style={styles.imageContainer}>
         {product.Link_Imagem ? (
           <Image source={{ uri: product.Link_Imagem }} style={styles.image} resizeMode="contain" />
@@ -97,7 +117,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
         <View style={styles.footer}>
           <View style={styles.storeInfo}>
-            <MarketLogoDisplay marketName={product.Mercado} />
+            <Image source={getMarketLogo(product.Mercado || 'Default')} style={styles.storeLogo} resizeMode="contain" />
             <Text style={styles.storeName} numberOfLines={1}>{product.Mercado || 'Mercado'}</Text>
           </View>
         </View>
@@ -181,11 +201,9 @@ const styles = StyleSheet.create({
     borderTopColor: '#f0f0f0',
     paddingTop: 8,
     marginTop: 10,
-    height: 35,
+    height: 48,
   },
   storeInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  storeLogo: { width: 18, height: 18, borderRadius: 9, marginRight: 6 },
-  storeIconFallback: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#eee', justifyContent: 'center', alignItems: 'center', marginRight: 6 },
-  storeIconText: { fontSize: 9, fontWeight: 'bold' },
-  storeName: { fontSize: 11, color: '#888', flex: 1 },
+  storeLogo: { width: 65, height: 65, borderRadius: 20, marginRight: 8 },
+  storeName: { fontSize: 13, color: '#888', flex: 1 },
 });

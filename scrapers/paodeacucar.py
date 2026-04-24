@@ -29,6 +29,7 @@ BASE_URL_CONFIG = CONFIG.get("base_url", "https://www.paodeacucar.com/").rstrip(
 
 REGIONALIZATION = CONFIG.get("regionalization", {})
 STORE_ID = int(REGIONALIZATION.get("store_id", 461))
+# O 'terms' aqui é o slug da página de ofertas. Ele pode mudar com o tempo.
 TERMS = REGIONALIZATION.get("terms", "ofertasdodia-pao2023")
 
 PAGE_SIZE = CONFIG.get("pagination", {}).get("page_size", 50)
@@ -97,6 +98,7 @@ async def motor_extracao_paodeacucar():
                     try:
                         nome_bruto = str(p.get('name', '')).upper().strip()
                         if not nome_bruto: continue
+                        ean = str(p.get('ean', 'N/A')).strip()
 
                         # Extração de Preços via sellInfos
                         sell_infos = p.get('sellInfos', [{}])
@@ -209,6 +211,7 @@ async def motor_extracao_paodeacucar():
                             id_unico = f"{nome_bruto}_{p.get('brand', 'PROPRIA')}"
                         lista_final.append({
                             "ID_UNICO": id_unico, # Campo temporário para não perder dados
+                            "EAN": ean,
                             "Mercado": NOME_MERCADO,
                             "Categoria": categoria,
                             "subcategoria": subcategoria,
@@ -220,9 +223,7 @@ async def motor_extracao_paodeacucar():
                             "Qtd_Valor": qv,
                             "Medida": med,
                             "Unidade": "UN",
-                            "Condição": txt_condicao,
-                            "Validade": "VER NO SITE",
-                            "Data_Hora": agora,
+                            "Condição": txt_condicao, "Data_Hora": agora,
                             "Link_Imagem": img_url
                         })
                     except Exception as e:

@@ -1,49 +1,15 @@
 import os
 import json
 import warnings
-import asyncio
 import urllib.parse
-from playwright.async_api import async_playwright
-from curl_cffi import requests
+import asyncio
+from curl_cffi.requests import AsyncSession
+import random
 from datetime import datetime
 from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
-
-# ==========================================
-# CONFIGURAÇÕES E QUERY (ESSENCIAL)
-# ==========================================
-# Definimos a query exatamente como o site pede para garantir que os campos venham preenchidos
-GRAPHQL_QUERY = """
-query ProductsQuery($term: String, $selectedFacets: [SelectedFacetInput], $first: Int, $after: String, $sort: String) {
-  search(term: $term, selectedFacets: $selectedFacets, first: $first, after: $after, sort: $sort) {
-    products {
-      edges {
-        node {
-          name
-          brand { name }
-          image { url }
-          offers {
-            highPrice
-            lowPrice
-            offers {
-              price
-              minQuantity
-            }
-          }
-          breadcrumbList {
-            itemListElement {
-              name
-              position
-            }
-          }
-        }
-      }
-    }
-  }
-}
-"""
 
 # ==========================================
 # CARREGAMENTO DAS CONFIGURAÇÕES (SPEC)
@@ -56,7 +22,8 @@ CONFIG = read_json_file(SPEC_FILE)
 # ==========================================
 NOME_MERCADO = CONFIG.get("market_name", "Atacadão")
 BASE_URL_CONFIG = CONFIG.get("base_url", "https://www.atacadao.com.br/").rstrip('/')
-URL_BASE = f"{BASE_URL_CONFIG}/api/graphql"
+API_GRAPHQL_ENDPOINT = CONFIG.get("api_endpoint", "/api/graphql")
+URL_BASE = f"{BASE_URL_CONFIG}{API_GRAPHQL_ENDPOINT}"
 
 REGIONALIZATION = CONFIG.get("regionalization", {})
 SELLER_ID = REGIONALIZATION.get("seller_id", "atacadaobr633")
@@ -66,131 +33,155 @@ CLUSTER_OFERTAS = REGIONALIZATION.get("cluster_ofertas", "312")
 
 PAGINATION = CONFIG.get("pagination", {})
 PAGE_SIZE = PAGINATION.get("page_size", 50)
-MAX_PAGES = PAGINATION.get("max_pages", 100) # Aumentado de 40 para 100
+MAX_PAGES = PAGINATION.get("max_pages", 100)
 
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
-IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome")
-PLAYWRIGHT_USER_AGENT = TECHNICAL_DEPS.get("playwright_user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
+USER_AGENT = TECHNICAL_DEPS.get("playwright_user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+CONCURRENCY = TECHNICAL_DEPS.get("concurrency", 10)
 
-async def buscar_pagina_atacadao(session, offset, sem):
-    async with sem:
-        payload = {
-            "operationName": "ProductsQuery",
-            "variables": {
-                "first": PAGE_SIZE,
-                "after": str(offset),
-                "sort": "score_desc",
+
+async def motor_extracao_atacadao():
+    """Motor de extração principal para o Atacadão, usando paralelismo e offset."""
+    logger.info(f"🚀 Iniciando extração para {NOME_MERCADO} (Estratégia: GraphQL + Paralelismo)...")
+    lista_final = []
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    
+    cookie_str = f'{{"salesChannel":"1","postalCode":"{CEP_JUNDIAI}","seller":"{SELLER_ID}"}}'
+    
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "pt-BR,pt;q=0.9",
+        "Referer": "https://www.atacadao.com.br/catalogo",
+        "Origin": "https://www.atacadao.com.br"
+    }
+
+    PAGE_SIZE = 50
+    # Limita o número de conexões simultâneas para não estourar o firewall (vem do seu spec file)
+    sem = asyncio.Semaphore(CONCURRENCY) 
+
+    async def extrair_pagina(session, offset, is_first=False):
+        """Função interna para buscar e processar uma única página concorrentemente."""
+        async with sem:
+            if not is_first:
+                # Pequeno micro-delay apenas para descolar as requisições paralelas
+                await asyncio.sleep(random.uniform(0.1, 0.6))
+                
+            variables = {
+                "first": PAGE_SIZE, 
+                "after": str(offset), 
+                "sort": "score_desc", 
                 "term": "",
                 "selectedFacets": [
-                    {"key": "productClusterIds", "value": CLUSTER_OFERTAS},
-                    {"key": "region-id", "value": REGION_ID},
+                    {"key": "productClusterIds", "value": CLUSTER_OFERTAS},                    
                     {"key": "channel", "value": f'{{"salesChannel":"1","seller":"{SELLER_ID}","regionId":"{REGION_ID}"}}'},
                     {"key": "locale", "value": "pt-BR"}
                 ]
-            },
-            "query": GRAPHQL_QUERY
-        }
+            }
+            
+            params = {
+                "operationName": "ProductsQuery",
+                "variables": json.dumps(variables, separators=(',', ':'))
+            }
+            url_get = f"{URL_BASE}?{urllib.parse.urlencode(params)}"
 
-        try:
-            # Mudança crucial: Usar POST em vez de GET para GraphQL
-            response = await session.post(URL_BASE, json=payload, timeout=20)
-            data = response.json()
-            return data.get('data', {}).get('search', {}).get('products', {}).get('edges', [])
-        except Exception as e:
-            logger.error(f"  [{NOME_MERCADO}] Erro no offset {offset}: {e}")
-            return []
+            try:
+                response = await session.get(url_get, timeout=45)
+                response.raise_for_status()
+                response_json = response.json()
 
-async def motor_extracao_atacadao():
-    logger.info(f"🚀 Iniciando extração para {NOME_MERCADO}...")
+                search_data = (response_json.get('data') or {}).get('search')
+                products_data = (search_data or {}).get('products')
+                
+                if not products_data:
+                    return [], 0
 
-    lista_final = []
-    offsets_alvo = [i * PAGE_SIZE for i in range(MAX_PAGES)] 
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    
-    # Cookie de regionalização é vital para o preço bater com a região
-    cookie_regional = urllib.parse.quote(json.dumps({
-        "salesChannel": "1",
-        "postalCode": CEP_JUNDIAI,
-        "seller": SELLER_ID,
-        "regionId": REGION_ID
-    }))
+                bloco_produtos = products_data.get('edges', [])
+                total_items = products_data.get('pageInfo', {}).get('totalCount', 0) if is_first else 0
+                
+                produtos_extraidos = []
+                for edge in bloco_produtos:
+                    p = edge.get('node', {})
+                    if not p: continue
 
-    sem = asyncio.Semaphore(5) # Reduzi para 5 para evitar bloqueios por concorrência
+                    try:
+                        nome_cru = str(p.get('name', '')).upper().strip()
+                        if not nome_cru: continue
 
-    async with requests.AsyncSession(impersonate=IMPERSONATE) as session:
-        session.cookies.set("regionalization", cookie_regional, domain="www.atacadao.com.br")
+                        ean = str(p.get('gtin', 'N/A')).strip()
+                        imagens = p.get('image', [])
+                        imagem_url = imagens[0].get('url', "SEM IMAGEM") if imagens else "SEM IMAGEM"
+
+                        cat_tree = p.get('breadcrumbList', {}).get('itemListElement', [])
+                        cat_site, subcategoria, tipo_produto = "", "N/A", "N/A"
+                        
+                        if cat_tree and isinstance(cat_tree, list):
+                            if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
+                            if len(cat_tree) > 1: subcategoria = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
+                            if len(cat_tree) > 2: tipo_produto = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
+
+                        if cat_site in CATEGORIAS_IGNORADAS: continue
+
+                        full_context = f"{nome_cru} {cat_site}"
+                        categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(full_context, cat_site))
+                        
+                        marca_obj = p.get('brand', {})
+                        marca_str = marca_obj.get('name', 'OUTROS').upper() if isinstance(marca_obj, dict) else str(marca_obj or 'OUTROS').upper()
+
+                        nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+
+                        ofertas_container = p.get('offers', {})
+                        lista_ofertas = ofertas_container.get('offers', [{}])
+                        offer = lista_ofertas[0] if lista_ofertas else {}
+                        
+                        p_atacado = float(offer.get('price', 0.0))
+                        p_varejo = float(offer.get('listPrice', p_atacado))
+
+                        if p_atacado <= 0: continue
+                        if p_varejo <= 0 or p_varejo < p_atacado: p_varejo = p_atacado
+
+                        condicao = "OFERTA" if p_atacado < p_varejo else "1 UN"
+
+                        produtos_extraidos.append({
+                            "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": categoria,
+                            "subcategoria": subcategoria, "tipo_produto": tipo_produto,
+                            "Produto": nome_limpo, "Marca": marca_str,
+                            "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','), "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
+                            "Qtd_Valor": qv, "Medida": med, "Unidade": "UN",
+                            "Condição": condicao, "Data_Hora": agora, "Link_Imagem": imagem_url
+                        })
+                    except Exception as e:
+                        continue
+                
+                return produtos_extraidos, total_items
+            except Exception as e:
+                logger.error(f"   [{NOME_MERCADO}] Erro ao processar offset {offset}: {e}")
+                return [], 0
+
+    async with AsyncSession(impersonate=IMPERSONATE, headers=headers) as session:
+        session.cookies.set("regionalization", urllib.parse.quote(cookie_str), domain=urllib.parse.urlparse(URL_BASE).hostname)
         
-        tarefas = [buscar_pagina_atacadao(session, off, sem) for off in offsets_alvo]
-        resultados = await asyncio.gather(*tarefas)
+        # PASSO 1: Faz a requisição inicial para descobrir o total de itens
+        produtos_iniciais, total_items = await extrair_pagina(session, 0, is_first=True)
+        lista_final.extend(produtos_iniciais)
         
-        for bloco in resultados:
-            for edge in bloco:
-                p = edge.get('node', {})
-                try:
-                    nome_cru = str(p.get('name', '')).upper().strip()
-                    if not nome_cru: continue
+        if total_items > PAGE_SIZE:
+            logger.info(f"   - API informou {total_items} produtos. Disparando tarefas paralelas para o restante do catálogo...")
+            
+            # PASSO 2: Prepara todos os offsets restantes matematicamente
+            offsets = [offset for offset in range(PAGE_SIZE, total_items, PAGE_SIZE)]
+            
+            # PASSO 3: Executa as requisições simultaneamente (limitadas pelo Semaphore)
+            tarefas = [extrair_pagina(session, off) for off in offsets]
+            resultados = await asyncio.gather(*tarefas)
+            
+            for res, _ in resultados:
+                lista_final.extend(res)
 
-                    # --- IMAGEM (Baseado no seu JSON) ---
-                    # No JSON: image: [{"url": "..."}]
-                    imagens = p.get('image', [])
-                    imagem_url = imagens[0].get('url') if imagens else "SEM IMAGEM"
-
-                    # --- TAXONOMIA (Baseado no breadcrumbList do JSON) ---
-                    breadcrumb = p.get('breadcrumbList', {}).get('itemListElement', [])
-                    # Filtramos apenas os nomes das categorias (excluindo o nome do produto no final)
-                    cat_names = [item.get('name') for item in breadcrumb if item.get('position', 0) < len(breadcrumb)]
-                    
-                    cat_site = cat_names[0].upper() if len(cat_names) > 0 else "OUTROS"
-                    subcategoria = formatar_nome_categoria(cat_names[1]) if len(cat_names) > 1 else "N/A"
-                    tipo_produto = formatar_nome_categoria(cat_names[2]) if len(cat_names) > 2 else "N/A"
-
-                    if cat_site in CATEGORIAS_IGNORADAS: continue
-
-                    # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
-                    full_context = f"{nome_cru} {cat_site} {subcategoria} {tipo_produto}"
-                    categoria = padronizar_categoria(full_context, cat_site)
-                    
-                    nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
-
-                    # --- PREÇOS ---
-                    offers_node = p.get('offers', {})
-                    p_varejo = float(offers_node.get('highPrice', 0.0))
-                    p_atacado = float(offers_node.get('lowPrice', p_varejo))
-                    
-                    if p_atacado <= 0: continue
-
-                    # Lógica de condição de atacado
-                    condicao = "1 UN"
-                    for oferta in offers_node.get('offers', []):
-                        if float(oferta.get('price', 0)) == p_atacado and int(oferta.get('minQuantity', 0)) > 1:
-                            condicao = f"A PARTIR DE {oferta['minQuantity']} UN"
-                            break
-                    
-                    marca_str = p.get('brand', {}).get('name', 'OUTROS').upper()
-                    lista_final.append({
-                        "Mercado": NOME_MERCADO, 
-                        "Categoria": categoria, 
-                        "subcategoria": subcategoria,
-                        "tipo_produto": tipo_produto,
-                        "Produto": nome_limpo,
-                        "Marca": marca_str, 
-                        "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
-                        "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
-                        "Qtd_Valor": qv, 
-                        "Medida": med, 
-                        "Unidade": "UN", 
-                        "Condição": condicao,
-                        "Validade": "VER NO SITE", 
-                        "Data_Hora": agora, 
-                        "Link_Imagem": imagem_url
-                    })
-                except Exception as e:
-                    continue
-
-    lista_unica = list({v['Produto'] + v['Preço Atacado']: v for v in lista_final}.values())
-    logger.info(f"✅ Total de {len(lista_unica)} produtos processados.")
-    return lista_unica
+    logger.info(f"✅ Extração paralela concluída. {len(lista_final)} itens brutos capturados.")
+    return list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
 
 async def extrair_dados():
-    """Ponto de entrada para o main.py"""
+    """Ponto de entrada para o orquestrador (main.py)."""
     return await motor_extracao_atacadao()

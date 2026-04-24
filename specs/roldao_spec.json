@@ -5,7 +5,10 @@
   "scraping_method": "Regex-based HTML Scanning (Requests)",
   "selectors_mapping": {
     "image_regex": "https?://roldao\\.com\\.br/wp-content/uploads/[^\"']+\\-scaled\\.jpeg",
-    "filter_keywords": ["ROLDAO-", "ESPECIAL-"]
+    "filter_keywords": [
+      "ROLDAO-",
+      "ESPECIAL-"
+    ]
   },
   "special_rules": [
     "Não utiliza Selenium; a extração é feita via leitura de texto puro do HTML.",

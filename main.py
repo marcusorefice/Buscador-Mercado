@@ -34,19 +34,17 @@ def inicializar_db():
     conn = sqlite3.connect(DB_NOME)
     cursor = conn.cursor()
     colunas = [
-        "Mercado", "Categoria", "Produto", "Marca", "Preço Varejo", "Preço Atacado",
-        "Qtd_Valor", "Medida", "Unidade", "Condição", "Validade", "Data_Hora", "Link_Imagem",
-        "subcategoria", "tipo_produto"
+        "Mercado", "EAN", "Categoria", "Produto", "Marca", "Preço Varejo", "Preço Atacado", "Qtd_Valor",
+        "Medida", "Unidade", "Condição", "Data_Hora", "Link_Imagem", "subcategoria", "tipo_produto"
     ]
     cols_sql = ", ".join([f'"{c}" TEXT' for c in colunas])
     # Adiciona UNIQUE constraint para evitar duplicatas exatas no banco
     cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS ofertas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             {cols_sql},
-            UNIQUE(Mercado, Produto, "Preço Atacado", Data_Hora)
-        )
-    ''')
+            UNIQUE(Mercado, Produto, Marca, "Preço Atacado", Data_Hora)
+        )    ''')
 
     # Tabela virtual FTS5 para busca full-text otimizada.
     # Indexa Produto, Marca e Categoria para uma busca mais rica e relevante.
@@ -55,7 +53,8 @@ def inicializar_db():
             Produto, 
             Marca, 
             Categoria, 
-            subcategoria, 
+            subcategoria,
+            EAN,
             content='ofertas', 
             content_rowid='id'
         );
@@ -64,14 +63,14 @@ def inicializar_db():
     # Triggers para manter a tabela FTS sincronizada automaticamente com a tabela de ofertas.
     cursor.executescript('''
         CREATE TRIGGER IF NOT EXISTS ofertas_after_insert AFTER INSERT ON ofertas BEGIN
-          INSERT INTO ofertas_fts(rowid, Produto, Marca, Categoria, subcategoria) VALUES (new.id, new.Produto, new.Marca, new.Categoria, new.subcategoria);
+          INSERT INTO ofertas_fts(rowid, Produto, Marca, Categoria, subcategoria, EAN) VALUES (new.id, new.Produto, new.Marca, new.Categoria, new.subcategoria, new.EAN);
         END;
         CREATE TRIGGER IF NOT EXISTS ofertas_after_delete AFTER DELETE ON ofertas BEGIN
-          INSERT INTO ofertas_fts(ofertas_fts, rowid, Produto, Marca, Categoria, subcategoria) VALUES ('delete', old.id, old.Produto, old.Marca, old.Categoria, old.subcategoria);
+          INSERT INTO ofertas_fts(ofertas_fts, rowid, Produto, Marca, Categoria, subcategoria, EAN) VALUES ('delete', old.id, old.Produto, old.Marca, old.Categoria, old.subcategoria, old.EAN);
         END;
         CREATE TRIGGER IF NOT EXISTS ofertas_after_update AFTER UPDATE ON ofertas BEGIN
-          INSERT INTO ofertas_fts(ofertas_fts, rowid, Produto, Marca, Categoria, subcategoria) VALUES ('delete', old.id, old.Produto, old.Marca, old.Categoria, old.subcategoria);
-          INSERT INTO ofertas_fts(rowid, Produto, Marca, Categoria, subcategoria) VALUES (new.id, new.Produto, new.Marca, new.Categoria, new.subcategoria);
+          INSERT INTO ofertas_fts(ofertas_fts, rowid, Produto, Marca, Categoria, subcategoria, EAN) VALUES ('delete', old.id, old.Produto, old.Marca, old.Categoria, old.subcategoria, old.EAN);
+          INSERT INTO ofertas_fts(rowid, Produto, Marca, Categoria, subcategoria, EAN) VALUES (new.id, new.Produto, new.Marca, new.Categoria, new.subcategoria, new.EAN);
         END;
     ''')
     
@@ -86,6 +85,11 @@ def salvar_resultados(produtos_finais):
         return
 
     df_total = pd.DataFrame(produtos_finais)
+
+    # CORREÇÃO: Garante que o EAN seja sempre tratado como texto para evitar notação científica.
+    # Esta é a principal defesa contra a conversão automática do pandas para float.
+    if 'EAN' in df_total.columns:
+        df_total['EAN'] = df_total['EAN'].astype(str)
 
     # Remove duplicatas no lote de entrada antes de qualquer outra operação.
     unique_cols = ['Mercado', 'Produto', 'Marca', 'Preço Atacado', 'Data_Hora']
@@ -173,9 +177,9 @@ def salvar_resultados(produtos_finais):
 
             # Define a ordem desejada das colunas para o Excel, incluindo a nova taxonomia
             colunas_ordenadas = [
-                "Mercado", "Categoria", "subcategoria", "tipo_produto", "Produto", "Marca", 
+                "Mercado", "EAN", "Categoria", "subcategoria", "tipo_produto", "Produto", "Marca", 
                 "Qtd_Valor", "Medida", "Unidade", "Preço Varejo", "Preço Atacado", 
-                "Condição", "Validade", "Data_Hora", "Link_Imagem"
+                "Condição", "Data_Hora", "Link_Imagem"
             ]
             # Garante que apenas colunas existentes no DataFrame sejam usadas, para evitar erros
             colunas_existentes_para_salvar = [col for col in colunas_ordenadas if col in df_final_mercado.columns]
@@ -247,6 +251,9 @@ def aplicar_fallbacks_finais(lista_produtos):
         # Fallback para subcategoria e tipo
         if "subcategoria" not in p or not p["subcategoria"]: p["subcategoria"] = "N/A"
         if "tipo_produto" not in p or not p["tipo_produto"]: p["tipo_produto"] = "N/A"
+
+        # Fallback para EAN
+        if "EAN" not in p or not p["EAN"]: p["EAN"] = "N/A"
     return lista_produtos
 
 async def coletar_dados_scraper(nome, func):
@@ -283,23 +290,23 @@ async def main():
 
     # ETAPA 1: Scrapers com dados estruturados que alimentam a biblioteca.
     scrapers_completos = {
-        # "Carrefour": carrefour.extrair_dados,
-        # "Covabra": covabra.extrair_dados,
-        # "Pão de Açúcar": paodeacucar.extrair_dados,
-        # "São Vicente": svicente.extrair_dados,
-        # "Atacadão": atacadao.extrair_dados,
+        "Carrefour": carrefour.extrair_dados,
+        "Covabra": covabra.extrair_dados,
+        "Pão de Açúcar": paodeacucar.extrair_dados,
+        "São Vicente": svicente.extrair_dados,
+        "Atacadão": atacadao.extrair_dados,
         "Dom Olívio": dom_olivio.extrair_dados,
-        # "Boa Supermercados": boa.extrair_dados, 
-        # "Oba Hortifruti": oba.extrair_dados,
+        "Boa Supermercados": boa.extrair_dados, 
+        "Oba Hortifruti": oba.extrair_dados,
     }
     
     # ETAPA 2: Scrapers que dependem da biblioteca e da IA para classificação.
     scrapers_para_ia_list = {
-        # "Assaí Atacadista": assai.extrair_dados, 
-        # "Fort Atacadista": fort.extrair_dados,
-        # "Tenda Atacado": tenda.extrair_dados, 
-        # "Roldão Atacadista": roldao.extrair_dados,
-        # "Tauste Supermercado": tauste.extrair_dados, 
+        "Assaí Atacadista": assai.extrair_dados, 
+        "Fort Atacadista": fort.extrair_dados,
+        "Tenda Atacado": tenda.extrair_dados, 
+        "Roldão Atacadista": roldao.extrair_dados,
+        "Tauste Supermercado": tauste.extrair_dados, 
         
     }
 
@@ -307,6 +314,8 @@ async def main():
     all_scrapers = {**scrapers_completos, **scrapers_para_ia_list}
     resumo_coleta = {nome: 0 for nome in all_scrapers.keys()}
     total_itens_salvos = 0
+    total_itens_ia = 0
+    total_itens_descartados = 0
     
     # --- EXECUÇÃO DA ETAPA 1 ---
     logger.info("\n" + "="*50)
@@ -331,6 +340,7 @@ async def main():
         logger.info(f"🏁 {nome_mercado} concluiu com {len(produtos_mercado)} ofertas.")
 
         produtos_validos = validar_e_limpar_produtos(produtos_mercado, logger)
+        total_itens_descartados += len(produtos_mercado) - len(produtos_validos)
         produtos_sanitizados = sanitizar_condicoes_absurdas(produtos_validos, logger)
         produtos_finais = aplicar_fallbacks_finais(produtos_sanitizados)
         
@@ -341,15 +351,17 @@ async def main():
             logger.info(f"   - [{nome_mercado}] Atualizando a biblioteca com {len(produtos_finais)} produtos.")
             for p in produtos_finais:
                 nome_orig = p.get("Produto")
+                ean = p.get("EAN")
                 img_atual = p.get("Link_Imagem")
                 tem_img = img_atual and img_atual != "SEM IMAGEM" and str(img_atual).strip() != ""
                 
                 # Apenas adiciona/atualiza se tiver taxonomia completa e imagem
                 if p.get("subcategoria", "N/A") != "N/A" and tem_img and nome_orig:
-                    chave_norm = normalizar_para_cache(nome_orig)
+                    # Prioriza EAN como chave, se disponível, para consistência com o classificador.
+                    chave = ean if ean and ean != "N/A" else normalizar_para_cache(nome_orig)
                     
                     # Cria uma entrada nova ou atualiza a imagem de uma existente
-                    if chave_norm not in biblioteca_global or not biblioteca_global.get(chave_norm):
+                    if chave not in biblioteca_global or not biblioteca_global.get(chave):
                         # Extrai a taxonomia do próprio produto 'p' que já vem estruturado
                         taxonomia_p = {
                             "Categoria": p.get("Categoria"),
@@ -357,12 +369,12 @@ async def main():
                             "tipo_produto": p.get("tipo_produto")
                         }
                         # Usa a função centralizada para criar a entrada no formato estendido
-                        biblioteca_global[chave_norm] = _criar_entrada_biblioteca_estendida(chave_norm, nome_orig, p, taxonomia_p)
+                        biblioteca_global[chave] = _criar_entrada_biblioteca_estendida(chave, nome_orig, p, taxonomia_p)
                     else:
                         # Se já existe, só atualiza a imagem se a atual for vazia/inválida
-                        img_cache = biblioteca_global.get(chave_norm, {}).get("imagem")
+                        img_cache = biblioteca_global.get(chave, {}).get("imagem")
                         if not img_cache or img_cache == "SEM IMAGEM" or str(img_cache).strip() == "":
-                            biblioteca_global[chave_norm]["imagem"] = img_atual
+                            biblioteca_global[chave]["imagem"] = img_atual
 
     # Salva todos os produtos da Etapa 1 de uma vez
     if produtos_etapa1_para_salvar:
@@ -398,6 +410,7 @@ async def main():
             logger.info(f"🏁 {nome_mercado} concluiu com {len(produtos_mercado)} ofertas. Iniciando classificação...")
 
             produtos_validos = validar_e_limpar_produtos(produtos_mercado, logger)
+            total_itens_descartados += len(produtos_mercado) - len(produtos_validos)
             produtos_sanitizados = sanitizar_condicoes_absurdas(produtos_validos, logger)
 
             if not produtos_sanitizados:
@@ -406,9 +419,10 @@ async def main():
 
             # A biblioteca já está enriquecida. A função de IA vai usar o cache ao máximo.
             logger.info(f"   - [{nome_mercado}] Iniciando classificação com IA para {len(produtos_sanitizados)} produtos...")
-            mapa_taxonomia, biblioteca_atualizada, cache_foi_modificado = await classificar_taxonomia_com_ia_async(
+            mapa_taxonomia, biblioteca_atualizada, cache_foi_modificado, num_processados_ia = await classificar_taxonomia_com_ia_async(
                 produtos_sanitizados, biblioteca_global
             )
+            total_itens_ia += num_processados_ia
             if cache_foi_modificado:
                 biblioteca_global = biblioteca_atualizada  # Mantém a biblioteca global sempre atualizada
                 # Salva o cache imediatamente após a modificação para garantir persistência.
@@ -418,25 +432,34 @@ async def main():
             # Enriquece os produtos com a taxonomia obtida
             for produto in produtos_sanitizados:
                 nome_original = produto.get("Produto")
-                taxonomia = mapa_taxonomia.get(nome_original)
-                if not taxonomia:
-                    chave_norm = normalizar_para_cache(nome_original)
-                    taxonomia = biblioteca_global.get(chave_norm)
+                # mapa_taxonomia agora contém o objeto completo da biblioteca, chaveado pelo nome original
+                item_biblioteca = mapa_taxonomia.get(nome_original)
 
-                if taxonomia:
-                    produto["Categoria"] = taxonomia.get("Categoria", "MERCEARIA")
-                    produto["subcategoria"] = taxonomia.get("subcategoria", "OUTROS")
-                    produto["tipo_produto"] = taxonomia.get("tipo_produto", "OUTROS")
+                # Fallback: Se não achou no mapa, tenta buscar na biblioteca global por EAN ou nome normalizado
+                if not item_biblioteca:
+                    ean = produto.get("EAN")
+                    if ean and ean != "N/A":
+                        item_biblioteca = biblioteca_global.get(ean)
+                    if not item_biblioteca:
+                        chave_norm = normalizar_para_cache(nome_original)
+                        item_biblioteca = biblioteca_global.get(chave_norm)
+
+                if item_biblioteca:
+                    produto["Categoria"] = item_biblioteca.get("Categoria", "MERCEARIA")
+                    produto["subcategoria"] = item_biblioteca.get("subcategoria", "OUTROS")
+                    produto["tipo_produto"] = item_biblioteca.get("tipo_produto", "OUTROS")
+                    
+                    # Padroniza o nome do produto usando o 'nome_comum' da biblioteca
+                    nome_padronizado = item_biblioteca.get("nome_comum")
+                    if nome_padronizado:
+                        produto["Produto"] = nome_padronizado
                     
                     # Tenta preencher imagem faltante com a da biblioteca
                     img_atual = produto.get("Link_Imagem")
                     if not img_atual or img_atual == "SEM IMAGEM" or str(img_atual).strip() == "":
-                        chave_norm = normalizar_para_cache(nome_original)
-                        tax_bib = biblioteca_global.get(chave_norm)
-                        if tax_bib:
-                            img_biblioteca = tax_bib.get("imagem")
-                            if img_biblioteca and img_biblioteca != "SEM IMAGEM":
-                                produto["Link_Imagem"] = img_biblioteca
+                        img_biblioteca = item_biblioteca.get("imagem")
+                        if img_biblioteca and img_biblioteca != "SEM IMAGEM":
+                            produto["Link_Imagem"] = img_biblioteca
             
             produtos_finais_mercado = aplicar_fallbacks_finais(produtos_sanitizados)
 
@@ -466,7 +489,9 @@ async def main():
             
     logger.info("-" * 50)    
     logger.info(f"📈 TOTAL BRUTO COLETADO: {total_coletado} itens")
-    logger.info(f" TOTAL DE ITENS SALVOS: {total_itens_salvos} itens")
+    logger.info(f"🧠 ITENS PROCESSADOS PELA IA: {total_itens_ia} itens")
+    logger.info(f"🗑️ ITENS DESCARTADOS (sem preço/nome): {total_itens_descartados} itens")
+    logger.info(f"💾 TOTAL DE ITENS SALVOS: {total_itens_salvos} itens")
     logger.info("="*50)
     logger.info("\n🏆 Operação concluída com sucesso! O cache da biblioteca de produtos está atualizado.")
 

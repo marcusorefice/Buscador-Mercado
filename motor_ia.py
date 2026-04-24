@@ -186,7 +186,6 @@ class MotorIA:
                     "Medida": med,
                     "Unidade": "UN",
                     "Condição": condicao,
-                    "Validade": str(item.get("v", "VER ENCARTE")).upper(),
                     "Data_Hora": item.get("data_hora", agora), # Mantém consistência se vier do cache
                     "Link_Imagem": "SEM IMAGEM"
                 })

@@ -36,6 +36,7 @@
     "request_engine": "curl_cffi (Session)",
     "impersonation": "chrome110",
     "data_shaping": "Deduplicação final por nome de produto para garantir unicidade na planilha",
-    "time_management": "Python datetime para registro de Data_Hora da captura"
+    "time_management": "Python datetime para registro de Data_Hora da captura",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
   }
 }

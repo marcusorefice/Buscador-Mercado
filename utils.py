@@ -286,6 +286,14 @@ def validar_e_limpar_produtos(produtos, logger):
         # Limpeza de frases duplicadas no nome do produto
         nome_produto = remover_frases_duplicadas(nome_produto)
         
+        # Padronização de Categoria
+        categoria_original = produto.get("Categoria", "")
+        produto["Categoria"] = padronizar_categoria(nome_produto, categoria_original)
+        
+        # Padronização de Subcategoria
+        subcategoria_original = produto.get("subcategoria", "")
+        produto["subcategoria"] = formatar_nome_categoria(subcategoria_original)
+        
         # Remove a marca do final do nome do produto, se houver repetição.
         marca = produto.get("Marca")
         if isinstance(nome_produto, str) and isinstance(marca, str) and marca and marca.upper() != 'PRÓPRIA':
