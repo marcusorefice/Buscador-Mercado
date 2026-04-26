@@ -31,13 +31,15 @@ DB_NOME = os.path.join(DATA_DIR, "monitoramento_Jundiai.db")
 # FUNÇÕES DE SUPORTE (DATABASE E EXCEL)
 # ==========================================
 
-def inicializar_db():
-    """Inicializa o banco de dados com a estrutura correta."""
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-    
-    conn = sqlite3.connect(DB_NOME)
+def garantir_tabela_ofertas(db_path):
+    """Garante que o diretório de dados e a tabela 'ofertas' no banco de dados existam com a estrutura correta."""
+    data_dir = os.path.dirname(db_path)
+    if data_dir and not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    # Cria a tabela se o sistema não a encontrar, mantendo a estrutura completa
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ofertas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,8 +50,8 @@ def inicializar_db():
             tipo_produto TEXT,
             Produto TEXT,
             Marca TEXT,
-            Preco_Varejo TEXT,
-            Preco_Atacado TEXT,
+            Preco_Varejo TEXT, 
+            Preco_Atacado TEXT, 
             Qtd_Valor TEXT,
             Medida TEXT,
             Unidade TEXT,
@@ -104,10 +106,14 @@ def salvar_dados_mercado(produtos, nome_mercado):
     # --- SALVAMENTO NO EXCEL ---
     filename = os.path.join(DATA_DIR, f"historico_{nome_mercado.lower().replace(' ', '_')}.xlsx")
     df_novos = pd.DataFrame(produtos)
+    # Garante que o EAN seja tratado como texto para evitar notação científica no Excel
+    if 'EAN' in df_novos.columns:
+        df_novos['EAN'] = df_novos['EAN'].astype(str)
     
     if os.path.exists(filename):
         try:
-            df_antigo = pd.read_excel(filename)
+            # Ao ler o arquivo antigo, também garantimos que o EAN é texto
+            df_antigo = pd.read_excel(filename, dtype={'EAN': str})
             df_final = pd.concat([df_antigo, df_novos]).drop_duplicates(
                 subset=['Produto', 'Marca', 'Qtd_Valor', 'Medida'], keep='last'
             )
@@ -124,7 +130,7 @@ def salvar_dados_mercado(produtos, nome_mercado):
 
 async def main():
     logger.info(f"🚀 INICIANDO ORQUESTRADOR - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    inicializar_db()
+    garantir_tabela_ofertas(DB_NOME)
     biblioteca = carregar_biblioteca()
     resumo_geral = {}
 
@@ -132,14 +138,14 @@ async def main():
     # ETAPA 1: MERCADOS COM DADOS ESTRUTURADOS (API / JSON)
     # ---------------------------------------------------------
     scrapers_api = [
-        (atacadao, "Atacadão"),
-        # (carrefour, "Carrefour"),
-        # (boa, "Boa"),
+        # (atacadao, "Atacadão"),
+        # (carrefour, "Carrefour"), não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
+        (boa, "Boa"),
         # (paodeacucar, "Pão de Açúcar"),
-        # (tenda, "Tenda"),
-        # (tauste, "Tauste"),
         # (svicente, "S. Vicente"),
-        # (covabra, "Covabra")
+        # (covabra, "Covabra"),
+        # (oba, "Oba Hortifruti"),
+        # (dom_olivio, "Dom Olívio")
     ]
 
     logger.info("\n=== ETAPA 1: COLETANDO DADOS ESTRUTURADOS (API) ===")
@@ -207,8 +213,9 @@ async def main():
         # (assai, "Assaí"),
         # (fort, "Fort Atacadão"),
         # (roldao, "Roldão"),
-        # (oba, "Oba Hortifruti"),
-        # (dom_olivio, "Dom Olívio")
+        # (tenda, "Tenda"),
+        # (tauste, "Tauste")
+       
     ]
 
     logger.info("\n=== ETAPA 2: COLETANDO FOLHETOS E OFERTAS VIA IA ===")
@@ -235,4 +242,6 @@ async def main():
     logger.info("🏆 Operação concluída com sucesso!")
 
 if __name__ == "__main__":
+    if os.name == 'nt':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

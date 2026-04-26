@@ -7,7 +7,7 @@ import re
 from curl_cffi.requests import AsyncSession
 import random
 from datetime import datetime
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
+from utils import aplicar_taxonomia_inteligente, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -237,17 +237,17 @@ async def motor_extracao_atacadao():
                                     condicao = f"A PARTIR DE {min_qty} UN"
 
                             cat_tree = p.get('breadcrumbList', {}).get('itemListElement', [])
-                            cat_site, subcategoria, tipo_produto = "", "N/A", "N/A"
+                            cat_site_cru, subcategoria_cru, tipo_produto_cru = "", "N/A", "N/A"
                             
                             if cat_tree and isinstance(cat_tree, list):
-                                if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
-                                if len(cat_tree) > 1: subcategoria = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
-                                if len(cat_tree) > 2: tipo_produto = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
+                                if len(cat_tree) > 0: cat_site_cru = cat_tree[0].get('name', '').upper()
+                                if len(cat_tree) > 1: subcategoria_cru = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
+                                if len(cat_tree) > 2: tipo_produto_cru = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
 
-                            if cat_site in CATEGORIAS_IGNORADAS: continue
+                            if cat_site_cru in CATEGORIAS_IGNORADAS: continue
 
-                            full_context = f"{nome_cru} {cat_site}"
-                            categoria = MAPA_PARA_APP.get(cat_site, padronizar_categoria(full_context, cat_site))
+                            cat_site_mapeada = MAPA_PARA_APP.get(cat_site_cru, formatar_nome_categoria(cat_site_cru))
+                            categoria, subcategoria, tipo_produto = aplicar_taxonomia_inteligente(nome_cru, cat_site_mapeada, subcategoria_cru, tipo_produto_cru)
                             
                             marca_obj = p.get('brand', {})
                             marca_str = marca_obj.get('name', 'OUTROS').upper() if isinstance(marca_obj, dict) else str(marca_obj or 'OUTROS').upper()
