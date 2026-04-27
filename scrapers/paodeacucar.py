@@ -100,6 +100,22 @@ async def motor_extracao_paodeacucar():
                         if not nome_bruto: continue
                         ean = str(p.get('ean', 'N/A')).strip()
 
+                        # --- LÓGICA DE EXTRAÇÃO DE EAN (MELHOR ESFORÇO) ---
+                        # A API de ofertas raramente fornece o EAN. Esta lógica tenta encontrá-lo em vários campos.
+                        ean = ""
+                        # 1. Tenta o campo 'ean'
+                        ean = str(p.get('ean', '')).strip()
+                        # 2. Tenta o campo 'gtin' se o 'ean' falhar
+                        if not ean or len(ean) < 13:
+                            ean = str(p.get('gtin', '')).strip()
+                        # 3. Tenta o campo 'sku', mas apenas se tiver 13 dígitos (formato EAN-13)
+                        if not ean or len(ean) < 13:
+                            sku = str(p.get('sku', '')).strip()
+                            if len(sku) == 13 and sku.isdigit():
+                                ean = sku
+                        # 4. Define o valor final como 'N/A' se nada for encontrado
+                        if not ean or ean == '0': ean = 'N/A'
+
                         # Extração de Preços via sellInfos
                         sell_infos = p.get('sellInfos', [{}])
                         sell_info = sell_infos[0] if sell_infos else {}
@@ -237,12 +253,17 @@ async def motor_extracao_paodeacucar():
     except Exception as e:
         logger.error(f"❌ Erro crítico no motor Pão de Açúcar: {e}")
 
-    lista_unica = list({v['ID_UNICO']: v for v in lista_final}.values())
-    
-    # Limpa a chave temporária ID_UNICO para o pandas.to_sql não falhar no banco de dados
-    for item in lista_unica:
-        item.pop("ID_UNICO", None)
+    # --- ETAPA DE DEDUPLICAÇÃO ---
+    # A API pode retornar o mesmo produto várias vezes se ele estiver em múltiplas categorias promocionais.
+    # Usamos um dicionário com a chave 'ID_UNICO' (SKU ou Nome+Marca) para garantir que cada produto apareça apenas uma vez.
+    # O dicionário por si só já garante a unicidade pela chave.
+    produtos_unicos_dict = {v['ID_UNICO']: v for v in lista_final}
+    lista_unica = list(produtos_unicos_dict.values())
 
+    # Limpa a chave temporária 'ID_UNICO' de cada item na lista final para garantir
+    # a compatibilidade com o banco de dados, que não possui essa coluna.
+    for item in lista_unica: item.pop("ID_UNICO", None)
+    
     logger.info(f"🏆 SUCESSO! {len(lista_unica)} ofertas únicas capturadas do {NOME_MERCADO}.")
     return lista_unica
 

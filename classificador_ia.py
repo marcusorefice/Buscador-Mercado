@@ -44,12 +44,47 @@ def _trocar_chave_texto():
     logger.info(f"🔄 Chave rotacionada para o índice {indice_chave_texto_atual}")
 
 # --- PROMPT E CONFIGURAÇÕES ---
-PROMPT_TAXONOMIA = """
-Você é um especialista em taxonomia de produtos. Classifique em: "Categoria", "subcategoria" e "tipo_produto".
-Categorias válidas: BEBIDAS, MERCEARIA, LIMPEZA, HIGIENE E BELEZA, FRIOS E LATICÍNIOS, PADARIA, CONGELADOS, PET SHOP, AÇOUGUE, HORTIFRUTI, BAZAR.
-Responda APENAS o JSON puro.
-Produtos: {produtos_lista}
-"""
+PROMPT_TAXONOMIA = """Você é um assistente de IA especialista em categorização de produtos de supermercado. Sua tarefa é classificar a lista de produtos fornecida, atribuindo "Categoria", "subcategoria" e "tipo_produto" para cada um.
+
+**REGRAS OBRIGATÓRIAS:**
+1.  **FORMATO DE SAÍDA:** A resposta DEVE ser um único objeto JSON. As chaves do objeto JSON devem ser OS NOMES EXATOS dos produtos da lista de entrada.
+2.  **CATEGORIAS VÁLIDAS:** Use apenas uma das seguintes categorias principais:
+    - `Açougue e Peixaria`
+    - `Bazar e Utilidades`
+    - `Bebê e Infantil`
+    - `Bebidas`
+    - `Bebidas Alcoólicas`
+    - `Congelados e Pratos Prontos`
+    - `Frios e Laticínios`
+    - `Higiene e Cuidado Pessoal`
+    - `Hortifrúti`
+    - `Limpeza`
+    - `Mercearia e Despensa`
+    - `Padaria e Confeitaria`
+    - `Pet Shop`
+3.  **SUBCATEGORIAS:** Seja específico (ex: `Refrigerantes`, `Iogurtes`, `Carnes Bovinas`, `Sabão em Pó`).
+4.  **JSON PURO:** Sua resposta deve conter APENAS o código JSON, sem textos ou explicações adicionais.
+
+**EXEMPLO DE ENTRADA E SAÍDA:**
+- Entrada (lista de nomes): `["REQUEIJÃO TIROLEZ TRADICIONAL COPO 200G", "MARGARINA CLAYBOM C/ SAL 500G"]`
+- Saída (JSON esperado):
+  ```json
+  {
+    "REQUEIJÃO TIROLEZ TRADICIONAL COPO 200G": {
+      "Categoria": "Frios e Laticínios",
+      "subcategoria": "Requeijão",
+      "tipo_produto": "Requeijão Tradicional"
+    },
+    "MARGARINA CLAYBOM C/ SAL 500G": {
+      "Categoria": "Frios e Laticínios",
+      "subcategoria": "Manteigas e Margarinas",
+      "tipo_produto": "Margarina com Sal"
+    }
+  }
+  ```
+
+**PRODUTOS PARA CLASSIFICAR:**
+{produtos_lista}"""
 
 DATA_DIR = "data"
 BIBLIOTECA_FILE = os.path.join(DATA_DIR, "biblioteca_produtos.json")
@@ -92,8 +127,8 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_input, biblioteca_gl
 
     # 2. Lote da IA (Corrigido para gemini-2.0-flash e tratamento de erros)
     lista_ia_items = list(produtos_para_ia.items())
-    for i in range(0, len(lista_ia_items), 50):
-        chunk_dict = dict(lista_ia_items[i:i+50])
+    for i in range(0, len(lista_ia_items), 150):
+        chunk_dict = dict(lista_ia_items[i:i+150])
         nomes = list(chunk_dict.keys())
         
         success = False
@@ -107,10 +142,25 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_input, biblioteca_gl
                 json_clean = re.sub(r'```json|```', '', response.text).strip()
                 dados_ia = json.loads(json_clean)
 
+                # --- NOVO: Tratamento para quando a IA retorna uma lista em vez de mapa ---
+                if isinstance(dados_ia, list):
+                    novo_dict = {}
+                    for item in dados_ia:
+                        if isinstance(item, dict):
+                            nome_prod = item.get("Produto", item.get("produto", item.get("nome")))
+                            if nome_prod:
+                                novo_dict[nome_prod] = item
+                            else:
+                                # Tenta pegar a chave se o formato for [{"Nome do Produto": {"Categoria": "..."}}]
+                                keys = list(item.keys())
+                                if len(keys) == 1 and isinstance(item[keys[0]], dict):
+                                    novo_dict[keys[0]] = item[keys[0]]
+                    dados_ia = novo_dict
+
                 # --- NOVO: Tratamento para quando a IA retorna um único objeto em vez de um mapa ---
                 # Se pedimos 1 produto e a resposta não tem esse produto como chave,
                 # e a resposta contém a chave "Categoria", assumimos que a IA retornou um objeto único.
-                if len(nomes) == 1 and nomes[0] not in dados_ia:
+                if isinstance(dados_ia, dict) and len(nomes) == 1 and nomes[0] not in dados_ia:
                     if "Categoria" in dados_ia:
                         logger.info(f"IA retornou objeto único para '{nomes[0]}'. Reconstruindo para o formato de mapa.")
                         dados_ia = {nomes[0]: dados_ia}
@@ -139,7 +189,11 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_input, biblioteca_gl
                         if chave and entrada:
                             novas_entradas_biblioteca[chave] = entrada
                             mapa_final[nome_ia] = entrada
+                            biblioteca_global[chave] = entrada
                     success = True
+                    # Salva a biblioteca periodicamente (após cada lote de 50) para não perder progresso
+                    salvar_biblioteca(biblioteca_global)
+                    logger.info(f"💾 Progresso salvo: {len(novas_entradas_biblioteca)} novos itens classificados até agora.")
                     break 
                 
             except Exception as e:

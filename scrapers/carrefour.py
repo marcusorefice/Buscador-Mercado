@@ -2,63 +2,38 @@ import os
 import asyncio
 import warnings
 import json
+import re
 from datetime import datetime
 from curl_cffi import requests
-from playwright.async_api import async_playwright
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
+from utils import (
+    extrair_medidas_inteligente, setup_logging, 
+    read_json_file, formatar_nome_categoria, normalizar_para_cache
+)
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
 
 # ==========================================
-# CARREGAMENTO DAS CONFIGURAÇÕES (SPEC)
+# CONFIGURAÇÕES (SPECS)
 # ==========================================
 SPEC_FILE = os.path.join(os.path.dirname(__file__), '..', 'specs', 'carrefour_spec.json')
 CONFIG = read_json_file(SPEC_FILE)
 
-# ==========================================
-# CONFIGURAÇÕES DO CARREFOUR
-# ==========================================
 NOME_MERCADO = CONFIG.get("market_name", "Carrefour")
 BASE_URL_CONFIG = CONFIG.get("base_url", "https://mercado.carrefour.com.br/").rstrip('/')
 
 REGIONALIZATION = CONFIG.get("regionalization", {})
 CLUSTER_ID = REGIONALIZATION.get("cluster_id", "28617")
 REGION_ID = REGIONALIZATION.get("region_id", "InYyLjc5MDlFOEZDNjU2N0M3OTU5NjA4MDFCQTU5RDFFMEQ3Ig==")
-SESSION_FILE = REGIONALIZATION.get("session_file", "carrefour_session.json")
 CEP_COOKIE_VALUE = REGIONALIZATION.get("cep_cookie_value", "IkhpcGVyIEp1bmRpYcOtIg==")
 
-PAGINATION = CONFIG.get("pagination", {})
-PAGE_SIZE = PAGINATION.get("page_size", 50)
-MAX_PAGES_PER_SORT = PAGINATION.get("max_pages_per_sort", 50) # Aumentado de 25 para 50
-
-TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
-raw_concurrency = TECHNICAL_DEPS.get("concurrency", 8)
-try:
-    CONCURRENCY = int(raw_concurrency)
-except (ValueError, TypeError):
-    logger.warning(f"Valor de 'concurrency' inválido ('{raw_concurrency}'). Usando valor padrão 8.")
-    CONCURRENCY = 8
-IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome124")
-PLAYWRIGHT_USER_AGENT = TECHNICAL_DEPS.get("playwright_user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-
-# ==========================================
-# 1. TRADUTOR DE STREAM REMIX/VTEX
-# ==========================================
 def reconstruir_json_remix(dados_flat, index=0):
-    """Traduz o formato de índices do Remix para um JSON legível"""
-    if index is None or not (0 <= index < len(dados_flat)):
-        return None
-    
+    if index is None or not (0 <= index < len(dados_flat)): return None
     node = dados_flat[index]
-    
-    if isinstance(node, list):
-        return [reconstruir_json_remix(dados_flat, i) for i in node]
-    
+    if isinstance(node, list): return [reconstruir_json_remix(dados_flat, i) for i in node]
     if isinstance(node, dict):
         res = {}
         for k, v in node.items():
-            # Se a chave começa com _, ela é uma referência a um índice
             if k.startswith('_'):
                 try:
                     key_idx = int(k[1:])
@@ -68,226 +43,105 @@ def reconstruir_json_remix(dados_flat, index=0):
             else:
                 res[k] = reconstruir_json_remix(dados_flat, v) if isinstance(v, (int, float)) and v < len(dados_flat) else v
         return res
-    
     return node
 
-# ==========================================
-# 2. CAPTURA DE SESSÃO (PLAYWRIGHT)
-# ==========================================
-async def _salvar_sessao_json(cookies):
-    """Salva os cookies da sessão em um arquivo JSON."""
-    try:
-        with open(SESSION_FILE, 'w') as f:
-            json.dump(cookies, f)
-    except Exception as e:
-        logger.warning(f"Não foi possível salvar o arquivo de sessão: {e}")
-
-async def _carregar_sessao_json():
-    """Carrega os cookies de um arquivo de sessão, se existir."""
-    if not os.path.exists(SESSION_FILE):
+def extrair_ean_pela_foto(url_imagem):
+    """
+    Técnica de Engenharia Reversa: Captura o EAN-13 embutido no nome do arquivo.
+    Como validamos no F12 de Jundiaí, a foto costuma ter o EAN no nome.
+    """
+    if not url_imagem or not isinstance(url_imagem, str):
         return None
-    try:
-        with open(SESSION_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return None
-
-async def _testar_sessao(cookies):
-    """Testa se os cookies de uma sessão cacheada ainda são válidos."""
-    if not cookies:
-        return False
-    logger.info(f"🧪 [{NOME_MERCADO}] Testando sessão cacheada...")
-    test_url = f"{BASE_URL_CONFIG}/colecao/{CLUSTER_ID}.data?count=1"
-    try:
-        async with requests.AsyncSession(impersonate=IMPERSONATE, cookies=cookies) as s:
-            res = await s.head(test_url, timeout=15)
-            if res.status_code == 200:
-                logger.info(f"✅ Sessão cacheada do {NOME_MERCADO} é válida.")
-                return True
-            logger.warning(f"Sessão cacheada inválida (Status: {res.status_code}). Renovando...")
-            return False
-    except Exception:
-        logger.warning("Erro ao testar sessão cacheada. Renovando...")
-        return False
-
-async def _capturar_nova_sessao_playwright():
-    """Usa o Playwright para iniciar uma nova sessão e obter cookies válidos."""
-    logger.info(f"🔑 [{NOME_MERCADO}] Capturando nova sessão com Playwright (isso pode levar um minuto)...")
-    cookies_dict = {}
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent=PLAYWRIGHT_USER_AGENT)
-        page = await context.new_page()
-        try:
-            await page.goto(f"{BASE_URL_CONFIG}/colecao/{CLUSTER_ID}", wait_until="domcontentloaded", timeout=60000)
-            pw_cookies = await context.cookies()
-            cookies_dict = {c['name']: c['value'] for c in pw_cookies}
-            cookies_dict["region-id-food"] = REGION_ID
-            cookies_dict["cep"] = CEP_COOKIE_VALUE
-            logger.info("✅ Nova sessão regional do Carrefour ativada.")
-        except Exception as e:
-            logger.error(f"Erro crítico na captura com Playwright: {e}")
-        finally:
-            await browser.close()
-    return cookies_dict
+    match = re.search(r'(789\d{10}|790\d{10})', url_imagem)
+    return match.group(1) if match else None
 
 async def capturar_sessao():
-    """Orquestrador de sessão: tenta usar cache, se falhar, cria uma nova."""
-    cookies = await _carregar_sessao_json()
-    if await _testar_sessao(cookies):
-        return cookies
-    
-    novos_cookies = await _capturar_nova_sessao_playwright()
-    if novos_cookies:
-        await _salvar_sessao_json(novos_cookies)
-    return novos_cookies
+    return {"region-id-food": REGION_ID, "cep": CEP_COOKIE_VALUE}
 
-# ==========================================
-# 3. EXTRAÇÃO TURBO
-# ==========================================
-async def extrair_lote(session, ordem, pagina, sem, agora):
-    # URL exata detectada no seu Sniffer de Elite
-    url = f"{BASE_URL_CONFIG}/colecao/{CLUSTER_ID}.data?map=productClusterIds&count={PAGE_SIZE}&page={pagina}&sort={ordem}&_routes=layout%2Fdefault%2Croutes%2Fcolecao.%24collectionId"
+async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
+    # URL da lista que já traz os produtos e links das imagens
+    url = f"{BASE_URL_CONFIG}/colecao/{CLUSTER_ID}.data?map=productClusterIds&count=50&page={pagina}&sort={ordem}&_routes=layout%2Fdefault%2Croutes%2Fcolecao.%24collectionId"
     
     async with sem:
         try:
             res = await session.get(url, timeout=30)
             if res.status_code != 200: return []
-
-            # Tradução do Stream
-            dados_brutos = res.json()
-            # O índice 0 costuma ser a raiz do mapa de dados
-            dados_limpos = reconstruir_json_remix(dados_brutos, 0)
             
-            # Navega até a lista de produtos (padrão detectado no console)
-            colecao = dados_limpos.get("routes/colecao.$collectionId", {})
+            dados_brutos = res.json()
+            dados = reconstruir_json_remix(dados_brutos, 0)
+            colecao = dados.get("routes/colecao.$collectionId", {})
             produtos_raw = colecao.get("products", []) or colecao.get("data", {}).get("products", [])
-
+            
             if not produtos_raw: return []
 
             lote = []
-
             for p in produtos_raw:
                 try:
                     item = p.get('node', p)
                     nome_cru = item.get('name', item.get('productName', '')).upper().strip()
                     if not nome_cru: continue
 
-                    # O EAN pode estar na raiz do item ou dentro do primeiro SKU em 'items'
-                    ean_sku = item.get('items', [{}])[0].get('ean')
-                    ean = str(ean_sku or item.get('ean', 'N/A')).strip()
-
-                    # Preços, Validade e Imagem (Varejo e Atacado/CPF)
-                    validade_iso = "Consulte no site"
-                    link_imagem = "SEM IMAGEM"
+                    skus = item.get('items', [])
+                    if not skus: continue
+                    sku_p = skus[0]
                     
-                    off = item.get('offers', {}).get('offers', [{}])[0]
-                    p_a = float(off.get('price', off.get('Price', 0)))
-                    p_v = float(off.get('listPrice', off.get('ListPrice', 0)))
+                    # --- O PULO DO GATO: EXTRAÇÃO SEM 503 ---
+                    link_foto = sku_p.get('images', [{}])[0].get('imageUrl', '')
+                    ean_oficial = sku_p.get('ean')
                     
-                    if off.get('priceValidUntil'):
-                        validade_iso = off.get('priceValidUntil')
-                    elif off.get('PriceValidUntil'):
-                        validade_iso = off.get('PriceValidUntil')
+                    # Se o oficial vier vazio (comum no Carrefour), pega da foto
+                    if not ean_oficial or ean_oficial == "N/A":
+                        ean = extrair_ean_pela_foto(link_foto)
+                    else:
+                        ean = ean_oficial
                         
-                    if 'image' in item and isinstance(item['image'], list) and len(item['image']) > 0:
-                        link_imagem = item['image'][0].get('url', 'SEM IMAGEM')
+                    # Se ainda assim não tiver, olha no cache da biblioteca
+                    if not ean:
+                        ean = indice_reverso.get(normalizar_para_cache(nome_cru), "N/A")
 
-                    if p_a <= 0 and 'items' in item and isinstance(item['items'], list) and len(item['items']) > 0:
-                        comm = item['items'][0].get('sellers', [{}])[0].get('commertialOffer', {})
-                        p_a = float(comm.get('Price', 0))
-                        p_v = float(comm.get('ListPrice', 0))
-                        
-                        if comm.get('PriceValidUntil'):
-                            validade_iso = comm.get('PriceValidUntil')
-                        elif comm.get('priceValidUntil'):
-                            validade_iso = comm.get('priceValidUntil')
-                            
-                        if link_imagem == "SEM IMAGEM":
-                            imagens = item['items'][0].get('images', [])
-                            if imagens and isinstance(imagens, list) and len(imagens) > 0:
-                                link_imagem = imagens[0].get('imageUrl', imagens[0].get('imageurl', 'SEM IMAGEM'))
-
+                    # Preços
+                    off = sku_p.get('sellers', [{}])[0].get('commertialOffer', {})
+                    p_v, p_a = float(off.get('ListPrice', 0)), float(off.get('Price', 0))
                     if p_a <= 0: continue
                     if p_v <= 0 or p_v < p_a: p_v = p_a
 
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
-                    # --- NOVA LÓGICA DE TAXONOMIA ---
-                    cat_tree = item.get('categoryTree', [])
-                    cat_site = ""
-                    subcategoria = "N/A"
-                    tipo_produto = "N/A"
-
-                    if isinstance(cat_tree, list) and len(cat_tree) > 0 and isinstance(cat_tree[0], dict):
-                        if len(cat_tree) > 0: cat_site = cat_tree[0].get('name', '').upper()
-                        if len(cat_tree) > 1: subcategoria = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
-                        if len(cat_tree) > 2: tipo_produto = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
-                    elif 'categories' in item and isinstance(item['categories'], list) and len(item['categories']) > 0:
-                        # Extrai as categorias a partir da string de rota mais completa (geralmente o índice 0)
-                        # Ex: "/Higiene e Perfumaria/Cuidados Pessoais/Papel Higiênico/"
-                        parts = [p for p in item['categories'][0].split('/') if p]
-                        if len(parts) > 0: cat_site = parts[0].upper()
-                        if len(parts) > 1: subcategoria = formatar_nome_categoria(parts[1])
-                        if len(parts) > 2: tipo_produto = formatar_nome_categoria(parts[2])
-                    
-                    if cat_site in CATEGORIAS_IGNORADAS:
-                        continue
-
-                    # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
-                    full_context = f"{nome_cru} {cat_site} {subcategoria} {tipo_produto}"
-                    categoria = padronizar_categoria(full_context, cat_site)
-                    
-                    marca = item.get('brand', 'OUTROS')
-                    if isinstance(marca, dict): marca = marca.get('name', 'OUTROS')
-                    
-                    validade = "Consulte no site"
-                    if validade_iso != "Consulte no site" and isinstance(validade_iso, str) and 'T' in validade_iso:
-                        try:
-                            data_part = validade_iso.split('T')[0]
-                            ano, mes, dia = data_part.split('-')
-                            validade = f"{dia}/{mes}/{ano}"
-                        except:
-                            validade = validade_iso
-
                     lote.append({
-                        "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": categoria,
-                        "subcategoria": subcategoria, "tipo_produto": tipo_produto,
-                        "Produto": nome_limpo, "Marca": str(marca).upper(),
+                        "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": "GERAL",
+                        "Produto": nome_limpo, "Marca": str(item.get('brand', 'OUTROS')).upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
                         "Qtd_Valor": qv, "Medida": med, "Unidade": "UN",
-                        "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN", "Data_Hora": agora,
-                        "Link_Imagem": link_imagem
+                        "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN", 
+                        "Data_Hora": agora, "Link_Imagem": link_foto
                     })
                 except: continue
             return lote
         except: return []
 
-async def motor_principal():
+async def extrair_dados():
     cookies = await capturar_sessao()
-    if not cookies: return []
+    
+    # Carrega biblioteca para fallback de EAN
+    bib_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'biblioteca_produtos.json')
+    biblioteca = read_json_file(bib_path)
+    indice_reverso = {normalizar_para_cache(v.get('nome_comum', '')): v.get('ean', 'N/A') for v in biblioteca.values()}
 
-    logger.info(f"🚀 Iniciando extração para {NOME_MERCADO}...")
-    lista_final = []
-    sem = asyncio.Semaphore(CONCURRENCY)
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    logger.info(f"🚀 Iniciando extração Turbo Jundiaí (EAN via Imagem)...")
+    lista_final, sem, agora = [], asyncio.Semaphore(5), datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-    async with requests.AsyncSession(impersonate=IMPERSONATE, cookies=cookies) as session:
+    async with requests.AsyncSession(impersonate="chrome124", cookies=cookies) as session:
         tarefas = []
-        # Cercamos a lista: 25 páginas de cada ponta de preço
         for ordem in ["price_asc", "price_desc"]:
-            logger.info(f"📡 Preparando varredura do {NOME_MERCADO}: {ordem}")
-            for pg in range(1, MAX_PAGES_PER_SORT + 1):
-                tarefas.append(extrair_lote(session, ordem, pg, sem, agora))
+            for pg in range(1, 11): # Varre 10 páginas de cada lado (1000 produtos)
+                tarefas.append(extrair_lote(session, ordem, pg, sem, agora, indice_reverso))
         
         resultados = await asyncio.gather(*tarefas)
         for r in resultados:
             if r: lista_final.extend(r)
 
+    # Remove duplicados por nome para a planilha final
     lista_unica = list({v['Produto']: v for v in lista_final}.values())
-    logger.info(f"✅ Finalizado! {len(lista_unica)} produtos únicos do {NOME_MERCADO} processados.")
+    logger.info(f"✅ Sucesso! {len(lista_unica)} produtos coletados para o GrabIt.")
     return lista_unica
-
-async def extrair_dados():
-    return await motor_principal()

@@ -7,7 +7,7 @@ import re
 from curl_cffi.requests import AsyncSession
 import random
 from datetime import datetime
-from utils import aplicar_taxonomia_inteligente, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
+from utils import extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -246,8 +246,11 @@ async def motor_extracao_atacadao():
 
                             if cat_site_cru in CATEGORIAS_IGNORADAS: continue
 
-                            cat_site_mapeada = MAPA_PARA_APP.get(cat_site_cru, formatar_nome_categoria(cat_site_cru))
-                            categoria, subcategoria, tipo_produto = aplicar_taxonomia_inteligente(nome_cru, cat_site_mapeada, subcategoria_cru, tipo_produto_cru)
+                            # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
+                            # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
+                            categoria = cat_site_cru
+                            subcategoria = subcategoria_cru
+                            tipo_produto = tipo_produto_cru
                             
                             marca_obj = p.get('brand', {})
                             marca_str = marca_obj.get('name', 'OUTROS').upper() if isinstance(marca_obj, dict) else str(marca_obj or 'OUTROS').upper()

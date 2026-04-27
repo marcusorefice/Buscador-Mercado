@@ -46,6 +46,37 @@ headers = {
     "Referer": f"{BASE_URL_CONFIG}/ofertas"
 }
 
+def extrair_ean_pela_foto(url_imagem):
+    """Técnica para capturar o EAN-13 embutido no nome do arquivo de imagem."""
+    if not url_imagem or not isinstance(url_imagem, str):
+        return None
+    # Padrão para EAN-13 (iniciando com 789 ou 790, comum no Brasil)
+    match = re.search(r'(789\d{10}|790\d{10})', url_imagem)
+    return match.group(1) if match else None
+
+async def fetch_ean_from_product_page(session, product_id):
+    """
+    Tenta buscar o EAN na página de detalhes do produto como último recurso.
+    Isso é um fallback para o caso de a API de busca não retornar o EAN.
+    """
+    if not product_id:
+        return None
+    
+    # A URL do produto no S. Vicente é previsível com o ID (pid)
+    url = f"https://www.svicente.com.br/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Product-Show?pid={product_id}"
+    try:
+        resp = await session.get(url, timeout=15)
+        if resp.status_code == 200:
+            # Usar regex é mais rápido que parsear com BeautifulSoup para um único valor
+            # O EAN geralmente está em um script JSON-LD como "gtin13" ou em dados do dataLayer
+            match = re.search(r'"gtin13"\s*:\s*"(\d{13})"', resp.text)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        logger.warning(f"  [S. Vicente] Falha ao buscar EAN extra na página do produto ID {product_id}: {e}")
+    
+    return None
+
 async def get_category_links(session):
     """Obtém todas as subcategorias do menu para garantir a taxonomia."""
     try:
@@ -92,17 +123,23 @@ async def buscar_pagina_svicente(session, cgid, start):
 async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
     async with semaforo:
         data_inicial = await buscar_pagina_svicente(session, cgid, 0)
-        if not data_inicial: return []
+        if not data_inicial or not data_inicial.get('productSearch'):
+            return []
 
         total_produtos = data_inicial.get('productSearch', {}).get('count', 0)
         if total_produtos == 0: return []
         
-        tarefas = [buscar_pagina_svicente(session, cgid, start) for start in range(0, total_produtos, TAMANHO_PAGINA)]
-        resultados_paginas = await asyncio.gather(*tarefas)
+        # Otimização: Processa a primeira página já buscada e cria tarefas apenas para as restantes.
+        paginas_a_processar = [data_inicial]
+        if total_produtos > TAMANHO_PAGINA:
+            tarefas = [buscar_pagina_svicente(session, cgid, start) for start in range(TAMANHO_PAGINA, total_produtos, TAMANHO_PAGINA)]
+            resultados_restantes = await asyncio.gather(*tarefas)
+            paginas_a_processar.extend(resultados_restantes)
         
         produtos_categoria = []
 
-        for data_pagina in resultados_paginas:
+        # Itera sobre os resultados já coletados
+        for data_pagina in paginas_a_processar:
             if not data_pagina: continue
             
             produtos_json = data_pagina.get('productsSearchResult', [])
@@ -110,7 +147,50 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                 try:
                     nome_bruto = p.get('productName', p.get('name', '')).upper().strip()
                     if not nome_bruto: continue
-                    ean = str(p.get('ean', 'N/A')).strip()
+
+                    # --- Metadados e Limpeza (IMG URL PRIMEIRO PARA EAN) ---
+                    img_url = ""
+                    imgs = p.get('images', {})
+                    for size in ['medium', 'large', 'small']:
+                        if size in imgs and imgs[size]:
+                            img_url = imgs[size][0].get('url', "")
+                            if img_url.startswith('/'): img_url = f"{BASE_URL_CONFIG}{img_url}"
+                            break
+
+                    # Lógica de EAN/GTIN aprimorada para buscar em múltiplos campos
+                    ean = ""
+                    # 1. Tenta o campo 'gtin' (padrão mais moderno)
+                    ean = str(p.get('gtin', '')).strip()
+                    # 2. Tenta o campo 'ean'
+                    if not ean or len(ean) < 12:
+                        ean = str(p.get('ean', '')).strip()
+                    # 3. Tenta o campo 'id' (usado como SKU no Demandware) se tiver 13 dígitos
+                    if not ean or len(ean) < 12:
+                        sku = str(p.get('id', '')).strip()
+                        if len(sku) == 13 and sku.isdigit():
+                            ean = sku
+                    # 4. Tenta o campo 'customAttributes'
+                    if not ean or len(ean) < 12:
+                        custom_attrs = p.get('customAttributes', {})
+                        if isinstance(custom_attrs, dict):
+                            ean_from_attr = custom_attrs.get('ean', '') or custom_attrs.get('gtin', '')
+                            if ean_from_attr:
+                                ean = str(ean_from_attr).strip()
+                    # 5. Tenta extrair da URL da imagem
+                    if (not ean or len(ean) < 12) and img_url:
+                        ean_from_img = extrair_ean_pela_foto(img_url)
+                        if ean_from_img:
+                            ean = ean_from_img
+                    # 6. NOVO: Tenta buscar na página do produto como último recurso
+                    if (not ean or len(ean) < 12):
+                        # O endpoint Product-Variation é da VTEX. Para o S. Vicente (Demandware), usamos Product-Show.
+                        # Esta chamada extra garante que não percamos EANs de itens industrializados.
+                        ean_from_page = await fetch_ean_from_product_page(session, p.get('id'))
+                        if ean_from_page:
+                            ean = ean_from_page
+                    # 7. Define o valor final como 'N/A' se nada for encontrado
+                    if not ean or len(ean) < 12:
+                        ean = "N/A"
 
                     # --- PREÇOS PADRÃO ---
                     price_data = p.get('price', {})
@@ -145,24 +225,19 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                                     break
 
                     # --- LÓGICA DE TAXONOMIA ---
-                    subcategoria = "N/A"
-                    tipo_produto = "N/A"
-                    
                     if cat_nome in CATEGORIAS_IGNORADAS:
                         continue
                     
-                    # Usa o contexto completo (nome do produto + categoria do menu) para uma categorização mais precisa.
-                    full_context = f"{nome_bruto} {cat_nome}"
-                    categoria = padronizar_categoria(full_context, cat_nome)
-                    
-                    # Metadados e Limpeza
-                    img_url = ""
-                    imgs = p.get('images', {})
-                    for size in ['medium', 'large', 'small']:
-                        if size in imgs and imgs[size]:
-                            img_url = imgs[size][0].get('url', "")
-                            if img_url.startswith('/'): img_url = f"{BASE_URL_CONFIG}{img_url}"
-                            break
+                    # A 'cat_nome' (ex: 'CERVEJAS') é a nossa subcategoria mais provável.
+                    # A 'padronizar_categoria' encontra a categoria principal (ex: 'BEBIDAS').
+                    categoria_principal = padronizar_categoria(cat_nome, cat_nome)
+                    subcategoria_base = formatar_nome_categoria(cat_nome)
+
+                    # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
+                    # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
+                    categoria = categoria_principal
+                    subcategoria = subcategoria_base
+                    tipo_produto = "N/A" # Será refinado depois
 
                     marca = p.get('brand', 'PRÓPRIA').upper()
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)

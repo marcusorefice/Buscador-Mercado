@@ -66,8 +66,11 @@ def garantir_tabela_ofertas(db_path):
 
 def salvar_dados_mercado(produtos, nome_mercado):
     """Salva os dados no SQLite e gera a planilha individual."""
-    if not produtos:
-        return
+    if not produtos: return
+
+    # FIX: Garante a existência da tabela imediatamente antes da inserção.
+    # Isso resolve o erro 'no such table' que ocorre em execuções concorrentes ou com estado de DB instável.
+    garantir_tabela_ofertas(DB_NOME)
     
     # --- SALVAMENTO NO SQLITE ---
     conn = sqlite3.connect(DB_NOME)
@@ -130,7 +133,6 @@ def salvar_dados_mercado(produtos, nome_mercado):
 
 async def main():
     logger.info(f"🚀 INICIANDO ORQUESTRADOR - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    garantir_tabela_ofertas(DB_NOME)
     biblioteca = carregar_biblioteca()
     resumo_geral = {}
 
@@ -138,14 +140,14 @@ async def main():
     # ETAPA 1: MERCADOS COM DADOS ESTRUTURADOS (API / JSON)
     # ---------------------------------------------------------
     scrapers_api = [
-        # (atacadao, "Atacadão"),
+        (atacadao, "Atacadão"),
         # (carrefour, "Carrefour"), não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
         (boa, "Boa"),
-        # (paodeacucar, "Pão de Açúcar"),
-        # (svicente, "S. Vicente"),
-        # (covabra, "Covabra"),
+        # (paodeacucar, "Pão de Açúcar"), não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
+        (covabra, "Covabra"),
         # (oba, "Oba Hortifruti"),
-        # (dom_olivio, "Dom Olívio")
+        # (dom_olivio, "Dom Olívio"),
+        # (svicente, "S. Vicente"), rodar depois dos outros prontos por causa das categorias
     ]
 
     logger.info("\n=== ETAPA 1: COLETANDO DADOS ESTRUTURADOS (API) ===")
@@ -157,51 +159,27 @@ async def main():
             if not produtos_brutos:
                 logger.warning(f"⚠️ {nome_mercado}: Nenhuma oferta capturada."); continue
 
-            # Limpeza, Enriquecimento (com a biblioteca) e Auditoria (Flag PRECISA_DE_IA definida no utils.py)
+            # Limpeza, Enriquecimento e Aplicação do Novo Motor de Taxonomia
             produtos_validados = validar_e_limpar_produtos(produtos_brutos, logger, biblioteca)
 
-            # Separação de itens para conferência da IA
-            itens_ok = [p for p in produtos_validados if not p.get("PRECISA_DE_IA")]
-            itens_suspeitos = [p for p in produtos_validados if p.get("PRECISA_DE_IA")]
-
-            # --- LÓGICA DE BIBLIOTECA PARA ITENS JÁ CORRETOS ---
-            # Adiciona à biblioteca os itens que passaram na validação e não precisam de IA
-            novas_entradas_ok = {}
-            for p_ok in itens_ok:
-                chave, entrada = criar_entrada_biblioteca(p_ok)
+            # Com o novo motor, todos os produtos já saem com a melhor taxonomia possível.
+            # A IA não é mais necessária para corrigir dados de API.
+            # Adicionamos todos os produtos validados à biblioteca e salvamos.
+            novas_entradas = {}
+            for p_validado in produtos_validados:
+                chave, entrada = criar_entrada_biblioteca(p_validado)
                 if chave and chave not in biblioteca:
-                    novas_entradas_ok[chave] = entrada
+                    novas_entradas[chave] = entrada
 
-            if novas_entradas_ok:
-                logger.info(f"📚 Adicionando {len(novas_entradas_ok)} produtos validados diretamente à biblioteca.")
-                biblioteca.update(novas_entradas_ok)
+            if novas_entradas:
+                logger.info(f"📚 Adicionando {len(novas_entradas)} novos produtos à biblioteca via motor de regras.")
+                biblioteca.update(novas_entradas)
 
-            if itens_suspeitos:
-                logger.info(f"🧠 Auditor detetou {len(itens_suspeitos)} anomalias no {nome_mercado}. Corrigindo com IA...")
-                
-                # Pega a resposta da IA e as novas entradas para a biblioteca
-                mapa_corrigido, novas_entradas = await classificar_taxonomia_com_ia_async(itens_suspeitos, biblioteca)
-                
-                # Atualiza a biblioteca em memória com as novas classificações
-                if novas_entradas:
-                    logger.info(f"📚 Adicionando {len(novas_entradas)} produtos corrigidos pela IA à biblioteca.")
-                    biblioteca.update(novas_entradas)
-                
-                if isinstance(mapa_corrigido, dict):
-                    for p in itens_suspeitos:
-                        correcao = mapa_corrigido.get(p['Produto'])
-                        if isinstance(correcao, dict):
-                            # Correção: As chaves no dicionário da biblioteca são capitalizadas.
-                            p['Categoria'] = correcao.get('Categoria', p['Categoria'])
-                            p['subcategoria'] = correcao.get('subcategoria', p['subcategoria'])
-                            p['tipo_produto'] = correcao.get('tipo_produto', p['tipo_produto'])
-                else:
-                    logger.error(f"⚠️ A IA devolveu um erro ou formato inválido. Mantendo as categorias originais.")
-
-            # Junta tudo (mesmo se a IA falhou, o programa continua)
-            lista_final = itens_ok + itens_suspeitos
-            salvar_dados_mercado(lista_final, nome_mercado)
-            resumo_geral[nome_mercado] = len(lista_final)
+            if produtos_validados:
+                salvar_dados_mercado(produtos_validados, nome_mercado)
+                resumo_geral[nome_mercado] = len(produtos_validados)
+            else:
+                logger.warning(f"⚠️ {nome_mercado}: Nenhum produto válido após a limpeza.")
             
         except Exception as e:
             logger.error(f"❌ Erro no scraper {nome_mercado}: {e}")
@@ -227,7 +205,7 @@ async def main():
             if not produtos_brutos: continue
 
             # Para folhetos, a IA já processou os dados, fazemos apenas a limpeza final
-            produtos_validados = validar_e_limpar_produtos(produtos_brutos, logger)
+            produtos_validados = validar_e_limpar_produtos(produtos_brutos, logger, biblioteca)
             salvar_dados_mercado(produtos_validados, nome_mercado)
             resumo_geral[nome_mercado] = len(produtos_validados)
             

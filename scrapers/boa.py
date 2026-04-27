@@ -8,7 +8,6 @@ from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
 from utils import (
-    aplicar_taxonomia_inteligente,
     extrair_medidas_inteligente, 
     setup_logging, 
     read_json_file, 
@@ -159,8 +158,11 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 
                 if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                 
-                cat_site_mapeada = MAPA_PARA_APP.get(cat_site_cru, formatar_nome_categoria(cat_site_cru))
-                categoria, subcategoria, tipo_produto = aplicar_taxonomia_inteligente(nome_cru, cat_site_mapeada, subcategoria_cru, tipo_prod_cru)
+                # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
+                # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
+                categoria = cat_site_cru
+                subcategoria = subcategoria_cru
+                tipo_produto = tipo_prod_cru
 
                 # Medidas e Imagem #
                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)

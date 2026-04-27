@@ -71,9 +71,12 @@ def criar_entrada_biblioteca(p_info):
     nome_produto = p_info.get("Produto", "")
     ean = p_info.get("EAN", "N/A")
     
-    chave_id = ean if ean and ean != "N/A" else normalizar_para_cache(nome_produto)
-    if not chave_id: return None, None # Não pode criar entrada sem chave
+    # REGRA DE NEGÓCIO: A biblioteca só deve ser populada com itens que possuem um EAN válido.
+    # Se não houver EAN, não criamos uma entrada. A chave da biblioteca é sempre o EAN.
+    if not ean or ean == "N/A" or not ean.isdigit() or len(ean) < 12:
+        return None, None
 
+    chave_id = ean
     marca = p_info.get("Marca", "")
     categoria = p_info.get("Categoria", "OUTROS")
     
@@ -95,25 +98,137 @@ def criar_entrada_biblioteca(p_info):
     return chave_id, entrada
 
 # =======================================================================
-# AUDITOR DE ANOMALIAS (Identifica bizarrices para mandar pra IA)
+# NOVO MOTOR DE TAXONOMIA GRABIT (HIERÁRQUICO)
 # =======================================================================
-def auditar_anomalias_categoria(nome, categoria, subcategoria):
-    n, c, s = str(nome).upper(), str(categoria).upper(), str(subcategoria).upper()
-    
-    # Lista de bizarrices que disparam a necessidade de IA
-    if "LÁCTEOS" in s and c == "CONGELADOS E PRATOS PRONTOS": return True
-    if any(x in n for x in ["WHEY", "YOPRO", "BEBIDA LÁCTEA"]) and c == "CONGELADOS E PRATOS PRONTOS": return True
-    if "BEBIDA" in s and c == "MERCEARIA E DESPENSA": return True
-    if "LIMPEZA" in c and any(x in n for x in ["ARROZ", "FEIJÃO", "CARNE", "LEITE"]): return True
-    if "AÇOUGUE" in c and any(x in n for x in ["SHAMPOO", "SABÃO", "DETERGENTE"]): return True
-    
-    return False
 
-# =======================================================================
-# TAXONOMIA INTELIGENTE 2.0 (Filtros Atacadão)
-# =======================================================================
-def aplicar_taxonomia_inteligente(nome_produto, cat_site, sub_site, tipo_site):
+# Categorias Master Válidas (usar um set para performance)
+CATEGORIAS_MASTER = {
+    "Açougue e Peixaria", "Bebidas", "Bebidas Alcoólicas", "Congelados e Pratos Prontos",
+    "Frios e Laticínios", "Higiene e Cuidado Pessoal", "Limpeza", "Mercearia e Despensa",
+    "Padaria e Confeitaria", "Hortifrúti", "Pet Shop", "Bebê e Infantil"
+}
+
+# NOVO: Âncoras de alta prioridade para resolver ambiguidades e forçar categorias.
+# Ex: "MISTURA BOLO" deve ser Mercearia, mesmo que contenha "QUEIJO".
+PRIORITY_ANCHOR_RULES = {
+    "Mercearia e Despensa": ["MISTURA PARA BOLO", "MISTURA BOLO"],
+    "Congelados e Pratos Prontos": ["SORVETE"],
+}
+
+# Dicionário de âncoras: palavras-chave que forçam uma categoria.
+ANCHOR_RULES = {
+    "Bebidas Alcoólicas": ["CERVEJA", "CHOPP", "VINHO", "VODKA", "GIN", "WHISKY", "CACHAÇA", "LICOR", "STELLA", "HEINEKEN", "BRAHMA", "SKOL", "AMSTEL", "CORONA"],
+    "Pet Shop": ["RAÇÃO", "PEDIGREE", "WHISKAS", "PURINA", "DOG CHOW", "CAT CHOW", "FRISKIES", "SACHÊ GATO", "SACHÊ CÃO"],
+    "Bebê e Infantil": ["FRALDA", "LENÇO UMEDECIDO", "POMADA PARA ASSADURA", "HASTES FLEXÍVEIS INFANT", "DANONINHO", "BATAVINHO"],
+    "Limpeza": ["SABÃO EM PÓ", "SABAO EM PO", "DETERGENTE", "AMACIANTE", "DESINFETANTE", "ÁGUA SANITÁRIA", "AGUA SANITARIA", "OMO", "TIXAN", "YPÊ", "VEJA", "CIF", "SACO DE LIXO"],
+    "Higiene e Cuidado Pessoal": ["SABONETE", "SHAMPOO", "CONDICIONADOR", "ABSORVENTE", "DESODORANTE", "EUDORA", "FRANCIS", "GILLETTE", "CREME DENTAL"],
+    "Frios e Laticínios": ["QUEIJO", "IOGURTE", "REQUEIJÃO", "PRESUNTO", "MORTADELA", "SALAME", "MARGARINA", "MANTEIGA", "YOPRO", "CREAM CHEESE", "RICOTA", "COTTAGE"],
+    "Açougue e Peixaria": ["CARNE", "FRANGO", "BIFE", "LINGUIÇA", "PEIXE", "CAMARÃO", "BACON"],
+    "Congelados e Pratos Prontos": ["PÃO DE QUEIJO", "LASANHA CONGELADA", "NUGGETS", "BATATA CONGELADA", "SORVETE", "AÇAÍ", "POLPA DE FRUTA"],
+    "Bebidas": ["SUCO", "REFRIGERANTE", "ÁGUA", "AGUA", "CHÁ", "CHA", "ENERGÉTICO", "COCA-COLA", "PEPSI", "GUARANÁ", "TODDYNHO", "NESCAU"],
+    "Mercearia e Despensa": ["ARROZ", "FEIJÃO", "MACARRÃO", "AÇÚCAR", "CAFÉ", "OLEO", "AZEITE", "FERMENTO", "MISTURA PARA BOLO", "FARINHA", "ATUM ENLATADO", "SARDINHA ENLATADA"],
+    "Padaria e Confeitaria": ["PÃO", "BOLO", "BISNAGUINHA", "PÃO DE ALHO"],
+    "Hortifrúti": ["CEBOLA", "BATATA", "ALFACE", "TOMATE", "MAÇÃ", "BANANA", "UVA", "OVO", "OVOS"],
+}
+
+# Guardas de Marca: se a marca for X, ela NUNCA pode estar na categoria Y.
+BRAND_GUARDS = {
+    "FLEISCHMANN": ["Limpeza"], "DR. OETKER": ["Limpeza"], "ROYAL": ["Limpeza"],
+    "YOKI": ["Limpeza", "Higiene e Cuidado Pessoal"], "NESTLÉ": ["Limpeza"],
+    "GAROTO": ["Limpeza"], "LACTA": ["Limpeza"],
+    "SADIA": ["Limpeza", "Higiene e Cuidado Pessoal"],
+    "PERDIGÃO": ["Limpeza", "Higiene e Cuidado Pessoal"],
+    "SEARA": ["Limpeza", "Higiene e Cuidado Pessoal"],
+}
+
+def normalizar_taxonomia_grabit(nome_produto, marca, categoria_mercado, ean, biblioteca):
+    """
+    Motor de categorização hierárquico para o GrabIt.
+    Prioriza a biblioteca, depois regras de negócio (âncoras, guardas) e por último a categoria do site.
+    """
+    nome_upper = str(nome_produto).upper()
+    marca_upper = str(marca).upper()
+    nome_completo = f"{nome_upper} {marca_upper}"
+
+    # 1. PRIORIDADE MÁXIMA: Biblioteca de Produtos (Fonte da Verdade)
+    # Se um item já está na nossa biblioteca, sua categoria é considerada correta e não deve ser alterada.
+    if ean and ean != "N/A" and ean in biblioteca:
+        entrada_lib = biblioteca[ean]
+        if entrada_lib.get("Categoria") in CATEGORIAS_MASTER:
+            return entrada_lib.get("Categoria"), entrada_lib.get("subcategoria", "N/A"), entrada_lib.get("tipo_produto", "N/A")
+
+    # --- Lógica de Decisão de Categoria ---
+    candidate_category = None
+
+    # 2. ÂNCORAS DE ALTA PRIORIDADE: Regras que se sobrepõem a todas as outras.
+    for categoria, keywords in PRIORITY_ANCHOR_RULES.items():
+        if any(keyword in nome_upper for keyword in keywords):
+            candidate_category = categoria
+            break
+
+    # 3. ÂNCORAS GERAIS: Regras de palavras-chave comuns.
+    if not candidate_category:
+        for categoria, keywords in ANCHOR_RULES.items():
+            if any(re.search(rf'\b{re.escape(keyword)}\b', nome_completo) for keyword in keywords):
+                candidate_category = categoria
+                break
+
+    # 4. FALLBACK PARA CATEGORIA DO MERCADO: Se nenhuma âncora correspondeu.
+    if not candidate_category:
+        candidate_category = MAPA_PARA_APP.get(str(categoria_mercado).upper(), formatar_nome_categoria(categoria_mercado))
+
+    # --- Lógica de Validação e Correção ---
+
+    # 5. GUARDAS DE MARCA (BRAND GUARDS): Valida a categoria candidata contra regras da marca.
+    if marca_upper in BRAND_GUARDS:
+        if candidate_category in BRAND_GUARDS[marca_upper]:
+            candidate_category = "Mercearia e Despensa" # Força para Mercearia se a regra for violada.
+
+    # 6. VALIDAÇÃO FINAL: Garante que a categoria final está na lista de masters.
+    if candidate_category not in CATEGORIAS_MASTER:
+        candidate_category = "Mercearia e Despensa" # Fallback final para a categoria mais segura.
+
+    return candidate_category, "Geral", "Geral" # Subcategoria e tipo são generalizados por enquanto.
+
+def aplicar_taxonomia_inteligente_legada(nome_produto, cat_site, sub_site, tipo_site):
     n = nome_produto.upper()
+ 
+    # REGRAS DE CORREÇÃO PRIORITÁRIA
+    # Higiene Pessoal que cai em Mercearia
+    if any(p in n for p in ["SABONETE", "SABONETE LÍQUIDO", "SABONETE LIQUIDO"]) and "DETERGENTE" not in n:
+        return "Higiene e Cuidado Pessoal", "Corpo", "Sabonete"
+    if any(p in n for p in ["CONDICIONADOR", "SHAMPOO", "MÁSCARA CAPILAR", "MASCARA CAPILAR", "EUDORA"]):
+        return "Higiene e Cuidado Pessoal", "Cabelos", "Tratamento Capilar"
+
+    # Itens de Cozinha (Fleischmann) que caem em Limpeza/Frios
+    if "FLEISCHMANN" in n and any(p in n for p in ["FERMENTO", "MISTURA"]):
+        if "PÃO DE QUEIJO" in n:
+            return "Mercearia e Despensa", "Farinhas e Preparos", "Mistura para Pão de Queijo"
+        return "Mercearia e Despensa", "Farinhas e Preparos", "Fermentos e Misturas para Bolo"
+
+    # Laticínios e Frios que caem em Mercearia
+    if any(p in n for p in ["REQUEIJÃO", "COTTAGE", "CREAM CHEESE", "RICOTA"]):
+        return "Frios e Laticínios", "Requeijão e Queijos Cremosos", "Queijo Cremoso"
+    if "MARGARINA" in n:
+        return "Frios e Laticínios", "Manteigas e Margarinas", "Margarina"
+    if "IOGURTE" in n or "BATAVINHO" in n or "DANONINHO" in n:
+        return "Frios e Laticínios", "Iogurtes", "Iogurte"
+    if "QUEIJO" in n and "PÃO DE QUEIJO" not in n:
+        return "Frios e Laticínios", "Queijos", "Queijo"
+
+    # Embutidos e Carnes que caem em Mercearia
+    if "LINGUIÇA" in n:
+        return "Açougue e Peixaria", "Carnes Suínas e Embutidos", "Linguiça"
+    if any(p in n for p in ["PRESUNTO", "MORTADELA", "SALAME", "PEITO DE PERU"]):
+        return "Frios e Laticínios", "Frios e Embutidos", "Frios"
+
+    # Sucos, Achocolatados e Energéticos
+    if "ACHOCOLATADO" in n or "TODDYNHO" in n or "NESCAU" in n:
+        return "Bebidas", "Achocolatados", "Achocolatado Pronto"
+    if "SUCO" in n and "REFRESCO" not in n and "SUCRILHOS" not in n:
+        return "Bebidas", "Sucos e Chás", "Suco Pronto"
+    if "ENERGÉTICO" in n or "RED BULL" in n or "MONSTER" in n:
+        return "Bebidas", "Energéticos", "Energético"
     
     # 1. CORREÇÃO DE BEBIDAS 
     if any(re.search(rf'\b{p}\b', n) for p in ["COCA-COLA", "COCA", "PEPSI", "GUARANÁ", "SPRITE", "FANTA", "ITUBAÍNA", "SCHIN", "SCHWEPPES"]):
@@ -190,8 +305,53 @@ def formatar_nome_categoria(texto: str) -> str:
 
 def extrair_medidas_inteligente(nome_produto):
     nome = str(nome_produto).upper()
-    match = re.search(r'(\d+(?:[\.,]\d+)?)\s*(G|KG|ML|L|LTS|UN|CAPS|FLS|POTS)\b', nome)
-    if match: return nome.replace(match.group(0), "").strip(), match.group(1).replace(',', '.'), match.group(2)
+    
+    # Encontra todos os possíveis padrões de medida na string
+    match_objects = list(re.finditer(r'(\d+(?:[.,]\d+)?)\s*(KG|L|LTS|ML|G|UN|CAPS|FLS|POTS)\b', nome))
+
+    if not match_objects:
+        return nome, "1", "UN"
+
+    # Filtra medidas que são provavelmente de conteúdo nutricional (ex: 15g de proteína)
+    filtered_matches = []
+    for m in match_objects:
+        context_after = nome[m.end():m.end() + 15]
+        if m.group(2) == 'G' and 'PROT' in context_after:
+            continue
+        filtered_matches.append(m)
+
+    # Se a filtragem removeu todos, reverte para a lista original para não perder uma medida potencial
+    if not filtered_matches:
+        filtered_matches = match_objects
+
+    # Define a prioridade das unidades: Volume > Peso > Unidades
+    priority = {'L': 6, 'LTS': 6, 'ML': 5, 'KG': 4, 'G': 3}
+    
+    best_match = None
+    best_priority = -1
+    
+    # Itera para encontrar a melhor correspondência com base na prioridade
+    for match in filtered_matches:
+        unit = match.group(2)
+        current_priority = priority.get(unit, 0) # Unidades como 'UN' terão prioridade 0
+        
+        # Uma prioridade maior sempre vence.
+        # Se a prioridade for a mesma, o que aparecer por último na string é escolhido.
+        if current_priority >= best_priority:
+            best_priority = current_priority
+            best_match = match
+    
+    if best_match:
+        value = best_match.group(1).replace(',', '.')
+        unit = best_match.group(2)
+        
+        # Remove a substring da melhor correspondência do nome do produto e limpa espaços duplos
+        cleaned_name = (nome[:best_match.start()] + nome[best_match.end():]).strip()
+        cleaned_name = re.sub(r'\s+', ' ', cleaned_name)
+        
+        return cleaned_name, value, unit
+
+    # Fallback caso algo dê errado
     return nome, "1", "UN"
 
 def otimizar_nome_produto(nome: str) -> str:
@@ -225,63 +385,66 @@ def validar_e_limpar_produtos(produtos, logger, biblioteca):
     if not produtos: return []
     produtos_validos = []
     placeholders_comuns = ['produto indisponível', 'item não encontrado', 'carregando...']
+    indice_reverso_nome = {normalizar_para_cache(item.get("nome_comum", "")): item for item in biblioteca.values()}
     
     for produto in produtos:
-        # --- ETAPA DE ENRIQUECIMENTO PELA BIBLIOTECA ---
-        # Antes de qualquer validação, tentamos enriquecer o produto com dados da biblioteca.
-        chave_ean = produto.get('EAN')
-        chave_nome = normalizar_para_cache(produto.get('Produto'))
-        
-        entrada_biblioteca = None
-        if chave_ean and chave_ean != "N/A" and chave_ean in biblioteca:
-            entrada_biblioteca = biblioteca[chave_ean]
-        elif chave_nome in biblioteca:
-            entrada_biblioteca = biblioteca[chave_nome]
-
-        if entrada_biblioteca:
-            # Preenche a imagem se estiver faltando no scraper atual
-            if not produto.get('Link_Imagem') or produto.get('Link_Imagem') == 'SEM IMAGEM':
-                produto['Link_Imagem'] = entrada_biblioteca.get('imagem', 'SEM IMAGEM')
-
-            # Preenche a marca se estiver faltando ou for genérica
-            if not produto.get('Marca') or produto.get('Marca') == 'OUTROS':
-                produto['Marca'] = entrada_biblioteca.get('marca', 'OUTROS')
-            
-            # Pré-aplica a taxonomia da biblioteca, que é a fonte mais confiável
-            produto['Categoria'] = entrada_biblioteca.get('Categoria', produto.get('Categoria'))
-            produto['subcategoria'] = entrada_biblioteca.get('subcategoria', produto.get('subcategoria'))
-            produto['tipo_produto'] = entrada_biblioteca.get('tipo_produto', produto.get('tipo_produto'))
-
-        nome_produto = str(produto.get("Produto", "")).strip()
-        nome_produto = remover_frases_duplicadas(otimizar_nome_produto(nome_produto))
-        marca = str(produto.get("Marca", "")).strip()
-        
-        # Proteção para nomes como "Água de Coco Quadrado"
-        if marca and marca.upper() != 'PRÓPRIA' and nome_produto.upper().endswith(marca.upper()):
-            nome_teste = nome_produto[:-len(marca)].strip(' -')
-            if not nome_teste.upper().endswith((' DE', ' COM', ' SEM', ' EM', ' E', ' PARA')) and len(nome_teste) > 3:
-                nome_produto = nome_teste
-
-        cat_site_crua = str(produto.get("Categoria", "")).upper()
-        if not cat_site_crua: cat_site_crua = "MERCEARIA"
-
-        cat_site = MAPA_PARA_APP.get(cat_site_crua, formatar_nome_categoria(cat_site_crua))
-        sub_site = formatar_nome_categoria(produto.get("subcategoria", ""))
-        tipo_site = formatar_nome_categoria(produto.get("tipo_produto", ""))
-
-        cat_nova, sub_nova, tipo_novo = aplicar_taxonomia_inteligente(nome_produto, cat_site, sub_site, tipo_site)
-
-        produto["Categoria"], produto["subcategoria"], produto["tipo_produto"] = cat_nova, sub_nova, tipo_novo
-        
-        # Auditoria Automática
-        produto["PRECISA_DE_IA"] = auditar_anomalias_categoria(nome_produto, cat_nova, sub_nova)
-
+        # Validação básica de preço
         preco_atacado_str = produto.get("Preço Atacado", "")
-        if not nome_produto or nome_produto.lower() in placeholders_comuns or clean_price_string(preco_atacado_str) <= 0:
+        if clean_price_string(preco_atacado_str) <= 0:
             continue
+
+        ean = produto.get('EAN', 'N/A')
+
+        # --- POLÍTICA "BIBLIOTECA PRIMEIRO" ---
+        if ean and ean != "N/A" and ean in biblioteca:
+            entrada_biblioteca = biblioteca[ean]
             
-        produto['Produto'] = nome_produto
+            # Usa dados da biblioteca para identidade e taxonomia, e dados do scraper para preço.
+            produto_atualizado = {
+                "Mercado": produto.get("Mercado"),
+                "EAN": ean,
+                "Categoria": entrada_biblioteca.get("Categoria", "OUTROS"),
+                "subcategoria": entrada_biblioteca.get("subcategoria", "N/A"),
+                "tipo_produto": entrada_biblioteca.get("tipo_produto", "N/A"),
+                "Produto": entrada_biblioteca.get("nome_comum", produto.get("Produto")),
+                "Marca": entrada_biblioteca.get("marca", produto.get("Marca")),
+                "Link_Imagem": entrada_biblioteca.get("imagem", produto.get("Link_Imagem")),
+                
+                # Dados atualizados do scraper
+                "Preço Varejo": produto.get("Preço Varejo"),
+                "Preço Atacado": produto.get("Preço Atacado"),
+                "Condição": produto.get("Condição"),
+                "Data_Hora": produto.get("Data_Hora"),
+                
+                # Medidas são parte da identidade, mas pegamos do scraper para garantir consistência com o preço
+                "Qtd_Valor": produto.get("Qtd_Valor"),
+                "Medida": produto.get("Medida"),
+                "Unidade": produto.get("Unidade"),
+            }
+            produtos_validos.append(produto_atualizado)
+            continue # Produto processado, pular para o próximo
+
+        # --- PRODUTO NOVO (NÃO ESTÁ NA BIBLIOTECA) ---
+        # ETAPA 1: Otimização e Limpeza do Nome
+        nome_bruto = str(produto.get("Produto", "")).strip()
+        if not nome_bruto or nome_bruto.lower() in placeholders_comuns:
+            continue
+        nome_otimizado = remover_frases_duplicadas(otimizar_nome_produto(nome_bruto))
+        produto['Produto'] = nome_otimizado
+
+        # ETAPA 2: Normalização da Taxonomia com o motor de regras
+        cat_nova, sub_nova, tipo_novo = normalizar_taxonomia_grabit(
+            nome_produto=nome_otimizado,
+            marca=produto.get("Marca", ""),
+            categoria_mercado=produto.get("Categoria", ""),
+            ean=ean,
+            biblioteca=biblioteca # Passa a biblioteca para o caso de EAN não estar na chave primária
+        )
+        produto["Categoria"], produto["subcategoria"], produto["tipo_produto"] = cat_nova, sub_nova, tipo_novo
+        produto["PRECISA_DE_IA"] = False
+
+        # ETAPA 3: Finalização e adição à lista
         produtos_validos.append(produto)
 
-    logger.info(f"✅ Validação concluída: {len(produtos_validos)} produtos processados.")
+    logger.info(f"✅ Validação GrabIt concluída: {len(produtos_validos)} produtos processados com nova taxonomia.")
     return produtos_validos
