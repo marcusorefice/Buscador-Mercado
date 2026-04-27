@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
-from curl_cffi import requests
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
+from curl_cffi.requests import AsyncSession
+from utils import extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
 
 logger = setup_logging()
 
@@ -26,7 +26,7 @@ TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome110")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-def obter_precos_simulados(session, skus, cep="13211745", qtd=3):
+async def obter_precos_simulados(session, skus, cep="13211745", qtd=3):
     """Simula um carrinho com `qtd` unidades para descobrir descontos (Clube ou Leve + Pague -)."""
     if not skus:
         return {}
@@ -40,7 +40,7 @@ def obter_precos_simulados(session, skus, cep="13211745", qtd=3):
     }
 
     try:
-        res = session.post(url_simulacao, json=payload, timeout=30)
+        res = await session.post(url_simulacao, json=payload, timeout=30)
         if res.status_code == 200:
             dados = res.json()
             resultado = {}
@@ -60,7 +60,7 @@ def obter_precos_simulados(session, skus, cep="13211745", qtd=3):
     
     return {}
 
-def extrair_dados():
+async def extrair_dados():
     """Motor de extração para o Covabra."""
     logger.info(f"🚀 Iniciando extração para {NOME_MERCADO} Jundiaí...")
     lista_final = []
@@ -71,7 +71,7 @@ def extrair_dados():
         "Accept": "application/json"
     }
 
-    with requests.Session(impersonate=IMPERSONATE) as s:
+    async with AsyncSession(impersonate=IMPERSONATE) as s:
         for cluster in CLUSTERS_ALVO:
             logger.info(f"🎯 Rastreador {NOME_MERCADO} focado no Cluster: {cluster}")
             pagina = 0
@@ -80,7 +80,7 @@ def extrair_dados():
                     _from = pagina * PAGE_SIZE
                     _to = _from + PAGE_SIZE - 1
                     url_final = f"{URL_BASE}?fq=productClusterIds:{cluster}&_from={_from}&_to={_to}"
-                    response = s.get(url_final, headers=headers, timeout=30)
+                    response = await s.get(url_final, headers=headers, timeout=30)
                     
                     if response.status_code not in [200, 206]:
                         break
@@ -97,7 +97,7 @@ def extrair_dados():
                             if sku: skus_pagina.append(str(sku))
                         except: pass
                     
-                    dados_simulacao = obter_precos_simulados(s, skus_pagina, qtd=3)
+                    dados_simulacao = await obter_precos_simulados(s, skus_pagina, qtd=3)
 
                     for p in produtos_raw:
                         try:
@@ -106,22 +106,24 @@ def extrair_dados():
 
                             # --- NOVA LÓGICA DE TAXONOMIA ---
                             categorias_vtex = p.get('categories', [])
-                            cat_site = ""
-                            subcategoria = "N/A"
-                            tipo_produto = "N/A"
+                            cat_site_cru = ""
+                            subcategoria_cru = "N/A"
+                            tipo_produto_cru = "N/A"
 
                             if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
                                 partes_cat = categorias_vtex[0].strip('/').split('/')
-                                if len(partes_cat) > 0: cat_site = partes_cat[0].upper()
-                                if len(partes_cat) > 1: subcategoria = formatar_nome_categoria(partes_cat[1])
-                                if len(partes_cat) > 2: tipo_produto = formatar_nome_categoria(partes_cat[2])
+                                if len(partes_cat) > 0: cat_site_cru = partes_cat[0].upper()
+                                if len(partes_cat) > 1: subcategoria_cru = formatar_nome_categoria(partes_cat[1])
+                                if len(partes_cat) > 2: tipo_produto_cru = formatar_nome_categoria(partes_cat[2])
                             
-                            if cat_site in CATEGORIAS_IGNORADAS:
+                            if cat_site_cru in CATEGORIAS_IGNORADAS:
                                 continue
 
-                            # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
-                            full_context = f"{nome_original} {cat_site} {subcategoria} {tipo_produto}"
-                            categoria = padronizar_categoria(full_context, cat_site)
+                            # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
+                            # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
+                            categoria = cat_site_cru
+                            subcategoria = subcategoria_cru
+                            tipo_produto = tipo_produto_cru
                             
                             nome_limpo, qv, med = extrair_medidas_inteligente(nome_original)
 
