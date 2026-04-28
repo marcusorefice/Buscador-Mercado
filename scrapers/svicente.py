@@ -152,56 +152,78 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
             if not data_pagina: continue
             
             produtos_json = data_pagina.get('productsSearchResult', [])
+            
+            # 1. Identificar todos os produtos que precisam de busca extra na PDP para o EAN
+            pdp_tasks = []
+            produtos_para_processar = []
+            
             for p in produtos_json:
+                nome_bruto = p.get('productName', p.get('name', '')).upper().strip()
+                if not nome_bruto: continue
+                
+                # --- Metadados e Limpeza (IMG URL PRIMEIRO PARA EAN) ---
+                img_url = ""
+                imgs = p.get('images', {})
+                for size in ['medium', 'large', 'small']:
+                    if size in imgs and imgs[size]:
+                        img_url = imgs[size][0].get('url', "")
+                        if img_url.startswith('/'): img_url = f"{BASE_URL_CONFIG}{img_url}"
+                        break
+
+                # Lógica de EAN/GTIN aprimorada para buscar em múltiplos campos
+                ean = ""
+                ean = str(p.get('gtin', '')).strip()
+                if not ean or len(ean) < 12: ean = str(p.get('ean', '')).strip()
+                if not ean or len(ean) < 12:
+                    sku = str(p.get('id', '')).strip()
+                    if len(sku) == 13 and sku.isdigit(): ean = sku
+                if not ean or len(ean) < 12:
+                    custom_attrs = p.get('customAttributes', {})
+                    if isinstance(custom_attrs, dict):
+                        ean_from_attr = custom_attrs.get('ean', '') or custom_attrs.get('gtin', '')
+                        if ean_from_attr: ean = str(ean_from_attr).strip()
+                if (not ean or len(ean) < 12) and img_url:
+                    ean_from_img = extrair_ean_pela_foto(img_url)
+                    if ean_from_img: ean = ean_from_img
+                
+                # Se ainda não temos EAN, vamos precisar da PDP
+                precisa_pdp = not ean or len(ean) < 12
+                if precisa_pdp:
+                    # Registra a tarefa para buscar na PDP
+                    pdp_tasks.append(fetch_ean_from_product_page(session, p.get('id')))
+                
+                produtos_para_processar.append({
+                    "raw_data": p,
+                    "nome_bruto": nome_bruto,
+                    "img_url": img_url,
+                    "ean_preliminar": ean,
+                    "precisa_pdp": precisa_pdp
+                })
+            
+            # 2. Executa as buscas na PDP em paralelo
+            resultados_pdp = []
+            if pdp_tasks:
+                logger.info(f"   ⚡ [S. Vicente] Buscando EAN na PDP para {len(pdp_tasks)} produtos em paralelo...")
+                resultados_pdp = await asyncio.gather(*pdp_tasks)
+            
+            # 3. Processa e finaliza os dados
+            pdp_index = 0
+            for item in produtos_para_processar:
+                p = item["raw_data"]
+                nome_bruto = item["nome_bruto"]
+                img_url = item["img_url"]
+                ean = item["ean_preliminar"]
+                
+                if item["precisa_pdp"]:
+                    ean_from_page = resultados_pdp[pdp_index]
+                    pdp_index += 1
+                    if ean_from_page:
+                        ean = ean_from_page
+                
+                if not ean or len(ean) < 12:
+                    ean = "N/A"
+
                 try:
-                    nome_bruto = p.get('productName', p.get('name', '')).upper().strip()
-                    if not nome_bruto: continue
-
-                    # --- Metadados e Limpeza (IMG URL PRIMEIRO PARA EAN) ---
-                    img_url = ""
-                    imgs = p.get('images', {})
-                    for size in ['medium', 'large', 'small']:
-                        if size in imgs and imgs[size]:
-                            img_url = imgs[size][0].get('url', "")
-                            if img_url.startswith('/'): img_url = f"{BASE_URL_CONFIG}{img_url}"
-                            break
-
-                    # Lógica de EAN/GTIN aprimorada para buscar em múltiplos campos
-                    ean = ""
-                    # 1. Tenta o campo 'gtin' (padrão mais moderno)
-                    ean = str(p.get('gtin', '')).strip()
-                    # 2. Tenta o campo 'ean'
-                    if not ean or len(ean) < 12:
-                        ean = str(p.get('ean', '')).strip()
-                    # 3. Tenta o campo 'id' (usado como SKU no Demandware) se tiver 13 dígitos
-                    if not ean or len(ean) < 12:
-                        sku = str(p.get('id', '')).strip()
-                        if len(sku) == 13 and sku.isdigit():
-                            ean = sku
-                    # 4. Tenta o campo 'customAttributes'
-                    if not ean or len(ean) < 12:
-                        custom_attrs = p.get('customAttributes', {})
-                        if isinstance(custom_attrs, dict):
-                            ean_from_attr = custom_attrs.get('ean', '') or custom_attrs.get('gtin', '')
-                            if ean_from_attr:
-                                ean = str(ean_from_attr).strip()
-                    # 5. Tenta extrair da URL da imagem
-                    if (not ean or len(ean) < 12) and img_url:
-                        ean_from_img = extrair_ean_pela_foto(img_url)
-                        if ean_from_img:
-                            ean = ean_from_img
-                    # 6. NOVO: Tenta buscar na página do produto como último recurso
-                    if (not ean or len(ean) < 12):
-                        # O endpoint Product-Variation é da VTEX. Para o S. Vicente (Demandware), usamos Product-Show.
-                        # Esta chamada extra garante que não percamos EANs de itens industrializados.
-                        logger.info(f"   🔍 [S. Vicente] Buscando EAN na PDP para: {nome_bruto[:40]}...")
-                        ean_from_page = await fetch_ean_from_product_page(session, p.get('id'))
-                        if ean_from_page:
-                            ean = ean_from_page
-                    # 7. Define o valor final como 'N/A' se nada for encontrado
-                    if not ean or len(ean) < 12:
-                        ean = "N/A"
-
                     # --- PREÇOS PADRÃO ---
                     price_data = p.get('price', {})
                     p_venda = float(price_data.get('sales', {}).get('value', 0))
@@ -214,16 +236,20 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
 
                     flags = p.get('flagtypes', [])
                     for f in flags:
-                        if f.get('flagType') == "facil-pra-voce":
+                        flag_type = f.get('flagType')
+                        if flag_type in ["facil-pra-voce", "facil-pra-pagar"]:
                             raw_val = f.get('valueFlagType', "")
+                            nome_condicao = "CARTÃO FÁCIL" if flag_type == "facil-pra-pagar" else "CLUBE SV"
                             if raw_val:
                                 try:
                                     p_clube = float(raw_val.replace('R$', '').replace('.', '').replace(',', '.').strip())
                                     valor_varejo = p_venda
                                     valor_atacado = p_clube
-                                    condicao = "CLUBE SV"
+                                    condicao = nome_condicao
                                 except:
-                                    condicao = "CLUBE SV"
+                                    condicao = nome_condicao
+                            else:
+                                condicao = nome_condicao
 
                     # Checa promoções de quantidade (Leve Mais)
                     if condicao == "1 UN":

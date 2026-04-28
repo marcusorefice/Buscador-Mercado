@@ -131,6 +131,30 @@ def salvar_dados_mercado(produtos, nome_mercado):
 # PROCESSO PRINCIPAL (ORQUESTRADOR)
 # ==========================================
 
+async def processar_mercado(modulo, nome_mercado, biblioteca):
+    try:
+        logger.info(f"🛒 Processando: {nome_mercado}")
+        produtos_brutos = await modulo.extrair_dados()
+        
+        if not produtos_brutos:
+            logger.warning(f"⚠️ {nome_mercado}: Nenhuma oferta capturada.")
+            return nome_mercado, None, None
+
+        produtos_validados = validar_e_limpar_produtos(produtos_brutos, logger, biblioteca)
+
+        novas_entradas = {}
+        for p_validado in produtos_validados:
+            ean_produto = p_validado.get("EAN", "N/A")
+            if ean_produto != "N/A": 
+                chave, entrada = criar_entrada_biblioteca(p_validado)
+                if chave and chave not in biblioteca:
+                    novas_entradas[chave] = entrada
+
+        return nome_mercado, produtos_validados, novas_entradas
+    except Exception as e:
+        logger.error(f"❌ Erro no scraper {nome_mercado}: {e}")
+        return nome_mercado, None, None
+
 async def main():
     logger.info(f"🚀 INICIANDO ORQUESTRADOR - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     biblioteca = carregar_biblioteca()
@@ -151,41 +175,24 @@ async def main():
     ]
 
     logger.info("\n=== ETAPA 1: COLETANDO DADOS ESTRUTURADOS (API) ===")
-    for modulo, nome_mercado in scrapers_api:
-        try:
-            logger.info(f"🛒 Processando: {nome_mercado}")
-            produtos_brutos = await modulo.extrair_dados()
+    
+    # Executa todos os scrapers de API em paralelo
+    tarefas_api = [processar_mercado(modulo, nome_mercado, biblioteca) for modulo, nome_mercado in scrapers_api]
+    resultados_api = await asyncio.gather(*tarefas_api)
+    
+    for nome_mercado, produtos_validados, novas_entradas in resultados_api:
+        if produtos_validados is None:
+            continue
             
-            if not produtos_brutos:
-                logger.warning(f"⚠️ {nome_mercado}: Nenhuma oferta capturada."); continue
+        if novas_entradas:
+            logger.info(f"📚 {nome_mercado}: Adicionando {len(novas_entradas)} novos produtos à biblioteca via motor de regras.")
+            biblioteca.update(novas_entradas)
 
-            # Limpeza, Enriquecimento e Aplicação do Novo Motor de Taxonomia
-            produtos_validados = validar_e_limpar_produtos(produtos_brutos, logger, biblioteca)
-
-            # Com o novo motor, todos os produtos já saem com a melhor taxonomia possível.
-            # A IA não é mais necessária para corrigir dados de API.
-            # Adicionamos todos os produtos validados à biblioteca e salvamos.
-            novas_entradas = {}
-            for p_validado in produtos_validados:
-                # A pedido, só salvamos na biblioteca itens que tenham um EAN válido.
-                ean_produto = p_validado.get("EAN", "N/A")
-                if ean_produto != "N/A": # A validação no scraper já garante que se não for N/A, é válido.
-                    chave, entrada = criar_entrada_biblioteca(p_validado)
-                    if chave and chave not in biblioteca:
-                        novas_entradas[chave] = entrada
-
-            if novas_entradas:
-                logger.info(f"📚 Adicionando {len(novas_entradas)} novos produtos à biblioteca via motor de regras.")
-                biblioteca.update(novas_entradas)
-
-            if produtos_validados:
-                salvar_dados_mercado(produtos_validados, nome_mercado)
-                resumo_geral[nome_mercado] = len(produtos_validados)
-            else:
-                logger.warning(f"⚠️ {nome_mercado}: Nenhum produto válido após a limpeza.")
-            
-        except Exception as e:
-            logger.error(f"❌ Erro no scraper {nome_mercado}: {e}")
+        if produtos_validados:
+            salvar_dados_mercado(produtos_validados, nome_mercado)
+            resumo_geral[nome_mercado] = len(produtos_validados)
+        else:
+            logger.warning(f"⚠️ {nome_mercado}: Nenhum produto válido após a limpeza.")
 
     # ---------------------------------------------------------
     # ETAPA 2: MERCADOS QUE DEPENDEM DE IA (FOLHETOS / IMAGENS)

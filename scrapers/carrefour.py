@@ -196,7 +196,7 @@ async def extrair_dados():
     async with requests.AsyncSession(impersonate="chrome124", cookies=cookies) as session:
         tarefas = []
         for ordem in ["price_asc", "price_desc"]:
-            for pg in range(1, 11): # Varre 10 páginas de cada lado (1000 produtos)
+            for pg in range(1, 35): # Varre 34 páginas de cada lado (1700 produtos por ordem, cobrindo os 2664 totais)
                 tarefas.append(extrair_lote(session, ordem, pg, sem, agora, indice_reverso))
         
         resultados = await asyncio.gather(*tarefas)

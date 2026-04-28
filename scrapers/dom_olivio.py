@@ -51,8 +51,8 @@ PAGE_SEMAPHORE = asyncio.Semaphore(2)
 API_SEMAPHORE = asyncio.Semaphore(5)
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 
-async def _buscar_preco_calculado(session: AsyncSession, product_id: str) -> tuple[float, float]:
-    """Consulta o preço real (incluindo descontos de cartão/clube) via Hash"""
+async def _buscar_preco_calculado(session: AsyncSession, product_id: str) -> tuple[float, float, str]:
+    """Consulta o preço real (incluindo descontos de cartão/clube) e GTIN/EAN via Hash"""
     async with API_SEMAPHORE:
         variables = {
             "locator": [
@@ -74,20 +74,30 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str) -> tup
             data = res.json()
             if not isinstance(data, dict):
                 logger.warning(f"Resposta inesperada (não é um dict) para o produto ID {product_id}.")
-                return 0.0, 0.0
+                return 0.0, 0.0, 'N/A'
             
             p_data = data.get('data', {}).get('product', {})
+            
+            # Extração do GTIN/EAN, que só está disponível na chamada detalhada na VTEX FastStore
+            ean = str(p_data.get('gtin', '')).strip()
+            if not ean or ean == '0' or ean == 'None':
+                ean = str(p_data.get('ean', '')).strip()
+            if not ean or ean == '0' or ean == 'None':
+                ean = 'N/A'
+                
             offers = p_data.get('offers', {})
             if offers:
                 list_price = float(offers.get('offers', [{}])[0].get('listPrice', 0.0))
                 price = float(offers.get('lowPrice', 0.0))
-                return list_price, price
+                return list_price, price, ean
+                
+            return 0.0, 0.0, ean
         except (asyncio.TimeoutError, json.JSONDecodeError, curl_cffi.requests.errors.RequestsError) as e:
             logger.error(f"Erro ao buscar preço detalhado para ID {product_id}: {e}")
         except Exception as e:
             logger.error(f"Erro inesperado ao buscar preço detalhado para ID {product_id}: {e}", exc_info=True)
 
-        return 0.0, 0.0
+        return 0.0, 0.0, 'N/A'
 
 async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
     """Extrai vitrine e preços de uma página específica"""
@@ -134,11 +144,24 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                 parts = [part for part in path_str.split('/') if part]
                 return parts[-1] if parts else ""
 
-            for edge, (v_varejo, v_atacado) in zip(edges, precos_finais):
+            for edge, (v_varejo, v_atacado, ean_detalhado) in zip(edges, precos_finais):
                 try:
                     p = edge['node']
                     nome_cru = p['name'].upper().strip()
-                    ean = str(p.get('ean', 'N/A')).strip()
+                    
+                    # Prioriza o EAN/GTIN da chamada detalhada, pois é mais confiável na VTEX FastStore.
+                    if ean_detalhado and ean_detalhado not in ['N/A', '', 'None']:
+                        ean = ean_detalhado
+                    else:
+                        ean = str(p.get('gtin', '')).strip()
+                        if not ean or ean == 'None':
+                            ean = str(p.get('ean', '')).strip()
+                        if not ean or ean == 'None':
+                            ean = str(p.get('sku', '')).strip()
+                        if not ean or ean == 'None':
+                            ean = str(p.get('id', '')).strip()
+                        if not ean or ean == 'None':
+                            ean = 'N/A'
                     
                     p_v = v_varejo if v_varejo > 0 else float(p.get('offers', {}).get('highPrice', 0.0))
                     p_a = v_atacado if v_atacado > 0 else float(p.get('offers', {}).get('lowPrice', p_v))
