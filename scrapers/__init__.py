@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Adiciona o diretório raiz do projeto ao sys.path para permitir importações de módulos como 'utils'.
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from scrapers.base_scraper import BaseScraper
 from scrapers.boa import extrair_dados as BoaScraper
 from scrapers.atacadao import extrair_dados as AtacadaoScraper

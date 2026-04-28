@@ -90,8 +90,18 @@ async def motor_extracao_oba():
                         items = p.get('items', [])
                         if not items: continue
                         sku = items[0]
-                        ean = str(sku.get('ean', 'N/A')).strip()
                         
+                        # --- LÓGICA DE EAN/GTIN ROBUSTA (do @teste.py) ---
+                        # Prioriza 'gtin', depois 'ean' como fallback.
+                        codigo_bruto = str(sku.get('gtin', '')).strip() or str(sku.get('ean', '')).strip()
+                        
+                        # Validação rigorosa: deve ser numérico e ter 12 (UPC-A) ou 13 (EAN-13) dígitos.
+                        # Itens com código inválido terão EAN="N/A", mas ainda serão salvos.
+                        if codigo_bruto.isdigit() and len(codigo_bruto) in [12, 13]:
+                            ean = codigo_bruto
+                        else:
+                            ean = "N/A"
+
                         sellers = sku.get('sellers', [])
                         if not sellers: continue
                         
@@ -101,6 +111,8 @@ async def motor_extracao_oba():
 
                         if p_venda <= 0: continue
                         if p_varejo < p_venda: p_varejo = p_venda
+
+                        marca = p.get('brand', 'PRÓPRIA').upper()
 
                         # --- NOVA LÓGICA DE TAXONOMIA ---
                         categorias_vtex = p.get('categories', [])
@@ -120,7 +132,7 @@ async def motor_extracao_oba():
                         # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
                         full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
                         categoria = padronizar_categoria(full_context, cat_site)
-                        
+
                         # --- LÓGICA DE FILTRAGEM DE CONDIÇÕES ---
                         condicoes_uteis = []
                         
@@ -169,12 +181,12 @@ async def motor_extracao_oba():
 
                         # Imagem e Unidade
                         img_url = sku.get('images', [{}])[0].get('imageUrl', '')
-                        marca = p.get('brand', 'PRÓPRIA').upper()
-                        unid_raw = str(sku.get('measurementUnit', 'UN')).upper()
-                        unidade_venda = "KG" if "KG" in unid_raw else "UN"
                         
                         nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
                         
+                        # A unidade de venda será definida com base na medida extraída, e refinada no motor de validação.
+                        unidade_venda = "KG" if med == "KG" else "UN"
+
                         lista_final.append({
                             "Mercado": NOME_MERCADO,
                             "EAN": ean,

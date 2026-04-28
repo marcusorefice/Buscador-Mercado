@@ -70,7 +70,7 @@ async def motor_extracao_atacadao():
                 "sort": "score_desc", 
                 "term": "",
                 "selectedFacets": [
-                    {"key": "productClusterIds", "value": CLUSTER_OFERTAS},                    
+                    {"key": "productClusterIds", "value": CLUSTER_OFERTAS},
                     {"key": "channel", "value": f'{{"salesChannel":"1","seller":"{SELLER_ID}","regionId":"{REGION_ID}"}}'},
                     {"key": "locale", "value": "pt-BR"}
                 ]

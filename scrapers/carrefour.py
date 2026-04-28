@@ -107,6 +107,9 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
 
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
+                    # Pega o link da página do produto (PDP)
+                    link_pdp = item.get('link', '')
+
                     lote.append({
                         "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": "GERAL",
                         "Produto": nome_limpo, "Marca": str(item.get('brand', 'OUTROS')).upper(),
@@ -114,11 +117,70 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
                         "Qtd_Valor": qv, "Medida": med, "Unidade": "UN",
                         "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN", 
-                        "Data_Hora": agora, "Link_Imagem": link_foto
+                        "Data_Hora": agora, "Link_Imagem": link_foto,
+                        "Link_PDP": link_pdp
                     })
                 except: continue
             return lote
         except: return []
+
+async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
+    """Busca o EAN no HTML da página de detalhes do produto do Carrefour"""
+    if not url_pdp: return "N/A"
+    
+    if not url_pdp.startswith('http'):
+        url_pdp = f"{BASE_URL_CONFIG}{url_pdp}"
+        
+    async with sem_pdp:
+        try:
+            res = await session.get(url_pdp, timeout=20)
+            if res.status_code == 200:
+                html = res.text
+                # 1. Tenta padrão explícito (gtin, ean, sku com 13 digitos)
+                match = re.search(r'(?:gtin\d*|ean|sku)["\s:]+["\s]*(\d{13})', html, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+                
+                # 2. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790
+                match_any = re.search(r'(789\d{10}|790\d{10})', html)
+                if match_any:
+                    return match_any.group(1)
+        except:
+            pass
+    return "N/A"
+
+async def enrich_eans_from_pdps(session, lista_produtos):
+    """Enriquece produtos sem EAN buscando na página do produto (PDP)"""
+    sem_pdp = asyncio.Semaphore(15) # Concorrência para PDP
+    
+    produtos_sem_ean = [p for p in lista_produtos if not p.get('EAN') or p.get('EAN') == 'N/A']
+    if not produtos_sem_ean: return
+    
+    total_pdps = len(produtos_sem_ean)
+    logger.info(f"   🔍 Buscando EAN em {total_pdps} páginas de produtos...")
+    
+    contador = 0
+    async def fetch_and_log(p):
+        nonlocal contador
+        ean = await fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp)
+        contador += 1
+        if contador % 10 == 0 or contador == total_pdps:
+            logger.info(f"   ⏳ [Carrefour] Progresso PDPs: {contador}/{total_pdps} processados...")
+        return ean
+
+    # Criar lista de tasks mantendo a referência do produto
+    tasks = [fetch_and_log(p) for p in produtos_sem_ean]
+        
+    resultados = await asyncio.gather(*tasks)
+    
+    # Atualiza os EANs encontrados
+    for p, ean in zip(produtos_sem_ean, resultados):
+        if ean != 'N/A':
+            p['EAN'] = ean
+            
+    # Limpa campo temporário
+    for p in lista_produtos:
+        p.pop('Link_PDP', None)
 
 async def extrair_dados():
     cookies = await capturar_sessao()
@@ -140,8 +202,12 @@ async def extrair_dados():
         resultados = await asyncio.gather(*tarefas)
         for r in resultados:
             if r: lista_final.extend(r)
+            
+        # Remove duplicados por nome para a planilha final
+        lista_unica = list({v['Produto']: v for v in lista_final}.values())
+        
+        # Enriquecimento (Fallback final)
+        await enrich_eans_from_pdps(session, lista_unica)
 
-    # Remove duplicados por nome para a planilha final
-    lista_unica = list({v['Produto']: v for v in lista_final}.values())
     logger.info(f"✅ Sucesso! {len(lista_unica)} produtos coletados para o GrabIt.")
     return lista_unica

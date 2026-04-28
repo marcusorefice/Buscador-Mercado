@@ -57,6 +57,54 @@ MAPA_PARA_APP = {
     "N/A": "Mercearia e Despensa"
 }
 
+# NOVO: Mapa de categorias específico para o Covabra
+MAPA_DEPARTAMENTOS_COVABRA = {
+    'BEBIDAS NÃO ALCOÓLICAS': 'Bebidas',
+    'CARNES': 'Açougue e Peixaria',
+    'HIGIENE E BELEZA': 'Higiene e Cuidado Pessoal',
+    'LIMPEZA': 'Limpeza',
+    'MERCEARIA': 'Mercearia e Despensa',
+    'HORTIFRUTI': 'Hortifrúti',
+    'FRIOS E LATICINIOS': 'Frios e Laticínios',
+    'CONGELADOS': 'Congelados e Pratos Prontos'
+}
+
+MAPA_DE_PARA_SUBCATEGORIAS = {
+    # Agrupando variações de Temperos
+    "Temperos": "Temperos e Condimentos",
+    "Temperos & Condimentos": "Temperos e Condimentos",
+    "Condimentos e Temperos": "Temperos e Condimentos",
+    
+    # Agrupando variações de Massas
+    "Massas Secas & Frescas": "Massas e Molhos",
+    
+    # Agrupando Iogurtes
+    "Iogurtes & Fermentados": "Iogurtes e Lácteos",
+    "Iogurtes e Bebidas Lácteas": "Iogurtes e Lácteos",
+    "Lácteos": "Iogurtes e Lácteos",
+    
+    # Agrupando Limpeza
+    "Limpeza de Casa": "Limpeza Geral e Banheiro",
+    "Limpeza de Cozinha": "Cozinha e Utensílios",
+    "Limpeza de Roupas": "Cuidado com as Roupas",
+
+    # Mapeamentos para alinhar com ANCHOR_RULES e consolidar "subcategorias zumbis"
+    "Biscoitos": "Biscoitos e Snacks",
+    "Biscoitos & Snacks": "Biscoitos e Snacks",
+    "Biscoitos e Bolachas": "Biscoitos e Snacks",
+    "Salgadinhos e Snacks": "Biscoitos e Snacks",
+    "Cafés e Achocolatados": "Cafés, Chás e Achocolatados",
+    "Café, Chá e Matinais": "Cafés, Chás e Achocolatados",
+    "Frutas Frescas": "Frutas",
+    "Arroz, Feijão e Grãos": "Arroz e Grãos",
+    "Óleos, Azeites e Vinagres": "Óleos e Azeites",
+    "Enlatados e Conservas": "Conservas e Enlatados",
+    "Doces e Sobremesas": "Chocolates e Doces",
+    "Leites e Cremes": "Leites",
+    "Carne Suína e Linguiças": "Suínos",
+    "Sucos e Chás Prontos": "Sucos e Refrescos",
+}
+
 CATEGORIAS_IGNORADAS = {"AUTOMOTIVO", "JARDINAGEM", "ESPORTE E LAZER", "VESTUÁRIO", "CAFETERIA"}
 
 def normalizar_para_cache(nome):
@@ -116,19 +164,80 @@ PRIORITY_ANCHOR_RULES = {
 }
 
 # Dicionário de âncoras: palavras-chave que forçam uma categoria.
+# Estrutura: { "CategoriaMaster": { "Subcategoria": [Keywords] } }
 ANCHOR_RULES = {
-    "Bebidas Alcoólicas": ["CERVEJA", "CHOPP", "VINHO", "VODKA", "GIN", "WHISKY", "CACHAÇA", "LICOR", "STELLA", "HEINEKEN", "BRAHMA", "SKOL", "AMSTEL", "CORONA"],
-    "Pet Shop": ["RAÇÃO", "PEDIGREE", "WHISKAS", "PURINA", "DOG CHOW", "CAT CHOW", "FRISKIES", "SACHÊ GATO", "SACHÊ CÃO"],
-    "Bebê e Infantil": ["FRALDA", "LENÇO UMEDECIDO", "POMADA PARA ASSADURA", "HASTES FLEXÍVEIS INFANT", "DANONINHO", "BATAVINHO"],
-    "Limpeza": ["SABÃO EM PÓ", "SABAO EM PO", "DETERGENTE", "AMACIANTE", "DESINFETANTE", "ÁGUA SANITÁRIA", "AGUA SANITARIA", "OMO", "TIXAN", "YPÊ", "VEJA", "CIF", "SACO DE LIXO"],
-    "Higiene e Cuidado Pessoal": ["SABONETE", "SHAMPOO", "CONDICIONADOR", "ABSORVENTE", "DESODORANTE", "EUDORA", "FRANCIS", "GILLETTE", "CREME DENTAL"],
-    "Frios e Laticínios": ["QUEIJO", "IOGURTE", "REQUEIJÃO", "PRESUNTO", "MORTADELA", "SALAME", "MARGARINA", "MANTEIGA", "YOPRO", "CREAM CHEESE", "RICOTA", "COTTAGE"],
-    "Açougue e Peixaria": ["CARNE", "FRANGO", "BIFE", "LINGUIÇA", "PEIXE", "CAMARÃO", "BACON"],
-    "Congelados e Pratos Prontos": ["PÃO DE QUEIJO", "LASANHA CONGELADA", "NUGGETS", "BATATA CONGELADA", "SORVETE", "AÇAÍ", "POLPA DE FRUTA"],
-    "Bebidas": ["SUCO", "REFRIGERANTE", "ÁGUA", "AGUA", "CHÁ", "CHA", "ENERGÉTICO", "COCA-COLA", "PEPSI", "GUARANÁ", "TODDYNHO", "NESCAU"],
-    "Mercearia e Despensa": ["ARROZ", "FEIJÃO", "MACARRÃO", "AÇÚCAR", "CAFÉ", "OLEO", "AZEITE", "FERMENTO", "MISTURA PARA BOLO", "FARINHA", "ATUM ENLATADO", "SARDINHA ENLATADA"],
-    "Padaria e Confeitaria": ["PÃO", "BOLO", "BISNAGUINHA", "PÃO DE ALHO"],
-    "Hortifrúti": ["CEBOLA", "BATATA", "ALFACE", "TOMATE", "MAÇÃ", "BANANA", "UVA", "OVO", "OVOS"],
+    "Mercearia e Despensa": {
+        "Arroz, Feijão e Grãos": ["ARROZ", "FEIJÃO", "LENTILHA", "GRÃO DE BICO", "GRÃOS"],
+        "Massas e Molhos": ["MACARRÃO", "MASSA INSTANTÂNEA", "MASSA FRESCA", "LASANHA", "NHOQUE", "MOLHO DE TOMATE", "EXTRATO DE TOMATE", "PESTO", "MASSAS E MOLHOS", "MOLHOS"],
+        "Óleos, Azeites e Vinagres": ["ÓLEO", "OLEO", "AZEITE", "VINAGRE", "OLEOS E AZEITES E VINAGRES"],
+        "Cafés, Chás e Achocolatados": ["CAFÉ", "CAFE", "CHÁ", "CHA", "ACHOCOLATADO", "CAPPUCCINO", "MATINAIS"],
+        "Açúcar e Adoçantes": ["AÇÚCAR", "ACUCAR", "ADOÇANTE"],
+        "Condimentos e Temperos": ["MAIONESE", "KETCHUP", "MOSTARDA", "TEMPERO", "CONDIMENTO", "CALDO", "SAL"],
+        "Farinhas e Misturas": ["FARINHA", "FARINHA DE TRIGO", "FARINHA DE MANDIOCA", "PIPOCA", "AVEIA", "FAROFA", "FERMENTO", "MISTURA PARA BOLO", "MISTURA BOLO", "FARINÁCEOS", "CEREAIS"],
+        "Enlatados e Conservas": ["MILHO", "ERVILHA", "ATUM", "SARDINHA", "PALMITO", "AZEITONA", "ENLATADO", "CONSERVA"],
+        "Biscoitos e Snacks": ["BISCOITO", "BOLACHA", "COOKIES", "WAFER", "ROSQUINHA", "BISCOITOS DOCES", "BISCOITOS SALGADOS", "SALGADINHO", "SNACK", "AMENDOIM", "CASTANHA", "BATATA PALHA", "APERITIVO"],
+        "Doces e Sobremesas": ["CHOCOLATE", "BOMBOM", "BALA", "GOMA", "DOCE DE LEITE", "GOIABADA", "GELATINA", "PUDIM", "SOBREMESA", "BOMBONIERE", "COBERTURA"],
+    },
+    "Frios e Laticínios": {
+        "Leites e Cremes": ["LEITE", "CREME DE LEITE", "LEITE CONDENSADO", "CHANTILY"],
+        "Queijos": ["QUEIJO", "MUÇARELA", "MUSSARELA", "PRATO", "QUEIJO MINAS", "PARMESÃO", "RICOTA", "REQUEIJÃO", "CREAM CHEESE", "COTTAGE", "FONDUE"],
+        "Iogurtes e Bebidas Lácteas": ["IOGURTE", "PETIT SUISSE", "DANONINHO", "SOBREMESA LÁCTEA", "BEBIDA LÁCTEA", "YOPRO", "FERMENTADO"],
+        "Manteigas e Margarinas": ["MANTEIGA", "MARGARINA"],
+        "Frios e Embutidos": ["PRESUNTO", "PEITO DE PERU", "SALAME", "MORTADELA", "SALSICHA", "EMBUTIDO", "CHARCUTARIA"],
+    },
+    "Açougue e Peixaria": {
+        "Carne Bovina": ["CONTRA FILÉ", "ALCATRA", "PATINHO", "ACÉM", "CARNE MOÍDA", "ESPETINHO", "CARNE", "BIFE", "BOVINO", "BOVINA"],
+        "Aves": ["FRANGO", "FILÉ DE FRANGO", "SOBRECOXA", "ASA", "COXINHA DA ASA"],
+        "Carne Suína e Linguiças": ["LINGUIÇA", "BISTECA", "LOMBO", "BACON", "SUÍNO", "SUINA"],
+        "Peixes e Frutos do Mar": ["TILÁPIA", "SALMÃO", "BACALHAU", "CAMARÃO", "PEIXE", "FRUTOS DO MAR"],
+    },
+    "Hortifrúti": {
+        "Frutas": ["BANANA", "MAÇÃ", "MACA", "LARANJA", "MAMÃO", "UVA", "MORANGO", "PERA", "ABACAXI", "MELANCIA", "MELAO", "KIWI", "MANGA", "LIMAO"],
+        "Legumes e Raízes": ["BATATA", "CEBOLA", "CENOURA", "TOMATE", "ABÓBORA", "ABOBORA", "CHUCHU", "PEPINO", "PIMENTAO", "BERINJELA", "BETERRABA", "MANDIOCA", "ALHO"],
+        "Verduras e Folhas": ["ALFACE", "COUVE", "BRÓCOLIS", "BROCOLIS", "ESPINAFRE", "RUCULA", "AGRIÃO", "ACELGA"],
+        "Ovos": ["OVO", "OVOS"],
+    },
+    "Bebidas": {
+        "Refrigerantes": ["REFRIGERANTE", "COCA-COLA", "PEPSI", "GUARANÁ", "SPRITE", "FANTA"],
+        "Sucos e Chás Prontos": ["SUCO", "NÉCTAR", "REFRESCO", "TODDYNHO", "NESCAU", "ÁGUA DE COCO", "AGUA DE COCO", "CHÁ GELADO", "CHA GELADO", "ICE TEA"],
+        "Águas": ["ÁGUA", "AGUA", "AGUA MINERAL"],
+        "Energéticos e Isotônicos": ["ENERGÉTICO", "ISOTÔNICO", "RED BULL", "MONSTER"],
+    },
+    "Bebidas Alcoólicas": {
+        "Cervejas": ["CERVEJA", "PILSEN", "PURO MALTE", "HEINEKEN", "BRAHMA", "SKOL", "AMSTEL", "CORONA", "STELLA", "CHOPP", "BEBIDAS ALCOOLICAS"],
+        "Vinhos e Espumantes": ["VINHO", "ESPUMANTE"],
+        "Destilados e Drinks": ["WHISKY", "VODKA", "GIN", "CACHAÇA", "RUM", "LICOR", "CONHAQUE", "DRINK", "COQUETEL", "AGUARDENTE", "DESTILADOS"],
+    },
+    "Congelados e Pratos Prontos": {
+        "Pratos Prontos Congelados": ["PIZZA CONGELADA", "LASANHA CONGELADA", "HAMBÚRGUER", "NUGGETS", "EMPANADO", "PÃO DE QUEIJO", "PRATO PRONTO"],
+        "Sorvetes e Sobremesas Congeladas": ["PICOLÉ", "AÇAÍ", "ACAI", "POLPA DE FRUTA", "SORVETE"],
+        "Legumes e Vegetais Congelados": ["BATATA PALITO", "BATATA CONGELADA", "SELETA DE LEGUMES", "MANDIOCA CONGELADA"],
+    },
+    "Limpeza": {
+        "Limpeza de Roupas": ["SABÃO EM PÓ", "SABAO EM PO", "SABÃO LÍQUIDO", "AMACIANTE", "ALVEJANTE", "TIRA-MANCHAS", "OMO", "TIXAN", "ROUPAS"],
+        "Limpeza de Cozinha": ["DETERGENTE", "DESENGORDURANTE", "ESPONJA DE AÇO", "ESPONJA DE FIBRA", "CIF", "YPÊ", "LAVA LOUÇA", "COZinha"],
+        "Limpeza Geral e Banheiro": ["DESINFETANTE", "LIMPADOR MULTIUSO", "ÁLCOOL", "ALCOOL", "LIMPA-VIDROS", "VEJA", "ÁGUA SANITÁRIA", "AGUA SANITARIA", "BANHEIRO"],
+        "Papéis e Descartáveis": ["PAPEL HIGIÊNICO", "PAPEL TOALHA", "GUARDANAPO", "SACO DE LIXO", "PAPÉIS", "EMBALAGENS"],
+        "Inseticidas e Repelentes": ["INSETICIDA", "REPELENTE"],
+    },
+    "Higiene e Cuidado Pessoal": {
+        "Cabelos": ["SHAMPOO", "CONDICIONADOR", "MÁSCARA DE TRATAMENTO", "MASCARA CAPILAR", "EUDORA", "CREME DE PENTEAR", "GEL FIXADOR", "CUIDADO COM CABELO"],
+        "Corpo e Banho": ["SABONETE", "DESODORANTE", "HIDRATANTE", "FRANCIS", "PROTETOR SOLAR", "ÓLEO CORPORAL", "OLEO CORPORAL", "CORPO"],
+        "Higiene Oral": ["CREME DENTAL", "ESCOVA DE DENTE", "ENXAGUANTE BUCAL"],
+        "Barba e Depilação": ["APARELHO DE BARBEAR", "ESPUMA DE BARBEAR", "GEL DE BARBEAR", "GILLETTE"],
+        "Higiene Íntima": ["ABSORVENTE", "PROTETOR DIÁRIO", "SABONETE ÍNTIMO"],
+    },
+    "Bebê e Infantil": {
+        "Fraldas e Higiene do Bebê": ["FRALDA", "LENÇO UMEDECIDO", "POMADA PARA ASSADURA", "HASTES FLEXÍVEIS", "SHAMPOO INFANTIL", "BEBE E INFANTIL"],
+        "Alimentação Infantil": ["FÓRMULA INFANTIL", "PAPINHA", "MINGAU", "CEREAL INFANTIL", "DANONINHO", "BATAVINHO"],
+    },
+    "Pet Shop": {
+        "Alimentos para Pets": ["RAÇÃO", "PEDIGREE", "WHISKAS", "PURINA", "DOG CHOW", "CAT CHOW", "FRISKIES", "SACHÊ GATO", "SACHÊ CÃO", "PETISCO"],
+        "Higiene e Cuidados Pet": ["AREIA PARA GATO", "TAPETE HIGIÊNICO", "SHAMPOO PET"],
+    },
+    "Padaria e Confeitaria": {
+        "Pães e Bolos": ["PÃO", "BOLO", "BISNAGUINHA", "PÃO DE ALHO", "PÃES", "TORRADA", "CROSTATA"],
+    }
 }
 
 # Guardas de Marca: se a marca for X, ela NUNCA pode estar na categoria Y.
@@ -141,14 +250,24 @@ BRAND_GUARDS = {
     "SEARA": ["Limpeza", "Higiene e Cuidado Pessoal"],
 }
 
-def normalizar_taxonomia_grabit(nome_produto, marca, categoria_mercado, ean, biblioteca):
+# LISTA DE TERMOS PARA HORTIFRUTI (movido de oba.py para uso geral)
+LISTA_HORTIFRUTI = [
+    "ABACATE", "ABACAXI", "ABOBORA", "ABOBRINHA", "ACELGA", "AGRIÃO", "ALFACE", 
+    "ALHO", "AMEIXA", "AMORA", "BANANA", "BATATA", "BERINJELA", "BETERRABA", 
+    "BROCOLIS", "CEBOLA", "CENOURA", "CHUCHU", "COUVE", "ESPINAFRE", "GOIABA", 
+    "KIWI", "LARANJA", "LIMAO", "MAÇÃ", "MACA", "MAMÃO", "MAMAO", "MANDIOCA", "MANGA", "MARACUJA", 
+    "MELANCIA", "MELAO", "MILHO", "MORANGO", "PEPINO", "PERA", "PIMENTAO", 
+    "REPOLHO", "RUCULA", "TOMATE", "UVA"
+]
+
+def normalizar_taxonomia_grabit(nome_produto, marca, categoria_mercado, subcategoria_mercado, tipo_produto_mercado, ean, biblioteca, mercado_nome=None):
     """
     Motor de categorização hierárquico para o GrabIt.
     Prioriza a biblioteca, depois regras de negócio (âncoras, guardas) e por último a categoria do site.
     """
     nome_upper = str(nome_produto).upper()
     marca_upper = str(marca).upper()
-    nome_completo = f"{nome_upper} {marca_upper}"
+    nome_completo = f"{nome_upper} {marca_upper} {str(categoria_mercado).upper()} {str(subcategoria_mercado).upper()}"
 
     # 1. PRIORIDADE MÁXIMA: Biblioteca de Produtos (Fonte da Verdade)
     # Se um item já está na nossa biblioteca, sua categoria é considerada correta e não deve ser alterada.
@@ -159,23 +278,53 @@ def normalizar_taxonomia_grabit(nome_produto, marca, categoria_mercado, ean, bib
 
     # --- Lógica de Decisão de Categoria ---
     candidate_category = None
+    sub_final = subcategoria_mercado if subcategoria_mercado != "N/A" else "Geral"
+    tipo_final = tipo_produto_mercado if tipo_produto_mercado != "N/A" else "Geral"
+
+    # --- REGRAS ESPECÍFICAS DE MERCADO (Ex: Oba) ---
+    if mercado_nome == "Oba Hortifruti":
+        # Regra de Conservas (DAUCY): Força o tipo de produto e categoria.
+        if marca_upper == 'DAUCY':
+            candidate_category = 'Mercearia e Despensa'
+            sub_final = 'Conservas e Enlatados'
+            tipo_final = 'Conservas'
+        
+        # Regra de Hortifruti (Prioridade para itens sem EAN ou com 'KG')
+        is_horti_keyword = any(termo in nome_upper for termo in LISTA_HORTIFRUTI) or any(k in nome_upper for k in ['IMPORTADO', 'NACIONAL', ' KG'])
+        if ean == "N/A" and is_horti_keyword:
+            candidate_category = 'Hortifrúti'
+            if sub_final == "Geral": # Tenta refinar a subcategoria
+                if any(termo in nome_upper for termo in ["BATATA", "CEBOLA", "CENOURA", "TOMATE", "ALHO", "PEPINO", "PIMENTAO", "ABOBORA", "BERINJELA"]):
+                    sub_final = "Legumes"
+                elif any(termo in nome_upper for termo in ["ALFACE", "COUVE", "RUCULA", "ESPINAFRE", "AGRIÃO", "ACELGA"]):
+                    sub_final = "Verduras"
+                else:
+                    sub_final = "Frutas"
 
     # 2. ÂNCORAS DE ALTA PRIORIDADE: Regras que se sobrepõem a todas as outras.
-    for categoria, keywords in PRIORITY_ANCHOR_RULES.items():
-        if any(keyword in nome_upper for keyword in keywords):
-            candidate_category = categoria
-            break
+    if not candidate_category:
+        for categoria, keywords in PRIORITY_ANCHOR_RULES.items():
+            if any(keyword in nome_upper for keyword in keywords):
+                candidate_category = categoria
+                break
 
     # 3. ÂNCORAS GERAIS: Regras de palavras-chave comuns.
     if not candidate_category:
-        for categoria, keywords in ANCHOR_RULES.items():
-            if any(re.search(rf'\b{re.escape(keyword)}\b', nome_completo) for keyword in keywords):
-                candidate_category = categoria
+        for categoria, sub_rules in ANCHOR_RULES.items():
+            for subcategoria, keywords in sub_rules.items():
+                if any(re.search(rf'\b{re.escape(keyword)}\b', nome_completo) for keyword in keywords):
+                    candidate_category = categoria
+                    sub_final = subcategoria
+                    break 
+            if candidate_category:
                 break
 
     # 4. FALLBACK PARA CATEGORIA DO MERCADO: Se nenhuma âncora correspondeu.
     if not candidate_category:
-        candidate_category = MAPA_PARA_APP.get(str(categoria_mercado).upper(), formatar_nome_categoria(categoria_mercado))
+        if mercado_nome == "Covabra":
+            candidate_category = MAPA_DEPARTAMENTOS_COVABRA.get(str(categoria_mercado).upper(), formatar_nome_categoria(categoria_mercado))
+        else:
+            candidate_category = MAPA_PARA_APP.get(str(categoria_mercado).upper(), formatar_nome_categoria(categoria_mercado))
 
     # --- Lógica de Validação e Correção ---
 
@@ -188,7 +337,19 @@ def normalizar_taxonomia_grabit(nome_produto, marca, categoria_mercado, ean, bib
     if candidate_category not in CATEGORIAS_MASTER:
         candidate_category = "Mercearia e Despensa" # Fallback final para a categoria mais segura.
 
-    return candidate_category, "Geral", "Geral" # Subcategoria e tipo são generalizados por enquanto.
+    # --- REGRAS ESPECÍFICAS DE SUBCATEGORIA E TIPO ---
+    # Regra do Café
+    if sub_final == 'Matinais' and tipo_final == 'Café':
+        sub_final = 'Cafés'
+
+    # Regra da Fralda
+    if "FRALDA" in nome_upper:
+        tipo_final = "Fraldas Descartáveis"
+
+    # Aplica o mapeamento de subcategorias para padronização final
+    sub_padronizada = MAPA_DE_PARA_SUBCATEGORIAS.get(sub_final, sub_final)
+
+    return candidate_category, sub_padronizada, tipo_final
 
 def aplicar_taxonomia_inteligente_legada(nome_produto, cat_site, sub_site, tipo_site):
     n = nome_produto.upper()
@@ -408,18 +569,15 @@ def validar_e_limpar_produtos(produtos, logger, biblioteca):
                 "tipo_produto": entrada_biblioteca.get("tipo_produto", "N/A"),
                 "Produto": entrada_biblioteca.get("nome_comum", produto.get("Produto")),
                 "Marca": entrada_biblioteca.get("marca", produto.get("Marca")),
-                "Link_Imagem": entrada_biblioteca.get("imagem", produto.get("Link_Imagem")),
-                
-                # Dados atualizados do scraper
                 "Preço Varejo": produto.get("Preço Varejo"),
                 "Preço Atacado": produto.get("Preço Atacado"),
-                "Condição": produto.get("Condição"),
-                "Data_Hora": produto.get("Data_Hora"),
-                
-                # Medidas são parte da identidade, mas pegamos do scraper para garantir consistência com o preço
                 "Qtd_Valor": produto.get("Qtd_Valor"),
                 "Medida": produto.get("Medida"),
                 "Unidade": produto.get("Unidade"),
+                "Condição": produto.get("Condição"),
+                "Data_Hora": produto.get("Data_Hora"),
+                "Link_Imagem": entrada_biblioteca.get("imagem", produto.get("Link_Imagem")),
+                "PRECISA_DE_IA": False
             }
             produtos_validos.append(produto_atualizado)
             continue # Produto processado, pular para o próximo
@@ -429,6 +587,17 @@ def validar_e_limpar_produtos(produtos, logger, biblioteca):
         nome_bruto = str(produto.get("Produto", "")).strip()
         if not nome_bruto or nome_bruto.lower() in placeholders_comuns:
             continue
+
+        # --- REGRAS DE NEGÓCIO OBA (PESÁVEIS) ---
+        # Esta regra é aplicada antes da otimização do nome para usar o nome bruto.
+        if produto.get("Mercado") == "Oba Hortifruti":
+            # Se o nome original contém KG, força a unidade para KG e quantidade para 1.
+            # Isso sobrepõe a extração de `extrair_medidas_inteligente` para garantir o preço por quilo.
+            if 'KG' in nome_bruto.upper():
+                produto['Unidade'] = 'KG'
+                produto['Qtd_Valor'] = '1'
+                produto['Medida'] = 'KG' # Garante consistência
+
         nome_otimizado = remover_frases_duplicadas(otimizar_nome_produto(nome_bruto))
         produto['Produto'] = nome_otimizado
 
@@ -437,8 +606,11 @@ def validar_e_limpar_produtos(produtos, logger, biblioteca):
             nome_produto=nome_otimizado,
             marca=produto.get("Marca", ""),
             categoria_mercado=produto.get("Categoria", ""),
+            subcategoria_mercado=produto.get("subcategoria", "N/A"),
+            tipo_produto_mercado=produto.get("tipo_produto", "N/A"),
             ean=ean,
-            biblioteca=biblioteca # Passa a biblioteca para o caso de EAN não estar na chave primária
+            biblioteca=biblioteca, # Passa a biblioteca para o caso de EAN não estar na chave primária
+            mercado_nome=produto.get("Mercado")
         )
         produto["Categoria"], produto["subcategoria"], produto["tipo_produto"] = cat_nova, sub_nova, tipo_novo
         produto["PRECISA_DE_IA"] = False

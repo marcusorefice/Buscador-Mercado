@@ -140,14 +140,14 @@ async def main():
     # ETAPA 1: MERCADOS COM DADOS ESTRUTURADOS (API / JSON)
     # ---------------------------------------------------------
     scrapers_api = [
-        (atacadao, "Atacadão"),
-        # (carrefour, "Carrefour"), não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
-        (boa, "Boa"),
-        # (paodeacucar, "Pão de Açúcar"), não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
+        (atacadao, "Atacadão"), #funcionando
+        (carrefour, "Carrefour"), #não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
+        (boa, "Boa"), #funcionando
+        (paodeacucar, "Pão de Açúcar"), #não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
         (covabra, "Covabra"),
-        # (oba, "Oba Hortifruti"),
-        # (dom_olivio, "Dom Olívio"),
-        # (svicente, "S. Vicente"), rodar depois dos outros prontos por causa das categorias
+        (oba, "Oba Hortifruti"), #funcionando
+        (dom_olivio, "Dom Olívio"),
+        (svicente, "S. Vicente"), #rodar depois dos outros prontos por causa das categorias
     ]
 
     logger.info("\n=== ETAPA 1: COLETANDO DADOS ESTRUTURADOS (API) ===")
@@ -167,9 +167,12 @@ async def main():
             # Adicionamos todos os produtos validados à biblioteca e salvamos.
             novas_entradas = {}
             for p_validado in produtos_validados:
-                chave, entrada = criar_entrada_biblioteca(p_validado)
-                if chave and chave not in biblioteca:
-                    novas_entradas[chave] = entrada
+                # A pedido, só salvamos na biblioteca itens que tenham um EAN válido.
+                ean_produto = p_validado.get("EAN", "N/A")
+                if ean_produto != "N/A": # A validação no scraper já garante que se não for N/A, é válido.
+                    chave, entrada = criar_entrada_biblioteca(p_validado)
+                    if chave and chave not in biblioteca:
+                        novas_entradas[chave] = entrada
 
             if novas_entradas:
                 logger.info(f"📚 Adicionando {len(novas_entradas)} novos produtos à biblioteca via motor de regras.")

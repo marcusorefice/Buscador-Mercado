@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
 from utils import (
@@ -115,6 +116,11 @@ async def motor_extracao_paodeacucar():
                                 ean = sku
                         # 4. Define o valor final como 'N/A' se nada for encontrado
                         if not ean or ean == '0': ean = 'N/A'
+
+                        # Extração da URL da página de detalhes do produto (PDP)
+                        link_pdp = p.get('urlDetails', '')
+                        if link_pdp and not link_pdp.startswith('http'):
+                            link_pdp = f"{BASE_URL_CONFIG}{link_pdp}"
 
                         # Extração de Preços via sellInfos
                         sell_infos = p.get('sellInfos', [{}])
@@ -240,7 +246,8 @@ async def motor_extracao_paodeacucar():
                             "Medida": med,
                             "Unidade": "UN",
                             "Condição": txt_condicao, "Data_Hora": agora,
-                            "Link_Imagem": img_url
+                            "Link_Imagem": img_url,
+                            "Link_PDP": link_pdp
                         })
                     except Exception as e:
                         # Agora você sabe por que o item foi ignorado
@@ -260,6 +267,10 @@ async def motor_extracao_paodeacucar():
     produtos_unicos_dict = {v['ID_UNICO']: v for v in lista_final}
     lista_unica = list(produtos_unicos_dict.values())
 
+    # Realiza a busca de EAN por página dos produtos
+    async with AsyncSession(impersonate=IMPERSONATE) as s:
+        await enrich_eans_from_pdps(s, lista_unica)
+
     # Limpa a chave temporária 'ID_UNICO' de cada item na lista final para garantir
     # a compatibilidade com o banco de dados, que não possui essa coluna.
     for item in lista_unica: item.pop("ID_UNICO", None)
@@ -267,5 +278,66 @@ async def motor_extracao_paodeacucar():
     logger.info(f"🏆 SUCESSO! {len(lista_unica)} ofertas únicas capturadas do {NOME_MERCADO}.")
     return lista_unica
 
+async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
+    """Busca o EAN no HTML da página de detalhes do produto do Pão de Açúcar"""
+    if not url_pdp: return "N/A"
+    
+    headers = {
+        "User-Agent": USER_AGENT,
+    }
+    
+    async with sem_pdp:
+        try:
+            res = await session.get(url_pdp, headers=headers, timeout=20)
+            if res.status_code == 200:
+                html = res.text
+                # 1. Tenta padrão explícito (gtin, ean com 13 dígitos)
+                match = re.search(r'(?:gtin\d*|ean)["\s:]+["\s]*(\d{13})', html, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+                
+                # 2. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790 ou 871
+                match_any = re.search(r'(789\d{10}|790\d{10}|871\d{10})', html)
+                if match_any:
+                    return match_any.group(1)
+        except:
+            pass
+    return "N/A"
+
+async def enrich_eans_from_pdps(session, lista_produtos):
+    """Enriquece produtos sem EAN buscando na página do produto (PDP)"""
+    sem_pdp = asyncio.Semaphore(15) # Concorrência para PDP
+    
+    produtos_sem_ean = [p for p in lista_produtos if not p.get('EAN') or p.get('EAN') == 'N/A']
+    if not produtos_sem_ean: return
+    
+    total_pdps = len(produtos_sem_ean)
+    logger.info(f"   🔍 Buscando EAN em {total_pdps} páginas de produtos...")
+    
+    contador = 0
+    async def fetch_and_log(p):
+        nonlocal contador
+        ean = await fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp)
+        contador += 1
+        if contador % 10 == 0 or contador == total_pdps:
+            logger.info(f"   ⏳ [Pão de Açúcar] Progresso PDPs: {contador}/{total_pdps} processados...")
+        return ean
+
+    # Criar lista de tasks mantendo a referência do produto
+    tasks = [fetch_and_log(p) for p in produtos_sem_ean]
+        
+    resultados = await asyncio.gather(*tasks)
+    
+    # Atualiza os EANs encontrados
+    for p, ean in zip(produtos_sem_ean, resultados):
+        if ean != 'N/A':
+            p['EAN'] = ean
+            
+    # Limpa campo temporário
+    for p in lista_produtos:
+        p.pop('Link_PDP', None)
+
 async def extrair_dados():
+    # ...
+    # Essa chamada agora será gerida dentro do motor_extracao_paodeacucar, então no final dessa função vamos só chamar o motor
     return await motor_extracao_paodeacucar()

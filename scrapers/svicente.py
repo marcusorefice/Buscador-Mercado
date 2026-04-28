@@ -67,11 +67,20 @@ async def fetch_ean_from_product_page(session, product_id):
     try:
         resp = await session.get(url, timeout=15)
         if resp.status_code == 200:
-            # Usar regex é mais rápido que parsear com BeautifulSoup para um único valor
-            # O EAN geralmente está em um script JSON-LD como "gtin13" ou em dados do dataLayer
-            match = re.search(r'"gtin13"\s*:\s*"(\d{13})"', resp.text)
+            # 1. Busca na tabela de código
+            match = re.search(r'<td>C&oacute;digo</td>\s*<td>(\d{13,14})</td>', resp.text, re.IGNORECASE)
             if match:
                 return match.group(1)
+
+            # 2. Busca padrão explícito JSON
+            match2 = re.search(r'(?:gtin\d*|ean|sku)["\s:]+["\s]*(\d{13})', resp.text, re.IGNORECASE)
+            if match2:
+                return match2.group(1)
+
+            # 3. Fallback: Qualquer EAN brasileiro (789/790) no HTML (ex: urls de imagens)
+            match_any = re.search(r'(789\d{10}|790\d{10})', resp.text)
+            if match_any:
+                return match_any.group(1)
     except Exception as e:
         logger.warning(f"  [S. Vicente] Falha ao buscar EAN extra na página do produto ID {product_id}: {e}")
     
@@ -185,6 +194,7 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                     if (not ean or len(ean) < 12):
                         # O endpoint Product-Variation é da VTEX. Para o S. Vicente (Demandware), usamos Product-Show.
                         # Esta chamada extra garante que não percamos EANs de itens industrializados.
+                        logger.info(f"   🔍 [S. Vicente] Buscando EAN na PDP para: {nome_bruto[:40]}...")
                         ean_from_page = await fetch_ean_from_product_page(session, p.get('id'))
                         if ean_from_page:
                             ean = ean_from_page
