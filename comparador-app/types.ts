@@ -1,18 +1,20 @@
+export interface Oferta {
+  Mercado: string;
+  Preco_Varejo: number;
+  Preco_Atacado: number;
+  Nome_Original: string;
+  Condicao: string;
+  Data_Atualizacao: string;
+}
 export interface Product {
-  id: number;
-  Mercado: string | null;
-  Categoria: string | null;
-  Produto: string | null;
-  Marca: string | null;
-  Preco_Varejo: string | null;
-  Preco_Atacado: string | null;
-  Qtd_Valor: string | null;
-  Medida: string | null;
-  Unidade: string | null;
-  Condicao: string | null;
-  Validade: string | null;
-  Data_Hora: string | null;
-  Link_Imagem: string | null;
-  subcategoria?: string | null;
-  tipo_produto?: string | null;
+  EAN: string;
+  Produto_Ouro: string;
+  Categoria_Ouro: string;
+  Marca: string;
+  Imagem: string;
+  Tags: string[];
+  Menor_Preco: number;
+  Ofertas: Oferta[];
+}
+  Categoria?: string; // para não quebrar filtro antigo
 }

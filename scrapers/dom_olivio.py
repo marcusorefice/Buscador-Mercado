@@ -47,8 +47,8 @@ GET_PRODUCTS_HASH = API_HASHES.get("get_products", "ae50c5a735b1464f0ba48be4f2b3
 CLIENT_PRODUCT_HASH = API_HASHES.get("client_product", "47aa22eb750cb2c529e5eeafb921bfeadb67db71")
 
 # Semáforos preventivos para evitar Bloqueio/404
-PAGE_SEMAPHORE = asyncio.Semaphore(2)
-API_SEMAPHORE = asyncio.Semaphore(5)
+PAGE_SEMAPHORE = asyncio.Semaphore(10)
+API_SEMAPHORE = asyncio.Semaphore(30)
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 
 async def _buscar_preco_calculado(session: AsyncSession, product_id: str) -> tuple[float, float, str]:

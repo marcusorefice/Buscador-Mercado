@@ -3,9 +3,6 @@ import { View, StyleSheet, Image } from 'react-native';
 import { Card, Text, Title } from 'react-native-paper';
 import { Product } from '../types';
 
-// --- INÍCIO DA LÓGICA DE LOGOS ---
-// A lógica foi movida para este arquivo para resolver um erro de importação persistente.
-
 type MarketName = 
   | 'Assaí Atacadista'
   | 'Atacadão'
@@ -36,90 +33,72 @@ const marketLogos: Record<MarketName, any> = {
   'São Vicente': require('../assets/logos/sao_vicente.png'),
   'Tauste Supermercado': require('../assets/logos/tauste.png'),
   'Tenda Atacado': require('../assets/logos/tenda.png'),
-  'Default': require('../assets/logos/default.png'), // Um logo padrão
+  'Default': require('../assets/logos/default.png'),
 };
 
 export const getMarketLogo = (marketName: string) => {
   return marketLogos[marketName as MarketName] || marketLogos.Default;
 };
-// --- FIM DA LÓGICA DE LOGOS ---
+
 interface ProductCardProps {
   product: Product;
   onPress?: () => void;
 }
 
-const capitalize = (str: string | null): string => {
-  if (!str) return '';
-  return str.toLowerCase().replace(/(?:^|\s)\S/g, (a) => a.toUpperCase());
-};
-
-const parsePrice = (priceStr: string): number => {
-  const cleanStr = priceStr.replace(/\./g, '').replace(',', '.');
-  const val = parseFloat(cleanStr);
-  return isNaN(val) ? 0 : val;
+const formatPrice = (value: number) => {
+  return value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product, onPress }) => {
-  const titleText = `${capitalize(product.Produto)}${product.Marca ? ` ${capitalize(product.Marca)}` : ''}`;
-  
-  const varejoStr = product.Preco_Varejo ? product.Preco_Varejo.replace(/[R$\s]/gi, '') : '';
-  const atacadoStr = product.Preco_Atacado ? product.Preco_Atacado.replace(/[R$\s]/gi, '') : '';
-  const varejoVal = parsePrice(varejoStr);
-  const atacadoVal = parsePrice(atacadoStr);
+  const [imageError, setImageError] = React.useState(false);
 
-  let currentPriceStr = varejoStr || atacadoStr || '0,00';
-  let previousPriceStr = '';
-  let discountPercent = 0;
+  React.useEffect(() => {
+    setImageError(false);
+  }, [product.Imagem]);
 
-  if (varejoVal > 0 && atacadoVal > 0 && atacadoVal < varejoVal) {
-    currentPriceStr = atacadoStr;
-    previousPriceStr = varejoStr;
-    discountPercent = Math.round((1 - atacadoVal / varejoVal) * 100);
-  }
+  const titleText = product.Produto_Ouro;
+  const bestOffer = product.Ofertas && product.Ofertas.length > 0 ? product.Ofertas[0] : null;
 
-  const condition = product.Condicao?.trim().toUpperCase();
-  const hasCondition = condition && !['1 UN', 'NAN', 'NONE', ''].includes(condition);
+  const showPlaceholder = !product.Imagem || !product.Imagem.startsWith('http') || imageError;
 
   return (
     <Card style={styles.card} onPress={onPress}>
       <View style={styles.imageContainer}>
-        {product.Link_Imagem ? (
-          <Image source={{ uri: product.Link_Imagem }} style={styles.image} resizeMode="contain" />
+        {showPlaceholder ? (
+          <Image source={require('../assets/placeholder.png')} style={styles.image} resizeMode="cover" />
         ) : (
-          <View style={styles.placeholderImage}><Text style={styles.placeholderText}>Sem Imagem</Text></View>
-        )}
-        {discountPercent > 0 && (
-          <View style={styles.discountBadge}><Text style={styles.discountText}>-{discountPercent}%</Text></View>
+          <Image 
+            source={{ uri: product.Imagem }} 
+            style={styles.image} 
+            resizeMode="contain" 
+            onError={() => setImageError(true)}
+          />
         )}
       </View>
 
       <View style={styles.contentContainer}>
         <View>
           <Title style={styles.title} numberOfLines={2}>{titleText}</Title>
+          <Text style={styles.brand} numberOfLines={1}>{product.Marca}</Text>
           
           <View style={styles.priceSection}>
-            {previousPriceStr ? (
-              <Text style={styles.previousPrice}>De: R$ {previousPriceStr}</Text>
-            ) : (
-              <View style={{ height: 16 }} /> // Placeholder para manter altura
-            )}
+            <Text style={styles.priceLabel}>A partir de:</Text>
             <Text style={styles.currentPrice}>
-              <Text style={styles.currencySymbol}>Por: R$ </Text>{currentPriceStr}
+              <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(product.Menor_Preco)}
             </Text>
-          </View>
-
-          <View style={styles.conditionWrapper}>
-            {hasCondition ? (
-              <Text style={styles.wholesalePrice} numberOfLines={1}>{product.Condicao}</Text>
-            ) : null}
           </View>
         </View>
 
         <View style={styles.footer}>
-          <View style={styles.storeInfo}>
-            <Image source={getMarketLogo(product.Mercado || 'Default')} style={styles.storeLogo} resizeMode="contain" />
-            <Text style={styles.storeName} numberOfLines={1}>{product.Mercado || 'Mercado'}</Text>
-          </View>
+          <Text style={styles.offerCount}>
+            {product.Ofertas.length} {product.Ofertas.length === 1 ? 'mercado' : 'mercados'}
+          </Text>
+          {bestOffer && (
+            <View style={styles.bestOfferInfo}>
+              <Image source={getMarketLogo(bestOffer.Mercado)} style={styles.smallStoreLogo} resizeMode="contain" />
+              <Text style={styles.bestOfferMarket} numberOfLines={1}>{bestOffer.Mercado}</Text>
+            </View>
+          )}
         </View>
       </View>
     </Card>
@@ -141,69 +120,70 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9f9f9',
   },
   image: { width: '100%', height: '100%' },
-  placeholderImage: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  placeholderText: { fontSize: 10, color: '#ccc' },
-  discountBadge: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    backgroundColor: '#17c671',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderBottomRightRadius: 8,
-  },
-  discountText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
   contentContainer: {
     padding: 10,
     flex: 1,
-    justifyContent: 'space-between', // EMPURRA O FOOTER PARA BAIXO
-    minHeight: 160, // Força uma altura mínima no conteúdo
+    justifyContent: 'space-between',
   },
   title: {
     fontSize: 13,
-    lineHeight: 17,
-    fontWeight: 'bold',
+    lineHeight: 16,
+    fontWeight: '600',
     color: '#333',
-    height: 36, // ALTURA FIXA PARA 2 LINHAS
-    marginBottom: 4,
+    marginBottom: 2,
+  },
+  brand: {
+    fontSize: 11,
+    color: '#777',
+    marginBottom: 6,
   },
   priceSection: {
     marginTop: 4,
-    minHeight: 45,
   },
-  previousPrice: {
-    fontSize: 12,
-    color: '#999',
-    textDecorationLine: 'line-through',
+  bestOfferInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  smallStoreLogo: {
+    width: 24,
+    height: 12,
+    marginRight: 4,
+  },
+  bestOfferMarket: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#E5293E',
+  },
+  priceLabel: {
+    fontSize: 10,
+    color: '#888',
   },
   currentPrice: {
-    fontSize: 22,
-    fontWeight: '900',
+    fontSize: 18,
+    fontWeight: 'bold',
     color: '#E5293E',
-    marginTop: -2,
   },
-  currencySymbol: { fontSize: 12 },
-  conditionWrapper: {
-    height: 18, // ESPAÇO RESERVADO PARA "CLUBE" OU "ATACADO"
-    justifyContent: 'center',
-    marginTop: 2,
-  },
-  wholesalePrice: {
-    fontSize: 11,
-    color: '#607d8b',
-    fontWeight: '600',
+  currencySymbol: {
+    fontSize: 12,
+    fontWeight: 'normal',
   },
   footer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-    paddingTop: 8,
+    justifyContent: 'space-between',
     marginTop: 10,
-    height: 48,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
   },
-  storeInfo: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  storeLogo: { width: 65, height: 65, borderRadius: 20, marginRight: 8 },
-  storeName: { fontSize: 13, color: '#888', flex: 1 },
+  offerCount: {
+    fontSize: 10,
+    color: '#666',
+    fontWeight: '500',
+  },
+  storeLogo: {
+    width: 40,
+    height: 16,
+  },
 });

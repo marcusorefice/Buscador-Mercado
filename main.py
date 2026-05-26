@@ -2,6 +2,7 @@ import pandas as pd
 import sqlite3
 import os
 import asyncio
+import unicodedata
 from datetime import datetime
 
 # Importações dos scrapers
@@ -14,13 +15,13 @@ import scrapers.covabra as covabra
 import scrapers.dom_olivio as dom_olivio
 import scrapers.oba as oba
 import scrapers.tenda as tenda
-import scrapers.assai as assai
-import scrapers.fort as fort
-import scrapers.roldao as roldao
-import scrapers.tauste as tauste
+# import scrapers.assai as assai
+# import scrapers.fort as fort
+# import scrapers.roldao as roldao
+# import scrapers.tauste as tauste
 
-from utils import read_json_file, write_json_file, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca
-from classificador_ia import classificar_taxonomia_com_ia_async, carregar_biblioteca, salvar_biblioteca
+from utils import read_json_file, write_json_file, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca, enriquecer_ean_produtos_async
+from classificador_ia import classificar_taxonomia_com_ia_async, carregar_biblioteca, salvar_biblioteca, gerar_id_unico, resolver_conflitos_ia_async
 
 logger = setup_logging()
 
@@ -32,14 +33,14 @@ DB_NOME = os.path.join(DATA_DIR, "monitoramento_Jundiai.db")
 # ==========================================
 
 def garantir_tabela_ofertas(db_path):
-    """Garante que o diretório de dados e a tabela 'ofertas' no banco de dados existam com a estrutura correta."""
+    """Garante que o diretório de dados e as tabelas 'ofertas' e 'historico_precos' no banco de dados existam."""
     data_dir = os.path.dirname(db_path)
     if data_dir and not os.path.exists(data_dir):
         os.makedirs(data_dir)
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    # Cria a tabela se o sistema não a encontrar, mantendo a estrutura completa
+    # Cria a tabela de ofertas (snapshot atual)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ofertas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,173 +62,101 @@ def garantir_tabela_ofertas(db_path):
             UNIQUE(Mercado, Produto, Qtd_Valor, Medida)
         )
     ''')
+    
+    # Cria a tabela de histórico de preços
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS historico_precos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Mercado TEXT,
+            EAN TEXT,
+            Produto TEXT,
+            Preco_Varejo TEXT,
+            Preco_Atacado TEXT,
+            Data_Hora TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
 def salvar_dados_mercado(produtos, nome_mercado):
-    """Salva os dados no SQLite e gera a planilha individual."""
-    if not produtos: return
-
-    # FIX: Garante a existência da tabela imediatamente antes da inserção.
-    # Isso resolve o erro 'no such table' que ocorre em execuções concorrentes ou com estado de DB instável.
-    garantir_tabela_ofertas(DB_NOME)
-    
-    # --- SALVAMENTO NO SQLITE ---
-    conn = sqlite3.connect(DB_NOME)
-    cursor = conn.cursor()
-    
-    # Otimização: Prepara todos os dados para uma única operação 'executemany'
-    dados_para_inserir = [
-        (
-            p['Mercado'], p['EAN'], p['Categoria'], p['subcategoria'], p['tipo_produto'],
-            p['Produto'], p['Marca'], p['Preço Varejo'], p['Preço Atacado'], 
-            p['Qtd_Valor'], p['Medida'], p['Unidade'], p['Condição'], p['Data_Hora'], p['Link_Imagem']
-        ) for p in produtos
-    ]
-    
-    # Usamos executemany para uma performance muito superior em lotes
-    cursor.executemany('''
-        INSERT INTO ofertas (
-            Mercado, EAN, Categoria, subcategoria, tipo_produto, Produto, Marca, 
-            Preco_Varejo, Preco_Atacado, Qtd_Valor, Medida, Unidade, Condicao, Data_Hora, Link_Imagem
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(Mercado, Produto, Qtd_Valor, Medida) DO UPDATE SET
-            EAN = excluded.EAN,
-            Categoria = excluded.Categoria,
-            subcategoria = excluded.subcategoria,
-            tipo_produto = excluded.tipo_produto,
-            Preco_Varejo = excluded.Preco_Varejo,
-            Preco_Atacado = excluded.Preco_Atacado,
-            Condicao = excluded.Condicao,
-            Data_Hora = excluded.Data_Hora,
-            Link_Imagem = excluded.Link_Imagem
-    ''', dados_para_inserir)
-    
-    conn.commit()
-    conn.close()
-
-    # --- SALVAMENTO NO EXCEL ---
-    filename = os.path.join(DATA_DIR, f"historico_{nome_mercado.lower().replace(' ', '_')}.xlsx")
-    df_novos = pd.DataFrame(produtos)
-    # Garante que o EAN seja tratado como texto para evitar notação científica no Excel
-    if 'EAN' in df_novos.columns:
-        df_novos['EAN'] = df_novos['EAN'].astype(str)
-    
-    if os.path.exists(filename):
-        try:
-            # Ao ler o arquivo antigo, também garantimos que o EAN é texto
-            df_antigo = pd.read_excel(filename, dtype={'EAN': str})
-            df_final = pd.concat([df_antigo, df_novos]).drop_duplicates(
-                subset=['Produto', 'Marca', 'Qtd_Valor', 'Medida'], keep='last'
-            )
-            df_final.to_excel(filename, index=False)
-        except Exception as e:
-            logger.error(f"Erro ao atualizar Excel de {nome_mercado}: {e}")
-            df_novos.to_excel(filename, index=False)
-    else:
-        df_novos.to_excel(filename, index=False)
+    """(Desativado) A persistência no banco e no excel agora é feita exclusivamente pelo script 5_atualizar_banco.py."""
+    pass
 
 # ==========================================
 # PROCESSO PRINCIPAL (ORQUESTRADOR)
 # ==========================================
 
-async def processar_mercado(modulo, nome_mercado, biblioteca):
+async def processar_mercado(modulo, nome_mercado):
+    """
+    Função principal que aciona o scraper do mercado.
+    Retorna apenas os produtos brutos. Toda a lógica de IA, cruzamento de EAN 
+    e salvamento em banco foi movida para as etapas seguintes do pipeline.
+    """
     try:
-        logger.info(f"🛒 Processando: {nome_mercado}")
+        logger.info(f"🛒 Coletando dados de: {nome_mercado}")
         produtos_brutos = await modulo.extrair_dados()
         
         if not produtos_brutos:
             logger.warning(f"⚠️ {nome_mercado}: Nenhuma oferta capturada.")
-            return nome_mercado, None, None
-
-        produtos_validados = validar_e_limpar_produtos(produtos_brutos, logger, biblioteca)
-
-        novas_entradas = {}
-        for p_validado in produtos_validados:
-            ean_produto = p_validado.get("EAN", "N/A")
-            if ean_produto != "N/A": 
-                chave, entrada = criar_entrada_biblioteca(p_validado)
-                if chave and chave not in biblioteca:
-                    novas_entradas[chave] = entrada
-
-        return nome_mercado, produtos_validados, novas_entradas
+            return nome_mercado, []
+        
+        logger.info(f"✅ {nome_mercado}: {len(produtos_brutos)} itens coletados.")
+        return nome_mercado, produtos_brutos
     except Exception as e:
         logger.error(f"❌ Erro no scraper {nome_mercado}: {e}")
-        return nome_mercado, None, None
+        return nome_mercado, []
 
 async def main():
-    logger.info(f"🚀 INICIANDO ORQUESTRADOR - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-    biblioteca = carregar_biblioteca()
-    resumo_geral = {}
-
+    logger.info(f"🚀 INICIANDO SCRAPERS (FASE 1/3) - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    
     # ---------------------------------------------------------
     # ETAPA 1: MERCADOS COM DADOS ESTRUTURADOS (API / JSON)
     # ---------------------------------------------------------
     scrapers_api = [
-        (atacadao, "Atacadão"), #funcionando
-        (carrefour, "Carrefour"), #não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
-        (boa, "Boa"), #funcionando
-        (paodeacucar, "Pão de Açúcar"), #não funcionou o EAN, fazer os outros mercados primeiro para enriquecer a biblioteca e depois tentar corrigir o carrefour
+        (atacadao, "Atacadão"),
+        (carrefour, "Carrefour"),
+        (boa, "Boa Supermercados"),
+        (paodeacucar, "Pão de Açúcar"),
         (covabra, "Covabra"),
-        (oba, "Oba Hortifruti"), #funcionando
+        (oba, "Oba Hortifruti"),
         (dom_olivio, "Dom Olívio"),
-        (svicente, "S. Vicente"), #rodar depois dos outros prontos por causa das categorias
+        (svicente, "S. Vicente"),
     ]
 
     logger.info("\n=== ETAPA 1: COLETANDO DADOS ESTRUTURADOS (API) ===")
     
     # Executa todos os scrapers de API em paralelo
-    tarefas_api = [processar_mercado(modulo, nome_mercado, biblioteca) for modulo, nome_mercado in scrapers_api]
+    tarefas_api = [processar_mercado(modulo, nome_mercado) for modulo, nome_mercado in scrapers_api]
     resultados_api = await asyncio.gather(*tarefas_api)
     
-    for nome_mercado, produtos_validados, novas_entradas in resultados_api:
-        if produtos_validados is None:
-            continue
-            
-        if novas_entradas:
-            logger.info(f"📚 {nome_mercado}: Adicionando {len(novas_entradas)} novos produtos à biblioteca via motor de regras.")
-            biblioteca.update(novas_entradas)
+    todos_itens_crus = []
+    resumo_geral = {}
 
-        if produtos_validados:
-            salvar_dados_mercado(produtos_validados, nome_mercado)
-            resumo_geral[nome_mercado] = len(produtos_validados)
-        else:
-            logger.warning(f"⚠️ {nome_mercado}: Nenhum produto válido após a limpeza.")
+    for nome_mercado, produtos_brutos in resultados_api:
+        if produtos_brutos:
+            todos_itens_crus.extend(produtos_brutos)
+            resumo_geral[nome_mercado] = len(produtos_brutos)
 
     # ---------------------------------------------------------
-    # ETAPA 2: MERCADOS QUE DEPENDEM DE IA (FOLHETOS / IMAGENS)
+    # SALVAR TODOS OS ITENS CRUS PARA A PRÓXIMA FASE
     # ---------------------------------------------------------
-    scrapers_ia = [
-        # (assai, "Assaí"),
-        # (fort, "Fort Atacadão"),
-        # (roldao, "Roldão"),
-        # (tenda, "Tenda"),
-        # (tauste, "Tauste")
-       
-    ]
+    if todos_itens_crus:
+        arquivo_pendentes = os.path.join(DATA_DIR, "pendentes_ia.json")
+        
+        # Opcional: Se quiser manter o histórico dos itens do dia anterior, faça um read antes.
+        # Por enquanto, como você roda diariamente, vamos salvar o snapshot atual.
+        write_json_file(arquivo_pendentes, todos_itens_crus)
+        
+        logger.info("\n" + "="*50)
+        logger.info(f"📦 Sucesso! {len(todos_itens_crus)} itens totais raspados salvos em 'pendentes_ia.json'.")
+        logger.info("👉 PRÓXIMO PASSO: Execute 'python 4_resolver_pendentes.py' para cruzar os EANs com a Biblioteca.")
+        logger.info("="*50 + "\n")
+    else:
+        logger.warning("Nenhum item foi coletado pelos scrapers nesta execução.")
 
-    logger.info("\n=== ETAPA 2: COLETANDO FOLHETOS E OFERTAS VIA IA ===")
-    for modulo, nome_mercado in scrapers_ia:
-        try:
-            logger.info(f"📸 Lendo Folheto: {nome_mercado}")
-            produtos_brutos = await modulo.extrair_dados()
-            
-            if not produtos_brutos: continue
-
-            # Para folhetos, a IA já processou os dados, fazemos apenas a limpeza final
-            produtos_validados = validar_e_limpar_produtos(produtos_brutos, logger, biblioteca)
-            salvar_dados_mercado(produtos_validados, nome_mercado)
-            resumo_geral[nome_mercado] = len(produtos_validados)
-            
-        except Exception as e:
-            logger.error(f"❌ Erro no folheto de {nome_mercado}: {e}")
-
-    # Finalização
-    salvar_biblioteca(biblioteca)
-    logger.info("\n" + "="*50 + "\n📊 RESUMO FINAL DA EXECUÇÃO:\n" + "="*50)
+    logger.info("📊 RESUMO FINAL DA COLETA:")
     for m, q in resumo_geral.items():
-        logger.info(f"  - {m}: {q} produtos")
-    logger.info("🏆 Operação concluída com sucesso!")
+        logger.info(f"  - {m}: {q} produtos coletados")
 
 if __name__ == "__main__":
     if os.name == 'nt':

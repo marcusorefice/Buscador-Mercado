@@ -215,7 +215,7 @@ async def motor_extracao_oba():
         logger.error(f"❌ Erro crítico no motor Oba: {e}")
 
     # Remove duplicados por nome de produto
-    lista_unica = list({v['Produto']: v for v in lista_final}.values())
+    lista_unica = list({f"{v.get('Produto','')}_{v.get('Marca','')}_{v.get('Qtd_Valor','')}_{v.get('Medida','')}": v for v in lista_final}.values())
     logger.info(f"🏆 Finalizado! {len(lista_unica)} ofertas únicas capturadas com sucesso.")
     return lista_unica
 

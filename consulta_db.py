@@ -16,55 +16,47 @@ def consultar_itens(termo_busca=None, mercado=None, categoria=None, limite=50):
 
     conn = sqlite3.connect(DB_NOME)
     
-    # Construção da Query Dinâmica
-    # Seleciona todas as colunas exceto Link_Imagem
-    query = """
-        SELECT "Mercado", "Categoria", "Produto", "Marca", "Preço Varejo", "Preço Atacado",
-               "Qtd_Valor", "Medida", "Condição" 
-        FROM ofertas WHERE 1=1"""
+    # --- Construção da Query Dinâmica ---
+    # A query base é sempre a mesma, selecionando da tabela 'ofertas'.
+    # A busca por texto usará LIKE, que não requer tabelas adicionais como FTS (causa do erro).
+    query_parts = ["""
+        SELECT Mercado, Categoria, Produto, Marca,
+               Preco_Varejo AS "Preço Varejo",
+               Preco_Atacado AS "Preço Atacado",
+               Qtd_Valor, Medida, Condicao AS "Condição"
+        FROM ofertas
+    """]
+    where_clauses = ["1=1"]
     params = []
-    # --- Lógica de Busca Otimizada com FTS5 ---
+    
+    # A ordenação padrão é pela data mais recente. Se houver busca, ordena pelo preço.
+    order_by_clause = "ORDER BY Data_Hora DESC"
     if termo_busca:
-        # A busca agora é feita na tabela FTS e ordenada por relevância (rank).
-        # Juntamos com a tabela original para obter todos os dados.
-        query = """
-            SELECT o.* FROM ofertas AS o
-            JOIN (
-                SELECT rowid, rank FROM ofertas_fts
-                WHERE ofertas_fts MATCH ?
-                ORDER BY rank
-            ) AS fts ON o.id = fts.rowid
-            WHERE 1=1
-        """
-        # Formata o termo de busca para FTS5, permitindo busca por prefixo com '*'
-        params = [f'"{termo_busca}"*']
-    else:
-        # Se não houver termo de busca, retorna as ofertas mais recentes.
-        query = "SELECT * FROM ofertas WHERE 1=1"
-        params = []
+        order_by_clause = 'ORDER BY CAST(REPLACE(REPLACE(Preco_Atacado, \'R$ \', \'\'), \',\', \'.\') AS REAL) ASC, Produto ASC'
 
     if termo_busca:
-        query += " AND (Produto LIKE ? OR Marca LIKE ?)"
+        # Adiciona a condição de busca por texto nos campos Produto e Marca.
+        where_clauses.append("(Produto LIKE ? OR Marca LIKE ?)")
         params.extend([f"%{termo_busca}%", f"%{termo_busca}%"])
-    
+
     if mercado:
-        query += " AND Mercado = ?"
-        query += " AND o.Mercado = ?" if termo_busca else " AND Mercado = ?"
+        where_clauses.append("Mercado = ?")
         params.append(mercado)
         
     if categoria:
-        query += " AND Categoria = ?"
-        query += " AND o.Categoria = ?" if termo_busca else " AND Categoria = ?"
+        where_clauses.append("Categoria = ?")
         params.append(categoria)
     
-    query += f" ORDER BY Data_Hora DESC LIMIT {limite}"
-    if not termo_busca:
-        query += " ORDER BY Data_Hora DESC"
+    query_parts.append(f"WHERE {' AND '.join(where_clauses)}")
+    query_parts.append(order_by_clause)
+    if limite is not None:
+        query_parts.append("LIMIT ?")
+        params.append(limite)
 
-    query += f" LIMIT {limite}"
+    full_query = " ".join(query_parts)
 
     try:
-        df = pd.read_sql_query(query, conn, params=params)
+        df = pd.read_sql_query(full_query, conn, params=params)
         conn.close()
         return df
     except Exception as e:
@@ -75,8 +67,13 @@ def consultar_itens(termo_busca=None, mercado=None, categoria=None, limite=50):
 if __name__ == "__main__":
     print("=== Sistema de Consulta de Ofertas ===")
     termo = input("Digite o produto para buscar (ou Enter para todos): ").strip()
-    
-    resultados = consultar_itens(termo_busca=termo if termo else None)
+
+    if termo:
+        # Para uma busca específica, removemos o limite para ver todos os resultados.
+        resultados = consultar_itens(termo_busca=termo, limite=None)
+    else:
+        # Para uma visão geral, mostramos os 50 mais recentes.
+        resultados = consultar_itens(limite=50)
 
     if not resultados.empty:
         print(f"\n🔍 Encontrados {len(resultados)} resultados:")

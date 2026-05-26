@@ -16,7 +16,7 @@ export const ProductList: React.FC<ProductListProps> = ({ products, refreshing, 
     <FlatList
       data={products}
       numColumns={2}
-      keyExtractor={(item) => String(item.id)}
+      keyExtractor={(item) => String(item.EAN)}
       columnWrapperStyle={styles.row}
       contentContainerStyle={styles.listContainer}
       renderItem={({ item }) => <ProductCard product={item} onPress={() => onProductPress(item)} />}

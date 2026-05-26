@@ -136,12 +136,26 @@ async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
             res = await session.get(url_pdp, timeout=20)
             if res.status_code == 200:
                 html = res.text
-                # 1. Tenta padrão explícito (gtin, ean, sku com 13 digitos)
+                
+                # 1. Tenta extrair via ld+json (mais preciso)
+                try:
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html, 'html.parser')
+                    for script in soup.find_all('script', type='application/ld+json'):
+                        data = json.loads(script.string)
+                        if isinstance(data, dict) and data.get('@type') == 'Product':
+                            ean = data.get('gtin13') or data.get('gtin') or data.get('sku')
+                            if ean and len(str(ean)) >= 12:
+                                return str(ean)
+                except Exception:
+                    pass
+
+                # 2. Tenta padrão explícito (gtin, ean, sku com 13 digitos)
                 match = re.search(r'(?:gtin\d*|ean|sku)["\s:]+["\s]*(\d{13})', html, re.IGNORECASE)
                 if match:
                     return match.group(1)
                 
-                # 2. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790
+                # 3. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790
                 match_any = re.search(r'(789\d{10}|790\d{10})', html)
                 if match_any:
                     return match_any.group(1)
@@ -157,14 +171,14 @@ async def enrich_eans_from_pdps(session, lista_produtos):
     if not produtos_sem_ean: return
     
     total_pdps = len(produtos_sem_ean)
-    logger.info(f"   🔍 Buscando EAN em {total_pdps} páginas de produtos...")
+    logger.info(f"   🔍 Buscando EAN em {total_pdps} páginas de produtos (Turbo Mode)...")
     
     contador = 0
     async def fetch_and_log(p):
         nonlocal contador
         ean = await fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp)
         contador += 1
-        if contador % 10 == 0 or contador == total_pdps:
+        if contador % 50 == 0 or contador == total_pdps:
             logger.info(f"   ⏳ [Carrefour] Progresso PDPs: {contador}/{total_pdps} processados...")
         return ean
 
@@ -203,8 +217,8 @@ async def extrair_dados():
         for r in resultados:
             if r: lista_final.extend(r)
             
-        # Remove duplicados por nome para a planilha final
-        lista_unica = list({v['Produto']: v for v in lista_final}.values())
+        # Remove duplicados combinando nome, marca e medidas para evitar perda de variações
+        lista_unica = list({f"{v.get('Produto','')}_{v.get('Marca','')}_{v.get('Qtd_Valor','')}_{v.get('Medida','')}": v for v in lista_final}.values())
         
         # Enriquecimento (Fallback final)
         await enrich_eans_from_pdps(session, lista_unica)

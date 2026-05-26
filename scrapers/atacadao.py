@@ -40,7 +40,7 @@ PAGE_SIZE = PAGINATION.get("page_size", 50)
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
 USER_AGENT = TECHNICAL_DEPS.get("playwright_user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-CONCURRENCY = TECHNICAL_DEPS.get("concurrency", 5)
+CONCURRENCY = TECHNICAL_DEPS.get("concurrency", 30)
 
 async def motor_extracao_atacadao():
     logger.info(f"🚀 Iniciando extração para {NOME_MERCADO} (Estratégia: Híbrida + Radar de Atacado)...")
@@ -71,20 +71,46 @@ async def motor_extracao_atacadao():
                 "term": "",
                 "selectedFacets": [
                     {"key": "productClusterIds", "value": CLUSTER_OFERTAS},
+                    {"key": "region-id", "value": REGION_ID},
                     {"key": "channel", "value": f'{{"salesChannel":"1","seller":"{SELLER_ID}","regionId":"{REGION_ID}"}}'},
                     {"key": "locale", "value": "pt-BR"}
                 ]
             }
             
-            params = {
-                "operationName": "ProductsQuery",
-                "variables": json.dumps(variables, separators=(',', ':'))
+            query_graphql = """
+            query ProductsQuery($term: String, $selectedFacets: [SelectedFacetInput], $first: Int, $after: String, $sort: String) {
+              search(term: $term, selectedFacets: $selectedFacets, first: $first, after: $after, sort: $sort) {
+                products {
+                  pageInfo { totalCount }
+                  edges {
+                    node {
+                      id
+                      gtin
+                      name
+                      image { url }
+                      offers {
+                        offers { price listPrice minQuantity }
+                      }
+                      brand { name }
+                      breadcrumbList {
+                        itemListElement { name }
+                      }
+                    }
+                  }
+                }
+              }
             }
-            url_get = f"{URL_GRAPHQL}?{urllib.parse.urlencode(params)}"
+            """
+            
+            payload = {
+                "operationName": "ProductsQuery",
+                "variables": variables,
+                "query": query_graphql
+            }
 
             for tentativa in range(retries):
                 try:
-                    response = await session.get(url_get, timeout=45)
+                    response = await session.post(URL_GRAPHQL, json=payload, timeout=45)
                     if response.status_code in [429, 503, 500, 502, 504]:
                         await asyncio.sleep(random.uniform(2.0, 4.0))
                         continue

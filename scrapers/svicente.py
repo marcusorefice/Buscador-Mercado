@@ -30,12 +30,13 @@ URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
 TAMANHO_PAGINA = CONFIG.get("pagination", {}).get("page_size", 200)
 PMID = CONFIG.get("regionalization", {}).get("pmid", "FPP_030|FPV_030|M_030")
 
-raw_concurrency = CONFIG.get("technical_dependencies", {}).get("concurrency", 5)
+raw_concurrency = CONFIG.get("technical_dependencies", {}).get("concurrency", 30)
 try:
     CONCURRENCY = int(raw_concurrency)
+    if CONCURRENCY < 30: CONCURRENCY = 30 # Força o modo Turbo
 except (ValueError, TypeError):
-    logger.warning(f"Valor de 'concurrency' inválido ('{raw_concurrency}'). Usando valor padrão 5.")
-    CONCURRENCY = 5
+    logger.warning(f"Valor de 'concurrency' inválido ('{raw_concurrency}'). Usando valor padrão 30.")
+    CONCURRENCY = 30
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 USER_AGENT = CONFIG.get("technical_dependencies", {}).get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -276,6 +277,22 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                     tipo_produto = "N/A" # Será refinado depois
 
                     marca = p.get('brand', 'PRÓPRIA').upper()
+                    
+                    # --- MELHORIA DE NOME VIA URL ---
+                    if img_url and ('svicente' in img_url.lower() or 'demandware.static' in img_url.lower()):
+                        import urllib.parse
+                        parsed = urllib.parse.urlparse(img_url)
+                        filename = urllib.parse.unquote(parsed.path.split('/')[-1])
+                        if filename.endswith('.jpg') or filename.endswith('.png') or filename.endswith('.jpeg'):
+                            filename = filename.rsplit('.', 1)[0]
+                            if ean and ean in filename:
+                                partes = filename.split(f"{ean}-")
+                                if len(partes) > 1:
+                                    resto = partes[1]
+                                    nome_url = resto.rsplit('-', 2)[0].replace('-', ' ').upper()
+                                    if len(nome_url) > len(nome_bruto) or nome_bruto == marca:
+                                        nome_bruto = nome_url
+
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
                     unid_venda = "KG" if " KG" in nome_bruto else "UN"
 
@@ -318,7 +335,7 @@ async def motor_extracao_svicente():
             
         # 2. Descobre o CGID real de cada categoria para buscar os produtos corretos
         logger.info(f"📡 Resolvendo CGIDs internos...")
-        semaforo_cgid = asyncio.Semaphore(15) # Mais concorrência para as chamadas HTML
+        semaforo_cgid = asyncio.Semaphore(30) # Mais concorrência para as chamadas HTML
         tasks_cgid = [fetch_true_cgid(session, url_path, cat_name, semaforo_cgid) for cat_name, url_path in cat_links.items()]
         cgid_results = await asyncio.gather(*tasks_cgid)
         
@@ -338,7 +355,7 @@ async def motor_extracao_svicente():
         return []
 
     # Remove duplicados por nome de produto mantendo o primeiro encontrado (evita duplicação se o item pertencer a >1 categoria)
-    lista_unica = list({v['Produto']: v for v in lista_produtos}.values())
+    lista_unica = list({f"{v.get('Produto','')}_{v.get('Marca','')}_{v.get('Qtd_Valor','')}_{v.get('Medida','')}": v for v in lista_produtos}.values())
     logger.info(f"✅ Finalizado! {len(lista_unica)} ofertas únicas capturadas no {NOME_MERCADO}.")
     return lista_unica
 

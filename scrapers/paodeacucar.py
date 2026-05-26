@@ -279,8 +279,9 @@ async def motor_extracao_paodeacucar():
     return lista_unica
 
 async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
-    """Busca o EAN no HTML da página de detalhes do produto do Pão de Açúcar"""
-    if not url_pdp: return "N/A"
+    """Busca o EAN e Categorias no HTML da página de detalhes do produto do Pão de Açúcar"""
+    result = {"ean": "N/A", "cat": "", "subcat": "N/A", "tipo": "N/A"}
+    if not url_pdp: return result
     
     headers = {
         "User-Agent": USER_AGENT,
@@ -294,44 +295,65 @@ async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
                 # 1. Tenta padrão explícito (gtin, ean com 13 dígitos)
                 match = re.search(r'(?:gtin\d*|ean)["\s:]+["\s]*(\d{13})', html, re.IGNORECASE)
                 if match:
-                    return match.group(1)
+                    result["ean"] = match.group(1)
+                else:
+                    # 2. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790 ou 871
+                    match_any = re.search(r'(789\d{10}|790\d{10}|871\d{10})', html)
+                    if match_any:
+                        result["ean"] = match_any.group(1)
                 
-                # 2. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790 ou 871
-                match_any = re.search(r'(789\d{10}|790\d{10}|871\d{10})', html)
-                if match_any:
-                    return match_any.group(1)
+                # Extração de categorias
+                match_next = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html)
+                if match_next:
+                    data = json.loads(match_next.group(1))
+                    product_data = data.get('props', {}).get('pageProps', {}).get('product', {})
+                    shelf_list = product_data.get('shelfList', [])
+                    if shelf_list:
+                        cats = [s.get('name', '').upper() for s in shelf_list if s.get('name')]
+                        if len(cats) > 0: result["cat"] = formatar_nome_categoria(cats[0])
+                        if len(cats) > 1: result["subcat"] = formatar_nome_categoria(cats[1])
+                        if len(cats) > 2: result["tipo"] = formatar_nome_categoria(cats[2])
         except:
             pass
-    return "N/A"
+            
+    return result
 
 async def enrich_eans_from_pdps(session, lista_produtos):
-    """Enriquece produtos sem EAN buscando na página do produto (PDP)"""
-    sem_pdp = asyncio.Semaphore(15) # Concorrência para PDP
+    """Enriquece produtos sem EAN ou Categoria buscando na página do produto (PDP)"""
+    sem_pdp = asyncio.Semaphore(50) # Concorrência Aumentada
     
-    produtos_sem_ean = [p for p in lista_produtos if not p.get('EAN') or p.get('EAN') == 'N/A']
-    if not produtos_sem_ean: return
+    produtos_pendentes = [p for p in lista_produtos if not p.get('EAN') or p.get('EAN') == 'N/A' or not p.get('Categoria') or p.get('Categoria') == 'GERAL']
+    if not produtos_pendentes: return
     
-    total_pdps = len(produtos_sem_ean)
-    logger.info(f"   🔍 Buscando EAN em {total_pdps} páginas de produtos...")
+    total_pdps = len(produtos_pendentes)
+    logger.info(f"   🔍 Buscando EAN e Categorias em {total_pdps} páginas de produtos (Turbo Mode)...")
     
     contador = 0
     async def fetch_and_log(p):
         nonlocal contador
-        ean = await fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp)
+        res = await fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp)
         contador += 1
-        if contador % 10 == 0 or contador == total_pdps:
+        if contador % 50 == 0 or contador == total_pdps:
             logger.info(f"   ⏳ [Pão de Açúcar] Progresso PDPs: {contador}/{total_pdps} processados...")
-        return ean
+        return res
 
     # Criar lista de tasks mantendo a referência do produto
-    tasks = [fetch_and_log(p) for p in produtos_sem_ean]
+    tasks = [fetch_and_log(p) for p in produtos_pendentes]
         
     resultados = await asyncio.gather(*tasks)
     
-    # Atualiza os EANs encontrados
-    for p, ean in zip(produtos_sem_ean, resultados):
-        if ean != 'N/A':
-            p['EAN'] = ean
+    # Atualiza os dados encontrados
+    for p, res in zip(produtos_pendentes, resultados):
+        if res['ean'] != 'N/A' and (not p.get('EAN') or p.get('EAN') == 'N/A'):
+            p['EAN'] = res['ean']
+        if res['cat']:
+            cat_site = res['cat']
+            subcat = res['subcat']
+            tipo = res['tipo']
+            
+            p['Categoria'] = padronizar_categoria(f"{p.get('Produto')} {cat_site} {subcat} {tipo}", cat_site)
+            p['subcategoria'] = subcat
+            p['tipo_produto'] = tipo
             
     # Limpa campo temporário
     for p in lista_produtos:

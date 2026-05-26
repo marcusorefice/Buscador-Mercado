@@ -188,7 +188,7 @@ async def extrair_dados():
                     logger.error(f"⚠️ Erro ao processar cluster {cluster} página {pagina} no {NOME_MERCADO}: {e}")
                     break
 
-    lista_deduplicada = list({v['Produto']: v for v in lista_final}.values())
+    lista_deduplicada = list({f"{v.get('Produto','')}_{v.get('Marca','')}_{v.get('Qtd_Valor','')}_{v.get('Medida','')}": v for v in lista_final}.values())
     
     logger.info(f"✅ {len(lista_deduplicada)} produtos capturados no {NOME_MERCADO}.")
     return lista_deduplicada

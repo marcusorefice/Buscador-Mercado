@@ -1,61 +1,53 @@
-import json
-import asyncio
-from curl_cffi import requests
+﻿import json
 
-SESSION_FILE = r"D:\Mercado\data\atacadao_session.json"
+def limpeza_final_grabit(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        produtos = json.load(f)
 
-async def testar_passatempo_jundiai():
-    with open(SESSION_FILE, 'r') as f:
-        cookies = json.load(f)
+    # 1. Mapeamento de Correções de Subcategoria e Dados Fiscais
+    correcoes_especificas = {
+        "611269101713": {"subcategoria": "Energéticos e Isotônicos"},  # Red Bull Sugar Free
+        "7896051130116": {"subcategoria": "Laticínios e Iogurtes"},     # Leite Pó Itambé
+        "7896004400297": {"subcategoria": "Conservas e Enlatados"},    # Leite de Coco Mais Coco
+        "7896094919853": {"subcategoria": "Temperos e Condimentos"},   # Adoçante Zero-cal
+        "7896283800801": {"tipo_produto": "Leite Longa Vida Integral"} # Jussara Integral
+    }
+
+    # 2. Listas de Tags de "Ruído" para remoção seletiva
+    tags_comida_em_higiene = ["frios", "laticinios", "leite", "bebidas", "despensa", "mercearia"]
+    tags_carne_em_pet = ["acougue", "peixaria", "carne"]
+    tags_pet_em_limpeza = ["pet", "shop"]
+
+    for ean, info in produtos.items():
+        # Aplicar correções manuais de subcategoria[cite: 2]
+        if ean in correcoes_especificas:
+            info.update(correcoes_especificas[ean])
+
+        # Limpeza específica do Toddynho (remover 'todeschini' das tags)[cite: 2]
+        if ean == "7894321722016":
+            info['tags'] = [t for t in info['tags'] if t != "todeschini"]
+
+        # Limpeza de Sabonetes e Higiene (Remover tags de comida)[cite: 2]
+        if info['Categoria'] == "Higiene e Cuidado Pessoal":
+            info['tags'] = [t for t in info['tags'] if t not in tags_comida_em_higiene]
+        
+        # Limpeza de Água Oxigenada (Remover 'bebidas')[cite: 2]
+        if ean == "7896213300111":
+            info['tags'] = [t for t in info['tags'] if t != "bebidas"]
+
+        # Limpeza de Rações e Proteína de Soja (Remover tags de carne humana)[cite: 2]
+        if info['Categoria'] == "Pet Shop" or "soja" in info['nome_comum'].lower():
+            info['tags'] = [t for t in info['tags'] if t not in tags_carne_carne_em_pet]
+
+        # Limpeza de Odorizadores (Bom Ar) (Remover 'pet' e 'shop')[cite: 2]
+        if "bom ar" in info['nome_comum'].lower():
+            info['tags'] = [t for t in info['tags'] if t not in tags_pet_em_limpeza]
+
+    # Salvar o arquivo final saneado
+    with open('biblioteca_produtos_final.json', 'w', encoding='utf-8') as f:
+        json.dump(produtos, f, indent=4, ensure_ascii=False)
     
-    # O SEGREDO: Definir o segmento exato de Jundiaí (Seller 633)
-    # Esse cookie é o que realmente define a loja na plataforma VTEX
-    vtex_segment = "eyJjYW1wYWlnbnMiOm51bGwsImNoYW5uZWwiOiIxIiwicHJpY2VUYWJsZSI6bnVsbCwicmVnaW9uSWQiOm51bGwsInV0bV9jYW1wYWlnbiI6bnVsbCwidXRtX21lZGl1bSI6bnVsbCwidXRtX3NvdXJjZSI6bnVsbCwidXRtaV9jYW1wYWlnbiI6bnVsbCwidXRtaV9wYWdlIjpudWxsLCJ1dG1pX3BhcnQiOm51bGwsImN1cnJlbmN5Q29kZSI6IkJSTCIsImN1cnJlbmN5U3ltYm9sIjoiUiQiLCJjb3VudHJ5Q29kZSI6IkJSQSIsImN1bHR1cmVJbmZvIjoicHQtQlIiLCJhZG1pbkN1bHR1cmVJbmZvIjoicHQtQlIiLCJjaGFubmVsUHJpdmFjeSI6InB1YmxpYyJ9"
+    print("Saneamento concluído com sucesso!")
 
-    cookies['vtex_segment'] = vtex_segment
-    cookies['regionalization'] = "%7B%22salesChannel%22%3A%221%22%2C%22postalCode%22%3A%2213211-772%22%2C%22seller%22%3A%22atacadaobr633%22%7D"
-
-    # Buscando o Passatempo com o parâmetro de Sales Channel (sc=1)
-    url = "https://www.atacadao.com.br/api/catalog_system/pub/products/search?ft=passatempo chocolate 130g&sc=1"
-
-    async with requests.AsyncSession(impersonate="chrome124") as session:
-        for n, v in cookies.items():
-            session.cookies.set(n, v, domain="www.atacadao.com.br")
-
-        headers = {
-            "Accept": "application/json",
-            "vtex-segment": vtex_segment, # Forçando o cabeçalho de segmento
-            "Referer": "https://www.atacadao.com.br/"
-        }
-
-        print("🔍 Tentando 'espetar' o Seller 633 de Jundiaí...")
-        res = await session.get(url, headers=headers)
-        produtos = res.json()
-
-        for p in produtos:
-            nome = p['productName'].upper()
-            if "CHOCOLATE" in nome and "130G" in nome:
-                item = p['items'][0]
-                seller_data = item['sellers'][0]
-                comm = seller_data['commertialOffer']
-                
-                print(f"\n🎯 PRODUTO: {p['productName']}")
-                print(f"🏪 LOJA (Seller): {seller_data.get('sellerId')}")
-                
-                # Se o Seller ainda for 1, a VTEX está ignorando nossa regionalização
-                if seller_data.get('sellerId') == "1":
-                    print("⚠️ Alerta: Ainda no Seller 1. O preço de atacado pode não aparecer.")
-
-                specs = comm.get('PriceSpecifications', [])
-                print(f"💰 Preço Base: R$ {comm.get('Price'):.2f}")
-                
-                if specs:
-                    print("--- Tabela de Preços ---")
-                    for s in sorted(specs, key=lambda x: x.get('NumberOfInstallments', 1)):
-                        qtd = s.get('NumberOfInstallments')
-                        valor = s.get('Value')
-                        print(f"🔹 {qtd} un. ou + -> R$ {valor:.2f}")
-                return
-
-if __name__ == "__main__":
-    asyncio.run(testar_passatempo_jundiai())
+# Execução
+limpeza_final_grabit('data/biblioteca_produtos_new.json')

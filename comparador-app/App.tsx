@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, FlatList } from 'react-native';
-import { Provider as PaperProvider, DefaultTheme, Searchbar, Text } from 'react-native-paper';
+import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { ProductList } from './components/ProductList';
@@ -8,13 +8,7 @@ import { ProductDetailsModal } from './components/ProductDetailsModal';
 import { Product } from './types';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
-// Para usar localmente na mesma rede Wi-Fi:
-// const API_URL = 'http://192.168.18.77:8000'; 
-
-// --- PARA USAR FORA DA REDE (NGROK) ---
-// 1. Rode o ngrok no seu PC (ngrok http 8000)
-// 2. Copie o endereço https que ele gerar e COLE AQUI ABAIXO:
-const API_URL = 'https://badness-impale-suitably.ngrok-free.dev';
+const API_URL = ' https://badness-impale-suitably.ngrok-free.dev';
 
 const theme = {
   ...DefaultTheme,
@@ -25,36 +19,53 @@ const theme = {
   },
 };
 
+const MARKETS = [
+  'Todos os Mercados',
+  'Assaí Atacadista',
+  'Atacadão',
+  'Boa Supermercados',
+  'Carrefour',
+  'Covabra',
+  'Dom Olívio',
+  'Fort Atacadista',
+  'Oba Hortifruti',
+  'Pão de Açúcar',
+  'Roldão Atacadista',
+  'São Vicente',
+  'Tauste Supermercado',
+  'Tenda Atacado'
+];
+
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
+  
   const [products, setProducts] = useState<Product[]>([]);
-  const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isModalVisible, setModalVisible] = useState(false);
 
-  const categories = ['Todos', 'Higiene e Perfumaria', 'Limpeza', 'Bebidas', 'Laticínios, Ovos e Frios', 'Açougue e Peixaria', 'Mercearia', 'Congelados e Pratos Prontos', 'Bazar e Utilidades'];
-  const [selectedCategory, setSelectedCategory] = useState('Todos');
+  // Filtros Globais
+  const [sortBy, setSortBy] = useState<'discount' | 'price'>('discount');
+  const [selectedMarket, setSelectedMarket] = useState('Todos os Mercados');
+  const [isMarketModalVisible, setMarketModalVisible] = useState(false);
 
-  const filterProducts = (data: Product[], category: string) => {
-    if (category === 'Todos') {
-      setProducts(data);
-    } else {
-      setProducts(data.filter(p => p.Categoria && p.Categoria.toLowerCase().includes(category.toLowerCase())));
-    }
-  };
-
-  const fetchProducts = async (query = '') => {
+  const fetchProducts = async (queryOverride?: string) => {
     setLoading(true);
     setError(null);
     try {
+      const currentQuery = queryOverride !== undefined ? queryOverride : searchQuery;
+      const params: any = { q: currentQuery, sort_by: sortBy };
+      if (selectedMarket !== 'Todos os Mercados') {
+        params.market = selectedMarket;
+      }
+      
       const response = await axios.get<Product[]>(`${API_URL}/produtos`, {
-        params: query ? { q: query } : {}
+        params,
+        headers: { 'ngrok-skip-browser-warning': 'true' }
       });
-      setAllProducts(response.data);
-      filterProducts(response.data, selectedCategory);
+      setProducts(response.data);
     } catch (err) {
       console.error(err);
       setError('Não foi possível carregar os produtos.');
@@ -65,22 +76,20 @@ export default function App() {
 
   useEffect(() => {
     fetchProducts();
-  }, []);
-
-  const onChangeSearch = (query: string) => setSearchQuery(query);
+  }, [sortBy, selectedMarket]);
 
   const onSearchSubmit = () => {
-    fetchProducts(searchQuery);
+    fetchProducts();
   };
 
-  const onCategoryPress = (category: string) => {
-    setSelectedCategory(category);
-    filterProducts(allProducts, category);
+  const clearSearch = () => {
+    setSearchQuery('');
+    fetchProducts('');
   };
 
-  const handleProductPress = (product: Product) => {
-    setSelectedProduct(product);
-    setModalVisible(true);
+  const handleTagPress = (tag: string) => {
+    setSearchQuery(tag);
+    fetchProducts(tag);
   };
 
   return (
@@ -89,59 +98,60 @@ export default function App() {
         <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
           <StatusBar barStyle="light-content" backgroundColor="#E5293E" />
           
-          {/* Header Premium Customizado */}
           <View style={styles.header}>
             <View style={styles.headerTop}>
-              <Text style={styles.headerTitle}>Ofertas de Hoje</Text>
+              <TouchableOpacity onPress={clearSearch}>
+                <Text style={styles.headerTitle}>Comparador Jundiaí</Text>
+              </TouchableOpacity>
             </View>
             <Searchbar
-              placeholder="Buscar no supermercado..."
-              onChangeText={onChangeSearch}
+              placeholder="Ex: Cerveja Heineken, Fralda..."
+              onChangeText={setSearchQuery}
               value={searchQuery}
               onSubmitEditing={onSearchSubmit}
               onIconPress={onSearchSubmit}
+              onClearIconPress={clearSearch}
               style={styles.searchbar}
               inputStyle={styles.searchInput}
               iconColor="#E5293E"
-              traileringIcon="barcode-scan"
-              traileringIconColor="#999"
-              onTraileringIconPress={() => {}}
             />
-          </View>
 
-          {/* Barra de Categorias Horizontal */}
-          <View style={styles.categoryContainer}>
-            <FlatList
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              data={categories}
-              keyExtractor={(item) => item}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.categoryButton,
-                    selectedCategory === item && styles.categoryButtonSelected
-                  ]}
-                  onPress={() => onCategoryPress(item)}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsContainer} contentContainerStyle={{ paddingRight: 20 }}>
+              {['cerveja', 'café', 'fralda', 'sabão em pó', 'arroz', 'leite'].map(tag => (
+                <Chip 
+                  key={tag} 
+                  style={styles.tagChip} 
+                  textStyle={styles.tagText}
+                  onPress={() => handleTagPress(tag)}
+                  compact
                 >
-                  <Text
-                    style={[
-                      styles.categoryText,
-                      selectedCategory === item && styles.categoryTextSelected
-                    ]}
-                  >
-                    {item}
-                  </Text>
-                </TouchableOpacity>
-              )}
-              contentContainerStyle={styles.categoryList}
-            />
+                  #{tag}
+                </Chip>
+              ))}
+            </ScrollView>
+
+            <View style={styles.filtersRow}>
+              <Chip 
+                icon={sortBy === 'discount' ? "percent" : "currency-usd"} 
+                onPress={() => setSortBy(prev => prev === 'discount' ? 'price' : 'discount')}
+                style={styles.filterChip}
+              >
+                {sortBy === 'discount' ? 'Maiores Descontos' : 'Menores Preços'}
+              </Chip>
+              <Chip 
+                icon="store" 
+                onPress={() => setMarketModalVisible(true)}
+                style={styles.filterChip}
+              >
+                {selectedMarket === 'Todos os Mercados' ? 'Mercados' : selectedMarket}
+              </Chip>
+            </View>
           </View>
 
           {loading && products.length === 0 ? (
             <View style={styles.centerContainer}>
               <ActivityIndicator size="large" color="#E5293E" />
-              <Text style={styles.loadingText}>Buscando os melhores preços...</Text>
+              <Text style={styles.loadingText}>Buscando produtos...</Text>
             </View>
           ) : error ? (
             <View style={styles.centerContainer}>
@@ -151,12 +161,12 @@ export default function App() {
             <ProductList
               products={products}
               refreshing={loading}
-              onRefresh={() => fetchProducts(searchQuery)}
-              onProductPress={handleProductPress}
+              onRefresh={() => fetchProducts()}
+              onProductPress={(item) => { setSelectedProduct(item); setModalVisible(true); }}
               ListEmptyComponent={
                 !loading ? (
                   <View style={styles.centerContainer}>
-                    <Text style={{ color: '#666' }}>Nenhum produto encontrado.</Text>
+                    <Text style={{ color: '#666' }}>Nenhum produto encontrado para a busca atual.</Text>
                   </View>
                 ) : null
               }
@@ -167,9 +177,35 @@ export default function App() {
             visible={isModalVisible}
             onDismiss={() => setModalVisible(false)}
             product={selectedProduct}
-            allProducts={allProducts}
-            onSelectComparison={handleProductPress}
           />
+
+          <Modal visible={isMarketModalVisible} animationType="slide" transparent={true}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Filtrar por Mercado</Text>
+                  <IconButton icon="close" onPress={() => setMarketModalVisible(false)} />
+                </View>
+                <ScrollView>
+                  {MARKETS.map(market => (
+                    <TouchableOpacity 
+                      key={market} 
+                      style={[styles.marketOption, selectedMarket === market && styles.marketOptionSelected]}
+                      onPress={() => {
+                        setSelectedMarket(market);
+                        setMarketModalVisible(false);
+                      }}
+                    >
+                      <Text style={[styles.marketOptionText, selectedMarket === market && styles.marketOptionTextSelected]}>
+                        {market}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
+
         </SafeAreaView>
       </PaperProvider>
     </SafeAreaProvider>
@@ -179,13 +215,13 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5', // Fundo cinza claro
+    backgroundColor: '#f5f5f5',
   },
   header: {
-    backgroundColor: '#E5293E', // Vermelho Premium
+    backgroundColor: '#E5293E',
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 16,
+    paddingBottom: 12,
     borderBottomLeftRadius: 16,
     borderBottomRightRadius: 16,
     elevation: 4,
@@ -211,31 +247,27 @@ const styles = StyleSheet.create({
   searchInput: {
     fontSize: 15,
   },
-  categoryContainer: {
-    backgroundColor: '#f5f5f5',
-    paddingVertical: 10,
+  tagsContainer: {
+    marginTop: 12,
+    flexDirection: 'row',
   },
-  categoryList: {
-    paddingHorizontal: 12,
+  tagChip: {
+    marginRight: 8,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    height: 32,
   },
-  categoryButton: {
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#e0e0e0',
-    marginHorizontal: 4,
-    elevation: 1,
-  },
-  categoryButtonSelected: {
-    backgroundColor: '#E5293E',
-  },
-  categoryText: {
-    fontSize: 14,
-    color: '#555',
-    fontWeight: '600',
-  },
-  categoryTextSelected: {
+  tagText: {
     color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  filtersRow: {
+    flexDirection: 'row',
+    marginTop: 12,
+  },
+  filterChip: {
+    marginRight: 8,
+    backgroundColor: '#fff',
   },
   centerContainer: {
     flex: 1,
@@ -253,4 +285,46 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 16,
   },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.5)'
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '70%',
+    paddingBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  marketOption: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  marketOptionSelected: {
+    backgroundColor: '#fff0f2',
+  },
+  marketOptionText: {
+    fontSize: 16,
+    color: '#444',
+  },
+  marketOptionTextSelected: {
+    color: '#E5293E',
+    fontWeight: 'bold',
+  }
 });

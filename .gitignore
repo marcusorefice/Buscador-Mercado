@@ -16,6 +16,7 @@ temp_imagens/
 temp_json_cache/
 *.json
 !specs/*.json
+*.html
 *.log
 *.sqlite
 *.db
@@ -24,3 +25,9 @@ temp_json_cache/
 
 # Dependencies/Others
 poppler-*/
+scrapers/teste.py
+teste.py
+app_mercado.bat
+.ngrok.exe.old
+@teste-limpo/
+backup_antes_simplificacao/
