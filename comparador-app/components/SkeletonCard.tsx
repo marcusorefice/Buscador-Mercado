@@ -44,7 +44,7 @@ const styles = StyleSheet.create({
     elevation: 3,
     overflow: 'hidden',
   },
-  imagePlaceholder: { width: '100%', aspectRatio: 1.4, backgroundColor: '#e0e0e0' },
+  imagePlaceholder: { width: '100%', aspectRatio: 1, backgroundColor: '#e0e0e0' },
   content: { padding: 10, flex: 1, justifyContent: 'space-between' },
   titlePlaceholder: { height: 14, backgroundColor: '#e0e0e0', borderRadius: 4, marginBottom: 6 },
   titlePlaceholderShort: { height: 14, backgroundColor: '#e0e0e0', borderRadius: 4, width: '70%', marginBottom: 12 },

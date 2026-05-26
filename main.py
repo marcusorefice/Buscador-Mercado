@@ -15,10 +15,10 @@ import scrapers.covabra as covabra
 import scrapers.dom_olivio as dom_olivio
 import scrapers.oba as oba
 import scrapers.tenda as tenda
-# import scrapers.assai as assai
-# import scrapers.fort as fort
-# import scrapers.roldao as roldao
-# import scrapers.tauste as tauste
+import scrapers.assai as assai
+import scrapers.fort as fort
+import scrapers.roldao as roldao
+import scrapers.tauste as tauste
 
 from utils import read_json_file, write_json_file, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca, enriquecer_ean_produtos_async
 from classificador_ia import classificar_taxonomia_com_ia_async, carregar_biblioteca, salvar_biblioteca, gerar_id_unico, resolver_conflitos_ia_async
@@ -140,6 +140,27 @@ async def main():
     resumo_geral = {}
 
     for nome_mercado, produtos_brutos in resultados_api:
+        if produtos_brutos:
+            todos_itens_crus.extend(produtos_brutos)
+            resumo_geral[nome_mercado] = len(produtos_brutos)
+
+    # ---------------------------------------------------------
+    # ETAPA 2: MERCADOS COM DADOS NÃO ESTRUTURADOS (IMAGEM/IA)
+    # ---------------------------------------------------------
+    scrapers_ia = [
+        (assai, "Assaí Atacadista"),
+        (fort, "Fort Atacadista"),
+        (roldao, "Roldão Atacadista"),
+        (tauste, "Tauste Supermercado"),
+        (tenda, "Tenda Atacado"),
+    ]
+
+    logger.info("\n=== ETAPA 2: COLETANDO DADOS NÃO ESTRUTURADOS (IMAGEM/IA) ===")
+    
+    tarefas_ia = [processar_mercado(modulo, nome_mercado) for modulo, nome_mercado in scrapers_ia]
+    resultados_ia = await asyncio.gather(*tarefas_ia)
+    
+    for nome_mercado, produtos_brutos in resultados_ia:
         if produtos_brutos:
             todos_itens_crus.extend(produtos_brutos)
             resumo_geral[nome_mercado] = len(produtos_brutos)

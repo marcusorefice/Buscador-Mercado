@@ -1,11 +1,12 @@
 import React from 'react';
-import { View, StyleSheet, Modal, Image, ScrollView, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, Modal, Image, ScrollView, ActivityIndicator, TouchableOpacity, ToastAndroid } from 'react-native';
 import { Text, Title, IconButton, Divider, Chip, Button } from 'react-native-paper';
 import { Product } from '../types';
 import { getMarketLogo } from './ProductCard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { useShoppingListStore } from './useShoppingListStore';
+import * as Clipboard from 'expo-clipboard';
 
 interface ProductDetailsModalProps {
   visible: boolean;
@@ -57,6 +58,11 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   }, [visible, product, apiUrl]);
 
   const productToRender = detailedProduct || product;
+
+  // Conectando com o Zustand (Regra do React: Hooks DEVEM ficar antes de qualquer 'return')
+  const isInList = useShoppingListStore(state => productToRender ? state.list.some(p => p.EAN === productToRender.EAN && p.Produto_Ouro === productToRender.Produto_Ouro) : false);
+  const toggleProduct = useShoppingListStore(state => state.toggleProduct);
+
   if (!productToRender) return null;
 
   // Lógica de Desconto
@@ -69,11 +75,18 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const discountPercent = hasDiscount ? Math.round(((originalPrice - currentPrice) / originalPrice) * 100) : 0;
   const bestOffer = productToRender.Ofertas && productToRender.Ofertas.length > 0 ? productToRender.Ofertas[0] : null;
   
-  // Conectando com o Zustand
-  const isInList = useShoppingListStore(state => state.list.some(p => p.EAN === productToRender.EAN && p.Produto_Ouro === productToRender.Produto_Ouro));
-  const toggleProduct = useShoppingListStore(state => state.toggleProduct);
-
   const showPlaceholder = !productToRender.Imagem || !productToRender.Imagem.startsWith('http') || imageError;
+
+  // Transforma o EAN em texto de forma segura
+  const eanStr = String(productToRender?.EAN || '').trim();
+  // Validação: Tem pelo menos 8 dígitos, não começa com '0' e possui apenas números
+  const isValidEAN = eanStr.length >= 8 && !eanStr.startsWith('0') && /^\d+$/.test(eanStr);
+
+  // Função que copia para a área de transferência
+  const copyToClipboard = async () => {
+    await Clipboard.setStringAsync(eanStr);
+    ToastAndroid.show('EAN copiado!', ToastAndroid.SHORT);
+  };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onDismiss}>
@@ -87,7 +100,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          <View style={styles.imageContainer}>
+          <View style={[styles.imageContainer, showPlaceholder && { padding: 0 }]}>
             {showPlaceholder ? (
               <Image source={require('../assets/placeholder.png')} style={styles.image} resizeMode="cover" />
             ) : (
@@ -104,6 +117,22 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
             <Title style={styles.title}>{productToRender.Produto_Ouro}</Title>
             <Text style={styles.brand}>{productToRender.Marca}</Text>
             <Text style={styles.category}>{productToRender.Categoria_Ouro}</Text>
+
+            {isValidEAN && (
+              <TouchableOpacity 
+                style={styles.eanContainer} 
+                onPress={copyToClipboard} 
+                activeOpacity={0.6}
+              >
+                <Text style={styles.eanText}>EAN: {eanStr}</Text>
+                <IconButton 
+                  icon="content-copy" 
+                  size={12} 
+                  iconColor="#999" 
+                  style={styles.copyIcon} 
+                />
+              </TouchableOpacity>
+            )}
             
             <View style={styles.mainOfferContainer}>
               <Text style={styles.mainOfferLabel}>Melhor oferta encontrada:</Text>
@@ -141,7 +170,11 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
             <Divider style={styles.divider} />
 
             <View style={styles.offersHeaderRow}>
-              <Text style={styles.offersHeader}>Disponível em {productToRender.Ofertas.length} mercados:</Text>
+              <Text style={styles.offersHeader}>
+                {productToRender.Ofertas.length === 1 
+                  ? 'Disponível em 1 mercado:' 
+                  : `Disponíveis em ${productToRender.Ofertas.length} mercados:`}
+              </Text>
               {isLoading && <ActivityIndicator size="small" color="#E5293E" />}
             </View>
 
@@ -218,8 +251,9 @@ const styles = StyleSheet.create({
   },
   imageContainer: {
     width: '100%',
-    aspectRatio: 1.2,
+    aspectRatio: 1, // Container quadrado acompanhando o padrão do app
     backgroundColor: '#f9f9f9',
+    padding: 24, // Respiro maior para o modal
   },
   image: { width: '100%', height: '100%' },
   infoContainer: {
@@ -240,6 +274,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#999',
     marginTop: 8,
+  },
+  eanContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  eanText: {
+    fontSize: 11,
+    color: '#999', // Cinza claro e discreto
+  },
+  copyIcon: {
+    margin: 0,
+    marginLeft: -4, // Aproxima o ícone do texto
+    width: 24,
+    height: 24,
   },
   mainOfferContainer: {
     marginTop: 16,

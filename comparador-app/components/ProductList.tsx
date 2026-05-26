@@ -19,8 +19,9 @@ export const ProductList = memo(({ products, refreshing, onRefresh, ListEmptyCom
   // Informar a altura estimada do Card (~310px) poupa o React Native de calcular dinamicamente item por item
   const getItemLayout = useCallback((data: any, index: number) => ({
     length: 310,
-    // Como temos 2 colunas, pulamos a altura a cada linha (index / 2)
-    offset: 310 * Math.floor(index / 2),
+    // Quando usamos numColumns > 1, o FlatList agrupa os itens em linhas (rows).
+    // O parâmetro 'index' recebido aqui já é o índice da LINHA, portanto não precisamos dividir por 2.
+    offset: 310 * index,
     index,
   }), []);
 
@@ -39,10 +40,10 @@ export const ProductList = memo(({ products, refreshing, onRefresh, ListEmptyCom
       getItemLayout={getItemLayout}
       // Otimização de performance para listas grandes
       removeClippedSubviews={true}
-      maxToRenderPerBatch={6}
-      updateCellsBatchingPeriod={50}
-      windowSize={5}
-      initialNumToRender={6}
+      maxToRenderPerBatch={12}
+      updateCellsBatchingPeriod={30}
+      windowSize={11}
+      initialNumToRender={10}
     />
   );
 });

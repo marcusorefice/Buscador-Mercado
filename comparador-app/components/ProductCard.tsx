@@ -84,7 +84,7 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
   return (
     <Card style={styles.card} onPress={() => onPress?.(product)}>
       <View style={styles.innerCard}>
-        <View style={styles.imageContainer}>
+        <View style={[styles.imageContainer, showPlaceholder && { padding: 0 }]}>
           {showPlaceholder ? (
             <Image source={require('../assets/placeholder.png')} style={styles.image} resizeMode="cover" />
           ) : (
@@ -137,7 +137,7 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
 
           <View style={styles.footer}>
             <Text style={styles.offerCount}>
-              {product.Ofertas?.length === 1 ? 'Disponível em 1 mercado:' : `Disponível em ${product.Ofertas?.length || 0} mercados:`}
+              {product.Ofertas?.length === 1 ? 'Disponível em 1 mercado:' : `Disponíveis em ${product.Ofertas?.length || 0} mercados:`}
             </Text>
             {bestOffer && (
               <View style={styles.bestOfferInfo}>
@@ -169,8 +169,9 @@ const styles = StyleSheet.create({
   },
   imageContainer: {
     width: '100%',
-    aspectRatio: 1.4,
+    aspectRatio: 1, // Container agora é um quadrado perfeito
     backgroundColor: '#f9f9f9',
+    padding: 16, // Respiro padrão para a imagem não colar nas bordas
   },
   addToListBtn: {
     position: 'absolute',
@@ -181,7 +182,9 @@ const styles = StyleSheet.create({
   },
   image: { width: '100%', height: '100%' },
   contentContainer: {
-    padding: 10,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 4, // Diminui o respiro no final do card
     flex: 1,
     justifyContent: 'space-between',
   },
@@ -274,9 +277,9 @@ const styles = StyleSheet.create({
   footer: {
     flexDirection: 'column',
     alignItems: 'stretch',
-    marginTop: 10,
-    paddingTop: 8,
-    paddingBottom: 12,
+    marginTop: 8,
+    paddingTop: 6,
+    paddingBottom: 0, // Remove o excesso de espaço sobrando embaixo do mercado
     borderTopWidth: 1,
     borderTopColor: '#eee',
   },
