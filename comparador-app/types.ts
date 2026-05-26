@@ -15,6 +15,9 @@ export interface Product {
   Tags: string[];
   Menor_Preco: number;
   Ofertas: Oferta[];
+  weight?: string;
+  volume?: string;
+  unidade_medida?: string;
 }
   Categoria?: string; // para não quebrar filtro antigo
 }

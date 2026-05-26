@@ -1,14 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform } from 'react-native';
 import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { ProductList } from './components/ProductList';
 import { ProductDetailsModal } from './components/ProductDetailsModal';
+import { ShoppingListModal } from './components/ShoppingListModal';
+import { useShoppingListStore } from './components/useShoppingListStore';
 import { Product } from './types';
+import { SkeletonCard } from './components/SkeletonCard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
-const API_URL = ' https://badness-impale-suitably.ngrok-free.dev';
+const API_URL = 'https://comp-jundiai-api-99.loca.lt';
 
 const theme = {
   ...DefaultTheme,
@@ -38,24 +42,34 @@ const MARKETS = [
 
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
+  const searchQueryRef = useRef('');
   
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isModalVisible, setModalVisible] = useState(false);
+  const [isCartVisible, setCartVisible] = useState(false);
+
+  // Lendo a quantidade de itens na lista usando Zustand
+  const cartItemsCount = useShoppingListStore(state => state.list.length);
 
   // Filtros Globais
   const [sortBy, setSortBy] = useState<'discount' | 'price'>('discount');
   const [selectedMarket, setSelectedMarket] = useState('Todos os Mercados');
   const [isMarketModalVisible, setMarketModalVisible] = useState(false);
 
-  const fetchProducts = async (queryOverride?: string) => {
-    setLoading(true);
+  const fetchProducts = useCallback(async (queryOverride?: string, isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     try {
-      const currentQuery = queryOverride !== undefined ? queryOverride : searchQuery;
+      const currentQuery = queryOverride !== undefined ? queryOverride : searchQueryRef.current;
       const params: any = { q: currentQuery, sort_by: sortBy };
       if (selectedMarket !== 'Todos os Mercados') {
         params.market = selectedMarket;
@@ -63,20 +77,47 @@ export default function App() {
       
       const response = await axios.get<Product[]>(`${API_URL}/produtos`, {
         params,
-        headers: { 'ngrok-skip-browser-warning': 'true' }
+        headers: { 
+          'ngrok-skip-browser-warning': 'true',
+          'Bypass-Tunnel-Reminder': 'true'
+        }
       });
       setProducts(response.data);
+
+      // Otimização Extrema (Offline-first): Salva em cache se for a busca inicial padrão
+      if (!currentQuery && selectedMarket === 'Todos os Mercados' && sortBy === 'discount') {
+        AsyncStorage.setItem('@cached_home_products', JSON.stringify(response.data)).catch(() => {});
+      }
     } catch (err) {
       console.error(err);
       setError('Não foi possível carregar os produtos.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [sortBy, selectedMarket]);
+
+  useEffect(() => {
+    // Tenta carregar o cache primeiro para mostrar os produtos instantaneamente
+    const loadCache = async () => {
+      try {
+        const cached = await AsyncStorage.getItem('@cached_home_products');
+        if (cached) {
+          setProducts(JSON.parse(cached));
+        }
+      } catch (e) {}
+    };
+    loadCache();
+  }, []);
 
   useEffect(() => {
     fetchProducts();
-  }, [sortBy, selectedMarket]);
+  }, [fetchProducts]);
+
+  const handleSearchChange = (text: string) => {
+    setSearchQuery(text);
+    searchQueryRef.current = text;
+  };
 
   const onSearchSubmit = () => {
     fetchProducts();
@@ -84,18 +125,38 @@ export default function App() {
 
   const clearSearch = () => {
     setSearchQuery('');
+    searchQueryRef.current = '';
     fetchProducts('');
   };
 
   const handleTagPress = (tag: string) => {
     setSearchQuery(tag);
+    searchQueryRef.current = tag;
     fetchProducts(tag);
   };
+
+  const handleRefresh = useCallback(() => {
+    fetchProducts(undefined, true);
+  }, [fetchProducts]);
+
+  const listEmptyComponent = useMemo(() => {
+    if (loading) return null;
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={{ color: '#666' }}>Nenhum produto encontrado para a busca atual.</Text>
+      </View>
+    );
+  }, [loading]);
+
+  const handleProductPress = useCallback((item: Product) => {
+    setSelectedProduct(item);
+    setModalVisible(true);
+  }, []);
 
   return (
     <SafeAreaProvider>
       <PaperProvider theme={theme}>
-        <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+        <SafeAreaView style={styles.safeAreaWrapper} edges={['top', 'left', 'right']}>
           <StatusBar barStyle="light-content" backgroundColor="#E5293E" />
           
           <View style={styles.header}>
@@ -103,10 +164,23 @@ export default function App() {
               <TouchableOpacity onPress={clearSearch}>
                 <Text style={styles.headerTitle}>Comparador Jundiaí</Text>
               </TouchableOpacity>
+              <View>
+                <IconButton
+                  icon="cart-outline"
+                  iconColor="#fff"
+                  size={26}
+                  onPress={() => setCartVisible(true)}
+                />
+                {cartItemsCount > 0 && (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{cartItemsCount}</Text>
+                  </View>
+                )}
+              </View>
             </View>
             <Searchbar
               placeholder="Ex: Cerveja Heineken, Fralda..."
-              onChangeText={setSearchQuery}
+              onChangeText={handleSearchChange}
               value={searchQuery}
               onSubmitEditing={onSearchSubmit}
               onIconPress={onSearchSubmit}
@@ -148,35 +222,38 @@ export default function App() {
             </View>
           </View>
 
-          {loading && products.length === 0 ? (
-            <View style={styles.centerContainer}>
-              <ActivityIndicator size="large" color="#E5293E" />
-              <Text style={styles.loadingText}>Buscando produtos...</Text>
-            </View>
-          ) : error ? (
-            <View style={styles.centerContainer}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          ) : (
-            <ProductList
-              products={products}
-              refreshing={loading}
-              onRefresh={() => fetchProducts()}
-              onProductPress={(item) => { setSelectedProduct(item); setModalVisible(true); }}
-              ListEmptyComponent={
-                !loading ? (
-                  <View style={styles.centerContainer}>
-                    <Text style={{ color: '#666' }}>Nenhum produto encontrado para a busca atual.</Text>
-                  </View>
-                ) : null
-              }
-            />
-          )}
+          <View style={styles.mainContent}>
+            {loading && products.length === 0 ? (
+              <ScrollView contentContainerStyle={styles.skeletonContainer} showsVerticalScrollIndicator={false}>
+                {[1, 2, 3, 4, 5, 6].map((key) => (
+                  <SkeletonCard key={key} />
+                ))}
+              </ScrollView>
+            ) : error ? (
+              <View style={styles.centerContainer}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : (
+              <ProductList
+                products={products}
+                refreshing={refreshing}
+                onRefresh={handleRefresh}
+                onProductPress={handleProductPress}
+                ListEmptyComponent={listEmptyComponent}
+              />
+            )}
+          </View>
 
           <ProductDetailsModal
             visible={isModalVisible}
             onDismiss={() => setModalVisible(false)}
             product={selectedProduct}
+            apiUrl={API_URL}
+          />
+
+          <ShoppingListModal 
+            visible={isCartVisible}
+            onDismiss={() => setCartVisible(false)}
           />
 
           <Modal visible={isMarketModalVisible} animationType="slide" transparent={true}>
@@ -213,15 +290,19 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeAreaWrapper: {
+    flex: 1,
+    backgroundColor: '#E5293E',
+  },
+  mainContent: {
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
   header: {
     backgroundColor: '#E5293E',
     paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 12,
+    paddingTop: Platform.OS === 'ios' ? 4 : 12,
+    paddingBottom: 16,
     borderBottomLeftRadius: 16,
     borderBottomRightRadius: 16,
     elevation: 4,
@@ -236,6 +317,24 @@ const styles = StyleSheet.create({
   headerTitle: {
     color: '#fff',
     fontSize: 22,
+    fontWeight: 'bold',
+  },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: '#FFD700', // Amarelo destaque
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#E5293E',
+  },
+  badgeText: {
+    color: '#E5293E',
+    fontSize: 10,
     fontWeight: 'bold',
   },
   searchbar: {
@@ -284,6 +383,12 @@ const styles = StyleSheet.create({
     color: '#d32f2f',
     textAlign: 'center',
     fontSize: 16,
+  },
+  skeletonContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    padding: 6,
   },
   modalOverlay: {
     flex: 1,

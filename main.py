@@ -75,6 +75,13 @@ def garantir_tabela_ofertas(db_path):
             Data_Hora TEXT
         )
     ''')
+    
+    # --- CRIAÇÃO DE ÍNDICES PARA OTIMIZAÇÃO (PERFORMANCE) ---
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ofertas_ean ON ofertas(EAN);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ofertas_mercado ON ofertas(Mercado);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ofertas_categoria ON ofertas(Categoria);')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_historico_ean ON historico_precos(EAN);')
+
     conn.commit()
     conn.close()
 
