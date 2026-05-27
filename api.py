@@ -38,6 +38,10 @@ class OfertaResponse(BaseModel):
     Condicao: str
     Data_Atualizacao: str
 
+@app.get("/")
+def read_root():
+    return {"status": "ONLINE", "mensagem": "API do Comparador de Preços funcionando perfeitamente!"}
+
 class ProdutoAgrupadoResponse(BaseModel):
     EAN: str
     Produto_Ouro: str
