@@ -286,13 +286,20 @@ async def motor_extracao_atacadao():
                             if p_atacado <= 0: continue
                             if p_varejo <= 0 or p_varejo < p_atacado: p_varejo = p_atacado
 
+                            link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                            if link_pdp_rel:
+                                link_pdp = f"https://www.atacadao.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                            else:
+                                link_pdp = ""
+
                             produtos_extraidos.append({
                                 "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": categoria,
                                 "subcategoria": subcategoria, "tipo_produto": tipo_produto,
                                 "Produto": nome_limpo, "Marca": marca_str,
                                 "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','), "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
                                 "Qtd_Valor": qv, "Medida": med, "Unidade": "UN",
-                                "Condição": condicao, "Data_Hora": agora, "Link_Imagem": imagem_url
+                                "Condição": condicao, "Data_Hora": agora, "Link_Imagem": imagem_url,
+                                "Link_PDP": link_pdp
                             })
                         except Exception as e:
                             continue

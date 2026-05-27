@@ -183,9 +183,15 @@ async def motor_extracao_oba():
                         img_url = sku.get('images', [{}])[0].get('imageUrl', '')
                         
                         nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
-                        
+
                         # A unidade de venda será definida com base na medida extraída, e refinada no motor de validação.
                         unidade_venda = "KG" if med == "KG" else "UN"
+
+                        link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                        if link_pdp_rel:
+                            link_pdp = f"https://www.obahortifruti.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                        else:
+                            link_pdp = ""
 
                         lista_final.append({
                             "Mercado": NOME_MERCADO,
@@ -201,7 +207,8 @@ async def motor_extracao_oba():
                             "Medida": med,
                             "Unidade": unidade_venda,
                             "Condição": txt_condicao, "Data_Hora": agora,
-                            "Link_Imagem": img_url
+                            "Link_Imagem": img_url,
+                            "Link_PDP": link_pdp
                         })
                     except Exception:
                         continue

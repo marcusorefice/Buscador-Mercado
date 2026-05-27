@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from utils import setup_logging, read_json_file, write_json_file, normalizar_para_cache, criar_entrada_biblioteca, CATEGORIAS_MASTER, is_valid_check_digit
 
 load_dotenv()
+logger = setup_logging()
 
 # --- GERENCIAMENTO DE CHAVES ---
 lista_chaves_texto = [k.strip().strip('"').strip("'") for k in os.getenv("GEMINI_API_KEYS", "").split(',') if k.strip()]
@@ -15,8 +16,6 @@ indice_chave_texto_atual = 0
 client = None
 if lista_chaves_texto:
     client = genai.Client(api_key=lista_chaves_texto[indice_chave_texto_atual])
-
-logger = setup_logging()
 
 import threading
 
@@ -81,12 +80,21 @@ def gerar_id_unico(nome_produto, marca):
     marca_limpa = re.sub(r'[^a-zA-Z0-9]', '', str(marca).upper())
     return f"{marca_limpa}_{nome_limpo}"
 
-async def _chamar_gemini_com_retry(prompt, model="gemini-2.5-flash", max_retries=2):
-    for tentativa in range(max_retries):
+async def _chamar_gemini_com_retry(prompt, model="gemini-2.5-flash", max_retries=None):
+    global client, indice_chave_texto_atual
+    
+    # Tenta 2 vezes por cada chave disponível (ex: 3 chaves = 6 tentativas no total)
+    if max_retries is None:
+        max_tentativas = max(2, len(lista_chaves_texto) * 2)
+    else:
+        max_tentativas = max_retries
+        
+    for tentativa in range(max_tentativas):
         indice_usado = indice_chave_texto_atual
+        cliente_usado = client
         try:
             response = await asyncio.to_thread(
-                client.models.generate_content,
+                cliente_usado.models.generate_content,
                 model=model,
                 contents=prompt,
                 config={
@@ -95,15 +103,17 @@ async def _chamar_gemini_com_retry(prompt, model="gemini-2.5-flash", max_retries
             )
             return response.text
         except Exception as e:
-            err_str = str(e).upper()
-            if "429" in err_str or "QUOTA" in err_str:
-                logger.warning(f"⚠️ Cota excedida na chave atual. Trocando chave e tentando novamente... (tentativa {tentativa+1}/{max_retries})")
+            erro_str = str(e).upper()
+            if any(err in erro_str for err in ["429", "QUOTA", "EXHAUSTED", "503", "UNAVAILABLE"]):
+                logger.warning(f"⚠️ Limite excedido na chave [{indice_usado}]. Rotacionando... (Tentativa {tentativa+1}/{max_tentativas})")
                 _trocar_chave_texto(indice_falho=indice_usado)
-                # Tenta imediatamente com a nova chave
-                continue
+                await asyncio.sleep(2)
+            else:
+                logger.error(f"❌ Erro na API do Gemini (Chave [{indice_usado}]): {e}")
+                _trocar_chave_texto(indice_falho=indice_usado)
+                await asyncio.sleep(1)
                 
-            logger.error(f"Erro na API do Gemini (tentativa {tentativa+1}/{max_retries}): {e}")
-            await asyncio.sleep(2)
+    logger.error("❌ Todas as tentativas esgotadas. Nenhuma chave funcionou.")
     return None
 
 PROMPT_CLASSIFICACAO = """Você é um assistente de IA especialista em categorização de produtos de supermercado.

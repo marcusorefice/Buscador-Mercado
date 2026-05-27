@@ -11,7 +11,6 @@ from utils import (
     extrair_medidas_inteligente, 
     setup_logging, 
     read_json_file, 
-    MAPA_PARA_APP, 
     CATEGORIAS_IGNORADAS,
     formatar_nome_categoria
 ) 
@@ -38,7 +37,7 @@ SALES_CHANNEL_SHELF = REGIONALIZATION.get("channel", "1")
 SALES_CHANNEL_PRICE = REGIONALIZATION.get("price_channel", "2") # Canal 2 é essencial para Clube +Amigo em Jundiaí
 CLUSTER_ID = REGIONALIZATION.get("cluster_id", "2510")
 
-# Limite de páginas fixo para garantir estabilidade, já que a API não informa o total de forma confiável.
+# Páginas por varredura na estratégia dupla
 MAX_PAGES = 25
 
 # Hashes da API GraphQL (devem estar no spec file para manutenção)
@@ -47,8 +46,8 @@ GET_PRODUCTS_HASH = API_HASHES.get("get_products", "ae50c5a735b1464f0ba48be4f2b3
 CLIENT_PRODUCT_HASH = API_HASHES.get("client_product", "47aa22eb750cb2c529e5eeafb921bfeadb67db71")
 
 # Semáforos preventivos para evitar Bloqueio/404
-PAGE_SEMAPHORE = asyncio.Semaphore(2)
-API_SEMAPHORE = asyncio.Semaphore(5)
+PAGE_SEMAPHORE = asyncio.Semaphore(4)
+API_SEMAPHORE = asyncio.Semaphore(10)
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 
 async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retries=3, delay=1.0) -> tuple[float, float, str]:
@@ -168,6 +167,12 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
                 img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                 if img.startswith("//"): img = "https:" + img
+                
+                link_pdp_rel = p.get('url', '') or p.get('linkText', '')
+                if link_pdp_rel:
+                     link_pdp = f"https://www.boasupermercados.com.br{link_pdp_rel}" if link_pdp_rel.startswith('/') else f"https://www.boasupermercados.com.br/{link_pdp_rel}/p"
+                else:
+                     link_pdp = ""
 
                 lista_final.append({
                     "Mercado": NOME_MERCADO,
@@ -179,7 +184,8 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                     "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
                     "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                     "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                    "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img
+                    "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
+                    "Link_PDP": link_pdp
                 })
             except (KeyError, TypeError, ValueError) as e:
                 logger.warning(f"Erro ao processar um produto na página {pagina_num}: {e}. Produto: {p.get('name', 'N/A')}")
@@ -190,18 +196,21 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
         logger.error(f"Erro inesperado no processamento dos produtos da página {pagina_num}: {e}", exc_info=True)
         return []
 
-async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
+async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_cluster: bool = True):
     """Extrai vitrine e preços de uma página específica"""
     async with PAGE_SEMAPHORE:
         try:
+            facets = [{"key": "productclusterids", "value": CLUSTER_ID}] if use_cluster else []
+            sort_order = "score_desc" if use_cluster else "discount_desc"
+
             variables_shelf = {
                 "input": {
                     "activeSalesChannel": SALES_CHANNEL_SHELF, 
                     "postalCode": CEP_JUNDIAI, 
                     "page": pagina,
-                    "sort": "score_desc", 
+                    "sort": sort_order, 
                     "term": "", 
-                    "selectedFacets": [{"key": "productclusterids", "value": CLUSTER_ID}]
+                    "selectedFacets": facets
                 }
             }
             params_shelf = {
@@ -219,7 +228,12 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                 logger.warning(f"Resposta da vitrine (página {pagina}) não é um dict.")
                 return []
             
-            edges = res_json.get('data', {}).get('getProducts', {}).get('data', {}).get('products', {}).get('edges', [])
+            # Extração segura para evitar o erro 'NoneType' se a página exceder o limite da API
+            try:
+                edges = res_json['data']['getProducts']['data']['products']['edges']
+            except (KeyError, TypeError):
+                edges = []
+                
             if not edges:
                 logger.info(f"Página {pagina} do {NOME_MERCADO} não retornou produtos. Fim da lista.")
                 return []
@@ -233,11 +247,15 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
             return []
 
 async def motor_extracao_boa():
-    logger.info(f"🚀 Iniciando extração para {NOME_MERCADO} Jundiaí (Páginas Fixas: {MAX_PAGES})...")
+    logger.info(f"🚀 Iniciando extração DUPLA para {NOME_MERCADO} Jundiaí (Cluster + Maiores Descontos)...")
     async with AsyncSession(impersonate=IMPERSONATE) as session:
-        # Processa todas as páginas respeitando o semáforo de 2 em 2
-        tarefas = [_extrair_pagina_completa(session, p) for p in range(1, MAX_PAGES + 1)]
-        resultados = await asyncio.gather(*tarefas)
+        # Busca 1: Cluster oficial (Garante as ofertas principais)
+        tarefas_cluster = [_extrair_pagina_completa(session, p, use_cluster=True) for p in range(1, MAX_PAGES + 1)]
+        
+        # Busca 2: Varredura de maiores descontos no site todo (Pega os itens ocultos da VTEX)
+        tarefas_desconto = [_extrair_pagina_completa(session, p, use_cluster=False) for p in range(1, MAX_PAGES + 5)]
+        
+        resultados = await asyncio.gather(*(tarefas_cluster + tarefas_desconto))
         
         lista_achatada = [item for sublist in resultados for item in sublist]
     
@@ -246,7 +264,21 @@ async def motor_extracao_boa():
         logger.warning(f"Nenhum produto foi capturado para o {NOME_MERCADO}.")
         return []
         
-    lista_unica = list({f"{v['Produto']}_{v['Marca']}": v for v in lista_achatada}.values())
+    lista_unica_dict = {}
+    for v in lista_achatada:
+        ean = str(v.get('EAN', 'N/A')).strip()
+        chave = ean if (ean and ean != 'N/A') else f"{v['Produto']}_{v['Marca']}"
+        
+        # Se o item já existir de outra busca, mantém o que tiver o menor preço de atacado
+        if chave in lista_unica_dict:
+            preco_atual = float(str(lista_unica_dict[chave]['Preço Atacado']).replace('R$ ', '').replace(',', '.'))
+            preco_novo = float(str(v['Preço Atacado']).replace('R$ ', '').replace(',', '.'))
+            if preco_novo < preco_atual:
+                lista_unica_dict[chave] = v
+        else:
+            lista_unica_dict[chave] = v
+        
+    lista_unica = list(lista_unica_dict.values())
     logger.info(f"✅ Finalizado! {len(lista_unica)} produtos capturados no Boa Jundiaí.")
     return lista_unica
 

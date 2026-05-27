@@ -10,6 +10,7 @@ from classificador_ia import (
     PROMPT_CONFLITO,
     CATEGORIAS_MASTER
 )
+import classificador_ia
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -27,59 +28,39 @@ async def resolver_ean_novo(ean, itens_crus):
     # Se só tem um item, ou todos os itens têm exatamente o mesmo nome
     nomes_unicos = {item.get("Produto", item.get("nome_comum", "")) for item in itens_crus}
     
+    # --- NOVO PROMPT SIMPLIFICADO ---
+    PROMPT_SIMPLIFICADO_CONFLITO = """Vários supermercados enviaram nomes diferentes para o mesmo produto (EAN: {ean}).
+Sua tarefa é analisar as opções e retornar APENAS UM JSON válido com o melhor nome (mais claro e descritivo) e a marca.
+Não crie tags nem categorias.
+
+OPÇÕES RECEBIDAS:
+{opcoes}
+
+FORMATO DE SAÍDA EXATO:
+{{
+"nome_comum": "Melhor Nome Escolhido",
+"marca": "MARCA EM CAIXA ALTA"
+}}"""
+
     if len(nomes_unicos) == 1:
-        # Só tem 1 variação de nome: Classifica normalmente
+        # Só tem 1 variação de nome: NÃO USA IA! Economiza tempo e limite da API.
         item_base = itens_crus[0]
-        logger.info(f"🧠 [Classificando] EAN {ean} - Apenas 1 variação: {item_base.get('Produto')}")
+        nome = item_base.get("Produto", item_base.get("nome_comum", ""))
+        marca = str(item_base.get("Marca", item_base.get("marca", ""))).upper()
+        categoria = item_base.get("Categoria", "OUTROS")
         
-        prompt = PROMPT_CLASSIFICACAO.format(
-            nome=item_base.get("Produto", item_base.get("nome_comum", "")),
-            marca=item_base.get("Marca", item_base.get("marca", "")),
-            ean=ean,
-            categoria_mercado=item_base.get("Categoria", ""),
-            categorias_validas=", ".join(CATEGORIAS_MASTER)
-        )
-    else:
-        # Conflito! Múltiplas variações para o mesmo EAN
-        logger.info(f"⚔️ [Resolvendo Conflito] EAN {ean} - {len(nomes_unicos)} variações encontradas.")
-        
-        # Vamos passar as variações como JSON para a IA comparar
-        opcoes = []
-        for i, item in enumerate(itens_crus, 1):
-            opcoes.append({
-                "mercado": item.get("Mercado", f"Opção {i}"),
-                "nome_original": item.get("Produto", item.get("nome_comum", "")),
-                "marca_original": item.get("Marca", item.get("marca", "")),
-                "categoria_mercado": item.get("Categoria", "")
-            })
-            
-        prompt = PROMPT_CONFLITO.format(
-            ean=ean,
-            dados_a=json.dumps(opcoes[0], ensure_ascii=False, indent=2), # Usamos o primeiro como base "A"
-            dados_b=json.dumps(opcoes[1:], ensure_ascii=False, indent=2) # Usamos o resto como base "B"
-        )
-
-    # Chama a IA
-    resposta_texto = await _chamar_gemini_com_retry(prompt)
-    if not resposta_texto:
-        return None
-
-    try:
-        import re
-        match = re.search(r'\{.*\}', resposta_texto, re.DOTALL)
-        json_str = match.group(0) if match else resposta_texto
-        resultado_json = json.loads(json_str)
+        logger.info(f"⚡ [Pulo IA] EAN {ean} - Apenas 1 variação: {nome}")
         
         # Garante o formato do Produto Ouro
         produto_ouro = {
             "id": str(ean),
-            "nome_comum": resultado_json.get("nome_comum", ""),
-            "marca": str(resultado_json.get("marca", "")).upper(),
+            "nome_comum": nome,
+            "marca": marca,
             "ean": str(ean),
-            "Categoria": resultado_json.get("Categoria", "OUTROS"),
-            "subcategoria": resultado_json.get("subcategoria", ""),
-            "tipo_produto": resultado_json.get("tipo_produto", ""),
-            "tags": resultado_json.get("tags", []),
+            "Categoria": categoria,
+            "subcategoria": "N/A",
+            "tipo_produto": "N/A",
+            "tags": [],
             "revisado_humano": False
         }
         
@@ -92,9 +73,60 @@ async def resolver_ean_novo(ean, itens_crus):
                 
         return produto_ouro
 
-    except json.JSONDecodeError:
-        logger.error(f"❌ Erro ao parsear JSON da IA para o EAN {ean}")
-        return None
+    else:
+        # Conflito! Múltiplas variações para o mesmo EAN, então chama a IA
+        logger.info(f"⚔️ [Resolvendo Conflito IA] EAN {ean} - {len(nomes_unicos)} variações encontradas.")
+        
+        # Vamos passar as variações como JSON para a IA comparar
+        opcoes = []
+        for i, item in enumerate(itens_crus, 1):
+            opcoes.append({
+                "mercado": item.get("Mercado", f"Opção {i}"),
+                "nome_original": item.get("Produto", item.get("nome_comum", "")),
+                "marca": item.get("Marca", item.get("marca", ""))
+            })
+            
+        prompt = PROMPT_SIMPLIFICADO_CONFLITO.format(
+            ean=ean,
+            opcoes=json.dumps(opcoes, ensure_ascii=False, indent=2)
+        )
+
+        # Chama a IA
+        resposta_texto = await _chamar_gemini_com_retry(prompt)
+        if not resposta_texto:
+            return None
+
+        try:
+            import re
+            match = re.search(r'\{.*\}', resposta_texto, re.DOTALL)
+            json_str = match.group(0) if match else resposta_texto
+            resultado_json = json.loads(json_str)
+            
+            # Garante o formato do Produto Ouro
+            produto_ouro = {
+                "id": str(ean),
+                "nome_comum": resultado_json.get("nome_comum", list(nomes_unicos)[0]),
+                "marca": str(resultado_json.get("marca", itens_crus[0].get("Marca", ""))).upper(),
+                "ean": str(ean),
+                "Categoria": itens_crus[0].get("Categoria", "OUTROS"), # Mantém a original
+                "subcategoria": "N/A",
+                "tipo_produto": "N/A",
+                "tags": [],
+                "revisado_humano": False
+            }
+            
+            # Pega a imagem do primeiro item que tiver uma
+            for item in itens_crus:
+                img = item.get("Link_Imagem", item.get("imagem", ""))
+                if img and str(img).startswith("http"):
+                    produto_ouro["imagem"] = img
+                    break
+                    
+            return produto_ouro
+
+        except json.JSONDecodeError:
+            logger.error(f"❌ Erro ao parsear JSON da IA para o EAN {ean}")
+            return None
 
 async def main():
     if not os.path.exists(ARQUIVO_PENDENTES):
@@ -138,21 +170,49 @@ async def main():
     logger.info(f"📊 Total de EANs válidos encontrados nos pendentes: {len(itens_por_ean)}")
     
     novos_na_biblioteca = 0
+    eans_com_falha = set()
     
     # Processa os EANs
+    eans_para_processar = []
     for ean, lista_itens_crus in itens_por_ean.items():
-        if ean in biblioteca:
-            # O Produto Ouro já existe! Não precisamos chamar a IA.
-            # Os itens crus continuam existindo e poderão ser comparados pelo EAN.
-            continue
+        if ean not in biblioteca:
+            eans_para_processar.append((ean, lista_itens_crus))
             
-        # O EAN não existe na biblioteca. Vamos usar a IA para criar o Produto Ouro.
-        produto_ouro = await resolver_ean_novo(ean, lista_itens_crus)
+    if eans_para_processar:
+        total_processar = len(eans_para_processar)
+        logger.info(f"🚀 Iniciando processamento CONTÍNUO de {total_processar} novos EANs via IA (Alta Concorrência)...")
         
-        if produto_ouro:
-            biblioteca[ean] = produto_ouro
-            novos_na_biblioteca += 1
-            logger.info(f"✅ Produto Ouro criado: {produto_ouro['nome_comum']} ({ean})")
+        # Exibe qual chave está sendo usada no momento (mascarada por segurança)
+        if classificador_ia.lista_chaves_texto:
+            idx = classificador_ia.indice_chave_texto_atual
+            chave = classificador_ia.lista_chaves_texto[idx]
+            chave_mascarada = f"{chave[:8]}...{chave[-4:]}" if len(chave) > 12 else "***"
+            logger.info(f"🔑 Chave API inicial em uso: Índice [{idx}] -> {chave_mascarada}")
+        
+        itens_processados_count = 0
+        concorrencia = 20
+        semaphore = asyncio.Semaphore(concorrencia)
+        
+        async def processar_item(ean, lista_itens_crus):
+            nonlocal itens_processados_count
+            async with semaphore:
+                itens_processados_count += 1
+                progresso = f"[{itens_processados_count}/{total_processar}]"
+                logger.info(f"⏳ {progresso} Processando EAN {ean}...")
+                resultado = await resolver_ean_novo(ean, lista_itens_crus)
+                return ean, resultado
+                
+        # Dispara todos os itens de uma vez, o semáforo controla a quantidade simultânea
+        tasks = [processar_item(ean, lista) for ean, lista in eans_para_processar]
+        resultados = await asyncio.gather(*tasks)
+
+        for ean, produto_ouro in resultados:
+            if produto_ouro:
+                biblioteca[ean] = produto_ouro
+                novos_na_biblioteca += 1
+                logger.info(f"✅ Produto Ouro criado: {produto_ouro['nome_comum']} ({ean})")
+            else:
+                eans_com_falha.add(ean)
 
     # Salva a biblioteca atualizada
     if novos_na_biblioteca > 0:
@@ -162,13 +222,32 @@ async def main():
     else:
         logger.info("\n✅ Nenhum novo produto precisou ser adicionado à biblioteca.")
 
-    # Salva TODOS os itens pendentes originais em um novo arquivo (eles não foram modificados)
-    # Agora você pode usar esse arquivo para o seu comparador de preços!
+    # Separa os itens: o que deu certo vai para o banco, o que falhou (ou não tem EAN) continua pendente
+    itens_prontos = []
+    itens_restantes = []
+    for item in pendentes:
+        ean = str(item.get("EAN", item.get("ean", "N/A"))).strip()
+        if ean in ("N/A", "", "None", "nan") or not ean.isdigit():
+            itens_restantes.append(item)
+        elif ean in eans_com_falha:
+            itens_restantes.append(item)
+        else:
+            itens_prontos.append(item)
+
     with open(ARQUIVO_PROCESSADOS, "w", encoding="utf-8") as f:
-        json.dump(pendentes, f, ensure_ascii=False, indent=4)
+        json.dump(itens_prontos, f, ensure_ascii=False, indent=4)
         
-    logger.info(f"📦 Todos os {len(pendentes)} itens crus (originais) foram disponibilizados para o comparador de preços em '{ARQUIVO_PROCESSADOS}'.")
-    logger.info(f"⚠️ Atenção: {len(itens_sem_ean)} itens não possuíam EAN válido.")
+    logger.info(f"📦 {len(itens_prontos)} itens prontos foram disponibilizados para o comparador de preços em '{ARQUIVO_PROCESSADOS}'.")
+
+    try:
+        with open(ARQUIVO_PENDENTES, "w", encoding="utf-8") as f:
+            json.dump(itens_restantes, f, ensure_ascii=False, indent=4)
+        if itens_restantes:
+            logger.info(f"⚠️ {len(itens_restantes)} itens continuam em 'pendentes_ia.json' (falha na IA ou sem EAN).")
+        else:
+            logger.info("🧹 Arquivo 'pendentes_ia.json' foi esvaziado (todos os itens processados com sucesso).")
+    except Exception as e:
+        logger.warning(f"⚠️ Não foi possível atualizar o arquivo 'pendentes_ia.json': {e}")
 
 if __name__ == "__main__":
     if os.name == 'nt':

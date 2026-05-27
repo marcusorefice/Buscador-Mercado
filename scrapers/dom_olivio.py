@@ -39,7 +39,8 @@ SALES_CHANNEL_SHELF = REGIONALIZATION.get("channel", "1")
 SALES_CHANNEL_PRICE = REGIONALIZATION.get("price_channel", "2")
 CLUSTER_ID = REGIONALIZATION.get("cluster_id", "2085")
 
-MAX_PAGES = CONFIG.get("pagination", {}).get("max_pages", 25)
+# Páginas por varredura na estratégia dupla
+MAX_PAGES = 25
 
 # Hashes da API GraphQL
 API_HASHES = CONFIG.get("api_hashes", {})
@@ -47,11 +48,11 @@ GET_PRODUCTS_HASH = API_HASHES.get("get_products", "ae50c5a735b1464f0ba48be4f2b3
 CLIENT_PRODUCT_HASH = API_HASHES.get("client_product", "47aa22eb750cb2c529e5eeafb921bfeadb67db71")
 
 # Semáforos preventivos para evitar Bloqueio/404
-PAGE_SEMAPHORE = asyncio.Semaphore(10)
-API_SEMAPHORE = asyncio.Semaphore(30)
+PAGE_SEMAPHORE = asyncio.Semaphore(4)
+API_SEMAPHORE = asyncio.Semaphore(10)
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 
-async def _buscar_preco_calculado(session: AsyncSession, product_id: str) -> tuple[float, float, str]:
+async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retries=3, delay=1.0) -> tuple[float, float, str]:
     """Consulta o preço real (incluindo descontos de cartão/clube) e GTIN/EAN via Hash"""
     async with API_SEMAPHORE:
         variables = {
@@ -68,49 +69,57 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str) -> tup
         }
         url = f"{URL_BASE}?" + urllib.parse.urlencode(params)
         
-        try:
-            res = await session.get(url, timeout=10)
-            res.raise_for_status()
-            data = res.json()
-            if not isinstance(data, dict):
-                logger.warning(f"Resposta inesperada (não é um dict) para o produto ID {product_id}.")
-                return 0.0, 0.0, 'N/A'
-            
-            p_data = data.get('data', {}).get('product', {})
-            
-            # Extração do GTIN/EAN, que só está disponível na chamada detalhada na VTEX FastStore
-            ean = str(p_data.get('gtin', '')).strip()
-            if not ean or ean == '0' or ean == 'None':
-                ean = str(p_data.get('ean', '')).strip()
-            if not ean or ean == '0' or ean == 'None':
-                ean = 'N/A'
+        for tentativa in range(retries):
+            try:
+                res = await session.get(url, timeout=10)
+                res.raise_for_status()
+                data = res.json()
+                if not isinstance(data, dict):
+                    logger.warning(f"Resposta inesperada (não é um dict) para o produto ID {product_id}.")
+                    return 0.0, 0.0, 'N/A'
                 
-            offers = p_data.get('offers', {})
-            if offers:
-                list_price = float(offers.get('offers', [{}])[0].get('listPrice', 0.0))
-                price = float(offers.get('lowPrice', 0.0))
-                return list_price, price, ean
+                p_data = data.get('data', {}).get('product', {})
                 
-            return 0.0, 0.0, ean
-        except (asyncio.TimeoutError, json.JSONDecodeError, curl_cffi.requests.errors.RequestsError) as e:
-            logger.error(f"Erro ao buscar preço detalhado para ID {product_id}: {e}")
-        except Exception as e:
-            logger.error(f"Erro inesperado ao buscar preço detalhado para ID {product_id}: {e}", exc_info=True)
+                # Extração do GTIN/EAN, que só está disponível na chamada detalhada na VTEX FastStore
+                ean = str(p_data.get('gtin', '')).strip()
+                if not ean or ean == '0' or ean == 'None':
+                    ean = str(p_data.get('ean', '')).strip()
+                if not ean or ean == '0' or ean == 'None':
+                    ean = 'N/A'
+                    
+                offers = p_data.get('offers', {})
+                if offers:
+                    list_price = float(offers.get('offers', [{}])[0].get('listPrice', 0.0))
+                    price = float(offers.get('lowPrice', 0.0))
+                    return list_price, price, ean
+                    
+                return 0.0, 0.0, ean
+            except (asyncio.TimeoutError, curl_cffi.requests.errors.RequestsError) as e:
+                if tentativa < retries - 1:
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Erro final ao buscar preço detalhado para ID {product_id} após {retries} tentativas: {e}")
+            except Exception as e:
+                logger.error(f"Erro inesperado ao buscar preço detalhado para ID {product_id}: {e}", exc_info=True)
+                break
 
         return 0.0, 0.0, 'N/A'
 
-async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
+async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_cluster: bool = True):
     """Extrai vitrine e preços de uma página específica"""
     async with PAGE_SEMAPHORE:
         try:
+            facets = [{"key": "productclusterids", "value": CLUSTER_ID}] if use_cluster else []
+            sort_order = "score_desc" if use_cluster else "discount_desc"
+
             variables_shelf = {
                 "input": {
                     "activeSalesChannel": SALES_CHANNEL_SHELF, 
                     "postalCode": CEP_JUNDIAI, 
                     "page": pagina,
-                    "sort": "score_desc", 
+                    "sort": sort_order, 
                     "term": "", 
-                    "selectedFacets": [{"key": "productclusterids", "value": CLUSTER_ID}]
+                    "selectedFacets": facets
                 }
             }
             params_shelf = {
@@ -128,9 +137,14 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                 logger.warning(f"Resposta da vitrine (página {pagina}) não é um dict.")
                 return []
             
-            edges = res_json.get('data', {}).get('getProducts', {}).get('data', {}).get('products', {}).get('edges', [])
+            # Extração segura para evitar o erro 'NoneType' se a página exceder o limite da API
+            try:
+                edges = res_json['data']['getProducts']['data']['products']['edges']
+            except (KeyError, TypeError):
+                edges = []
+                
             if not edges:
-                logger.info(f"Página {pagina} do {NOME_MERCADO} não retornou produtos. Fim da lista?")
+                logger.info(f"Página {pagina} do {NOME_MERCADO} não retornou produtos. Fim da lista.")
                 return []
 
             tarefas_precos = [_buscar_preco_calculado(session, e['node']['id']) for e in edges]
@@ -244,6 +258,12 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                     img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                     if img.startswith("//"): img = "https:" + img
 
+                    link_pdp_rel = p.get('url', '') or p.get('linkText', '')
+                    if link_pdp_rel:
+                        link_pdp = f"https://www.domolivio.com.br{link_pdp_rel}" if link_pdp_rel.startswith('/') else f"https://www.domolivio.com.br/{link_pdp_rel}/p"
+                    else:
+                        link_pdp = ""
+
                     lista_final.append({
                         "Mercado": NOME_MERCADO,
                         "EAN": ean,
@@ -254,7 +274,8 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
                         "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                        "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img
+                        "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
+                        "Link_PDP": link_pdp
                     })
                 except (KeyError, TypeError, ValueError) as e:
                     logger.warning(f"Erro ao processar um produto na página {pagina}: {e}. Produto: {p.get('name', 'N/A')}")
@@ -269,10 +290,15 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int):
             return []
 
 async def motor_extracao_dom_olivio():
-    logger.info(f"🚀 Iniciando extração para {NOME_MERCADO}...")
+    logger.info(f"🚀 Iniciando extração DUPLA para {NOME_MERCADO} (Cluster + Maiores Descontos)...")
     async with AsyncSession(impersonate=IMPERSONATE) as session:
-        tarefas = [_extrair_pagina_completa(session, p) for p in range(1, MAX_PAGES + 1)]
-        resultados = await asyncio.gather(*tarefas)
+        # Busca 1: Cluster oficial (Garante as ofertas principais)
+        tarefas_cluster = [_extrair_pagina_completa(session, p, use_cluster=True) for p in range(1, MAX_PAGES + 1)]
+        
+        # Busca 2: Varredura de maiores descontos no site todo (Pega os itens ocultos da VTEX)
+        tarefas_desconto = [_extrair_pagina_completa(session, p, use_cluster=False) for p in range(1, MAX_PAGES + 5)]
+        
+        resultados = await asyncio.gather(*(tarefas_cluster + tarefas_desconto))
         
         lista_achatada = [item for sublist in resultados for item in sublist]
     
@@ -280,10 +306,23 @@ async def motor_extracao_dom_olivio():
         logger.warning(f"Nenhum produto foi capturado para o {NOME_MERCADO}.")
         return []
 
-    # Deduplicação por uma chave mais robusta (Produto + Marca) para evitar que
-    # produtos diferentes com nomes similares (após a limpeza) se sobreponham.
-    lista_unica = list({f"{v['Produto']}_{v['Marca']}": v for v in lista_achatada}.values())
-    logger.info(f"✅ Finalizado! {len(lista_achatada)} produtos brutos coletados, resultando em {len(lista_unica)} produtos únicos.")
+    # Deduplicação Inteligente: Prioriza o EAN para não apagar produtos de sabores diferentes com o mesmo nome base
+    lista_unica_dict = {}
+    for v in lista_achatada:
+        ean = str(v.get('EAN', 'N/A')).strip()
+        chave = ean if (ean and ean != 'N/A') else f"{v['Produto']}_{v['Marca']}"
+        
+        # Se o item já existir de outra busca, mantém o que tiver o menor preço de atacado
+        if chave in lista_unica_dict:
+            preco_atual = float(str(lista_unica_dict[chave]['Preço Atacado']).replace('R$ ', '').replace(',', '.'))
+            preco_novo = float(str(v['Preço Atacado']).replace('R$ ', '').replace(',', '.'))
+            if preco_novo < preco_atual:
+                lista_unica_dict[chave] = v
+        else:
+            lista_unica_dict[chave] = v
+            
+    lista_unica = list(lista_unica_dict.values())
+    logger.info(f"✅ Finalizado! {len(lista_unica)} produtos capturados no {NOME_MERCADO}.")
     return lista_unica
 
 async def extrair_dados():

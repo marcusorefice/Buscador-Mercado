@@ -89,3 +89,4 @@ pdf2image
 curl_cffi
 playwright
 python-dotenv
+psycopg2-binary

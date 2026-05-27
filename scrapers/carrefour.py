@@ -191,10 +191,6 @@ async def enrich_eans_from_pdps(session, lista_produtos):
     for p, ean in zip(produtos_sem_ean, resultados):
         if ean != 'N/A':
             p['EAN'] = ean
-            
-    # Limpa campo temporário
-    for p in lista_produtos:
-        p.pop('Link_PDP', None)
 
 async def extrair_dados():
     cookies = await capturar_sessao()

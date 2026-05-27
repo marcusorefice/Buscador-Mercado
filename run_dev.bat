@@ -15,12 +15,12 @@ echo.
 echo [1/3] Iniciando a API Python (FastAPI) na porta 8000...
 start "API Backend" cmd /k "cd /d "%~dp0" && python api.py"
 
-echo [2/3] Iniciando o localtunnel para expor a API na porta 8000...
-start "localtunnel" cmd /k "npx -y localtunnel --port 8000 --subdomain comp-jundiai-api-99"
+echo [2/3] Iniciando o ngrok para expor a API (URL FIXA)...
+start "ngrok API" cmd /k "npx @ngrok/ngrok http 8000 --domain=badness-impale-suitably.ngrok-free.dev"
 
 echo [3/3] Iniciando o Expo Metro Bundler...
-:: Mata processos fantasmas do ngrok e usa aspas no Token para evitar espacos em branco no Windows
-start "Expo Metro" cmd /k "taskkill /f /im ngrok.exe >nul 2>&1 & cd /d "%~dp0\comparador-app" && set "EXPO_NGROK_AUTHTOKEN=***REMOVIDO***" && npx expo start -c --tunnel"
+:: Inicia o Expo em modo LAN (mais estável). Use o QR Code no seu celular na mesma rede Wi-Fi.
+start "Expo Metro" cmd /k "cd /d "%~dp0\comparador-app" && npx expo start -c"
 
 echo.
 echo =================================================================
@@ -28,7 +28,7 @@ echo    TUDO PRONTO!
 echo =================================================================
 echo.
 echo   INSTRUCOES:
-echo   1. A URL da sua API agora e fixa: https://comp-jundiai-api-99.loca.lt
-echo   2. Cole essa URL no arquivo 'comparador-app/App.tsx' (voce so precisa fazer isso uma vez!).
-echo   3. Salve o arquivo e use o QR Code da janela 'Expo Metro' para abrir o app no seu celular.
+echo   1. A API esta rodando com o dominio estatico do ngrok!
+echo   2. Certifique-se de que substituiu o dominio no 'App.tsx' antes de gerar o APK final.
+echo   3. Para desenvolver, conecte seu celular na mesma rede Wi-Fi e escaneie o QR Code do Expo.
 echo.

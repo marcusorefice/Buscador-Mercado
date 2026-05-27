@@ -12,7 +12,7 @@ import { SkeletonCard } from './components/SkeletonCard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
-const API_URL = 'https://comp-jundiai-api-99.loca.lt';
+const API_URL = 'https://buscador-mercado.onrender.com'; // Use o link que você pegou no site do Render
 
 const theme = {
   ...DefaultTheme,

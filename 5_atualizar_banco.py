@@ -1,11 +1,15 @@
-import sqlite3
+import psycopg2
 import json
 import os
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Definir os caminhos dos arquivos
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-DB_PATH = os.path.join(DATA_DIR, "monitoramento_Jundiai.db")
+# URL do Banco de Dados Supabase (PostgreSQL)
+DB_URL = os.getenv("DATABASE_URL")
 BIBLIOTECA_PATH = os.path.join(DATA_DIR, "biblioteca_produtos.json")
 ITENS_CRUS_PATH = os.path.join(DATA_DIR, "itens_prontos_para_comparar.json")
 
@@ -32,8 +36,8 @@ def init_db(conn):
         ean TEXT,
         mercado TEXT,
         nome_original TEXT,
-        preco_varejo REAL,
-        preco_atacado REAL,
+        preco_varejo NUMERIC,
+        preco_atacado NUMERIC,
         condicao TEXT,
         data_atualizacao TEXT,
         PRIMARY KEY (ean, mercado)
@@ -43,11 +47,11 @@ def init_db(conn):
     # Tabela Histórico de Preços (Para gráficos de variação de preço futuro)
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS historico_precos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         ean TEXT,
         mercado TEXT,
-        preco_varejo REAL,
-        preco_atacado REAL,
+        preco_varejo NUMERIC,
+        preco_atacado NUMERIC,
         data_hora TEXT
     )
     ''')
@@ -69,8 +73,8 @@ def extract_number(price_str):
         return 0.0
 
 def main():
-    print(f"Conectando ao banco de dados: {DB_PATH}")
-    conn = sqlite3.connect(DB_PATH)
+    print(f"Conectando ao banco de dados PostgreSQL na nuvem (Supabase)...")
+    conn = psycopg2.connect(DB_URL)
     init_db(conn)
     cursor = conn.cursor()
 
@@ -86,8 +90,8 @@ def main():
             
             cursor.execute('''
                 INSERT INTO produtos (ean, nome_comum, marca, categoria, subcategoria, tipo_produto, imagem, tags)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(ean) DO UPDATE SET
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ean) DO UPDATE SET
                     nome_comum=excluded.nome_comum,
                     marca=excluded.marca,
                     categoria=excluded.categoria,
@@ -139,8 +143,8 @@ def main():
             # Grava/Atualiza na vitrine de hoje
             cursor.execute('''
                 INSERT INTO ofertas_atuais (ean, mercado, nome_original, preco_varejo, preco_atacado, condicao, data_atualizacao)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(ean, mercado) DO UPDATE SET
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (ean, mercado) DO UPDATE SET
                     nome_original=excluded.nome_original,
                     preco_varejo=excluded.preco_varejo,
                     preco_atacado=excluded.preco_atacado,
@@ -151,20 +155,20 @@ def main():
             # Verifica se o preço mudou para gravar no Histórico
             cursor.execute('''
                 SELECT preco_varejo, preco_atacado FROM historico_precos 
-                WHERE ean = ? AND mercado = ? 
+                WHERE ean = %s AND mercado = %s 
                 ORDER BY id DESC LIMIT 1
             ''', (ean, mercado))
             ultimo = cursor.fetchone()
             
             # Só insere uma nova linha no histórico se for o primeiro registro ou se o preço for diferente do anterior
-            if not ultimo or ultimo[0] != p_varejo or ultimo[1] != p_atacado:
+            if not ultimo or float(ultimo[0]) != p_varejo or float(ultimo[1]) != p_atacado:
                 cursor.execute('''
                     INSERT INTO historico_precos (ean, mercado, preco_varejo, preco_atacado, data_hora)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s)
                 ''', (ean, mercado, p_varejo, p_atacado, data_extracao))
                 
         conn.commit()
-        print("Banco de dados SQLite atualizado com sucesso!")
+        print("Banco de dados PostgreSQL atualizado com sucesso!")
     else:
         print("Arquivo 'itens_prontos_para_comparar.json' nao encontrado. Voce rodou o passo 4?")
     

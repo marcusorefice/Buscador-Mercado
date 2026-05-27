@@ -162,6 +162,12 @@ async def extrair_dados():
                             # Marca e Imagem
                             marca = str(p.get('brand', 'OUTROS')).upper()
                             img_url = item.get('images', [{}])[0].get('imageUrl', '')
+
+                            link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                            if link_pdp_rel:
+                                link_pdp = f"https://www.covabra.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                            else:
+                                link_pdp = ""
                             
                             lista_final.append({
                                 "Mercado": NOME_MERCADO,
@@ -177,7 +183,8 @@ async def extrair_dados():
                                 "Medida": med,
                                 "Unidade": "UN", "Condição": condicao,
                                 "Data_Hora": agora,
-                                "Link_Imagem": img_url
+                                "Link_Imagem": img_url,
+                                "Link_PDP": link_pdp
                             })
                         except:
                             continue

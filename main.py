@@ -148,11 +148,11 @@ async def main():
     # ETAPA 2: MERCADOS COM DADOS NÃO ESTRUTURADOS (IMAGEM/IA)
     # ---------------------------------------------------------
     scrapers_ia = [
-        (assai, "Assaí Atacadista"),
-        (fort, "Fort Atacadista"),
-        (roldao, "Roldão Atacadista"),
-        (tauste, "Tauste Supermercado"),
-        (tenda, "Tenda Atacado"),
+        # (assai, "Assaí Atacadista"),
+        # (fort, "Fort Atacadista"),
+        # (roldao, "Roldão Atacadista"),
+        # (tauste, "Tauste Supermercado"),
+        # (tenda, "Tenda Atacado"),
     ]
 
     logger.info("\n=== ETAPA 2: COLETANDO DADOS NÃO ESTRUTURADOS (IMAGEM/IA) ===")
@@ -166,17 +166,47 @@ async def main():
             resumo_geral[nome_mercado] = len(produtos_brutos)
 
     # ---------------------------------------------------------
-    # SALVAR TODOS OS ITENS CRUS PARA A PRÓXIMA FASE
+    # ETAPA 3: NORMALIZAÇÃO DE PREÇOS (HOTFIX PARA 100G vs KG)
     # ---------------------------------------------------------
-    if todos_itens_crus:
-        arquivo_pendentes = os.path.join(DATA_DIR, "pendentes_ia.json")
+    logger.info("\n=== ETAPA 3: NORMALIZANDO PREÇOS DE PRODUTOS A GRANEL (100g vs KG) ===")
+    itens_corrigidos = []
+    for item in todos_itens_crus:
+        try:
+            # Heurística para detectar o problema:
+            # 1. O item é do mercado "Boa Supermercados"?
+            # 2. O nome do produto sugere que é vendido por peso (kg, granel)?
+            # 3. O preço de varejo é aproximadamente 10x o de atacado?
+            nome_produto_lower = item.get("Produto", "").lower()
+            
+            if ("kg" in nome_produto_lower or "granel" in nome_produto_lower):
+                
+                # Limpa e converte os preços para float
+                preco_varejo_str = str(item.get("Preco_Varejo", "0")).replace("R$", "").strip().replace(".", "").replace(",", ".")
+                preco_atacado_str = str(item.get("Preco_Atacado", "0")).replace("R$", "").strip().replace(".", "").replace(",", ".")
+                
+                if not preco_varejo_str or not preco_atacado_str: continue
+
+                preco_varejo = float(preco_varejo_str)
+                preco_atacado = float(preco_atacado_str)
+
+                if preco_varejo > 0 and preco_atacado > 0 and 8 < (preco_varejo / preco_atacado) < 12:
+                    preco_atacado_corrigido = preco_atacado * 10
+                    logger.warning(f"⚠️  CORREÇÃO APLICADA: Preço de '{item.get('Produto')}' no '{item.get('Mercado')}' "
+                                   f"parece ser por 100g. Convertendo Preço Atacado de R${preco_atacado:.2f} para R${preco_atacado_corrigido:.2f}.")
+                    item["Preco_Atacado"] = f"R$ {preco_atacado_corrigido:.2f}".replace(".", ",")
         
-        # Opcional: Se quiser manter o histórico dos itens do dia anterior, faça um read antes.
-        # Por enquanto, como você roda diariamente, vamos salvar o snapshot atual.
-        write_json_file(arquivo_pendentes, todos_itens_crus)
+        except (ValueError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Debug: Não foi possível aplicar heurística de preço para '{item.get('Produto')}': {e}")
+        
+        finally:
+            itens_corrigidos.append(item)
+
+    if itens_corrigidos:
+        arquivo_pendentes = os.path.join(DATA_DIR, "pendentes_ia.json")
+        write_json_file(arquivo_pendentes, itens_corrigidos)
         
         logger.info("\n" + "="*50)
-        logger.info(f"📦 Sucesso! {len(todos_itens_crus)} itens totais raspados salvos em 'pendentes_ia.json'.")
+        logger.info(f"📦 Sucesso! {len(itens_corrigidos)} itens totais raspados salvos em 'pendentes_ia.json'.")
         logger.info("👉 PRÓXIMO PASSO: Execute 'python 4_resolver_pendentes.py' para cruzar os EANs com a Biblioteca.")
         logger.info("="*50 + "\n")
     else:

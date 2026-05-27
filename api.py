@@ -1,14 +1,18 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-import sqlite3
 import os
 import uvicorn
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from typing import List, Optional
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 
-DATA_DIR = "data"
-DB_NOME = os.path.join(DATA_DIR, "monitoramento_Jundiai.db")
+load_dotenv()
+
+# URL do Banco de Dados Supabase (PostgreSQL)
+DB_URL = os.getenv("DATABASE_URL")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,9 +49,20 @@ class ProdutoAgrupadoResponse(BaseModel):
     Ofertas: List[OfertaResponse]
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_NOME)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
     return conn
+
+@app.get("/debug")
+def debug_connection():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as qtd FROM ofertas_atuais")
+        qtd = cursor.fetchone()["qtd"]
+        conn.close()
+        return {"status": "SUCESSO", "ofertas_na_nuvem": qtd, "url_configurada": bool(DB_URL)}
+    except Exception as e:
+        return {"status": "ERRO", "detalhe": str(e), "url_configurada": bool(DB_URL)}
 
 @app.get("/produtos", response_model=List[ProdutoAgrupadoResponse])
 def get_produtos(
@@ -55,12 +70,6 @@ def get_produtos(
     sort_by: str = Query("discount", description="Ordenação: discount ou price"),
     market: str = Query(None, description="Filtrar por mercado específico")
 ):
-    if not os.path.exists(DB_NOME):
-        return []
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     # Busca cruzando a Biblioteca Ouro com as Ofertas Atuais dos mercados
     query = '''
         SELECT p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
@@ -68,34 +77,30 @@ def get_produtos(
         FROM produtos p
         JOIN ofertas_atuais o ON p.ean = o.ean
     '''
-    
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
     params = []
-    
     where_clauses = []
+
     if q:
         # Permite múltiplas palavras-chave
         termos = q.split()
         for termo in termos:
-            where_clauses.append('(p.nome_comum LIKE ? OR o.nome_original LIKE ? OR p.marca LIKE ? OR p.tags LIKE ?)')
+            where_clauses.append('(p.nome_comum ILIKE %s OR o.nome_original ILIKE %s OR p.marca ILIKE %s OR p.tags ILIKE %s)')
             params.extend([f"%{termo}%", f"%{termo}%", f"%{termo}%", f"%{termo}%"])
-            
+
     if market and market.lower() != "todos os mercados":
-        where_clauses.append('o.mercado = ?')
+        where_clauses.append('o.mercado = %s')
         params.append(market)
 
     if where_clauses:
         query += ' WHERE ' + ' AND '.join(where_clauses)
-        
-    try:
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-    except sqlite3.OperationalError as e:
-        print(f"Erro no banco de dados: {e}")
-        conn.close()
-        return []
-        
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
     conn.close()
-    
+
     # Agrupa os resultados pelo EAN
     agrupados = {}
     for row in rows:
