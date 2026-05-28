@@ -105,10 +105,21 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                     if p_a <= 0: continue
                     if p_v <= 0 or p_v < p_a: p_v = p_a
 
+                    # --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
+                    unit_multiplier = float(sku_p.get('unitMultiplier') or 1.0)
+                    if unit_multiplier > 0 and unit_multiplier < 1.0:
+                        if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
+                            p_a = p_a / unit_multiplier
+                        elif p_v < (p_a * 2):
+                            p_v = p_v / unit_multiplier
+                            p_a = p_a / unit_multiplier
+
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
                     # Pega o link da página do produto (PDP)
                     link_pdp = item.get('link', '')
+                    if link_pdp and not link_pdp.startswith('http'):
+                        link_pdp = f"{BASE_URL_CONFIG}{link_pdp}"
 
                     lote.append({
                         "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": "GERAL",

@@ -43,6 +43,14 @@ def init_db(conn):
         PRIMARY KEY (ean, mercado)
     )
     ''')
+    
+    # Tenta adicionar as colunas novas, ignorando erro se já existirem
+    for col_name in ["link_pdp", "qtd_valor", "medida", "unidade"]:
+        try:
+            cursor.execute(f"ALTER TABLE ofertas_atuais ADD COLUMN {col_name} TEXT;")
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
     # Tabela Histórico de Preços (Para gráficos de variação de preço futuro)
     cursor.execute('''
@@ -139,18 +147,27 @@ def main():
 
             condicao = item.get("Condicao", item.get("Condição", ""))
             data_extracao = item.get("Data_Hora", hoje)
+            link_pdp = item.get("Link_PDP", "")
+            
+            qtd_valor = str(item.get("Qtd_Valor", "1"))
+            medida = str(item.get("Medida", "UN"))
+            unidade = str(item.get("Unidade", "UN"))
 
             # Grava/Atualiza na vitrine de hoje
             cursor.execute('''
-                INSERT INTO ofertas_atuais (ean, mercado, nome_original, preco_varejo, preco_atacado, condicao, data_atualizacao)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO ofertas_atuais (ean, mercado, nome_original, preco_varejo, preco_atacado, qtd_valor, medida, unidade, condicao, data_atualizacao, link_pdp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (ean, mercado) DO UPDATE SET
                     nome_original=excluded.nome_original,
                     preco_varejo=excluded.preco_varejo,
                     preco_atacado=excluded.preco_atacado,
+                    qtd_valor=excluded.qtd_valor,
+                    medida=excluded.medida,
+                    unidade=excluded.unidade,
                     condicao=excluded.condicao,
-                    data_atualizacao=excluded.data_atualizacao
-            ''', (ean, mercado, nome_original, p_varejo, p_atacado, condicao, data_extracao))
+                    data_atualizacao=excluded.data_atualizacao,
+                    link_pdp=excluded.link_pdp
+            ''', (ean, mercado, nome_original, p_varejo, p_atacado, qtd_valor, medida, unidade, condicao, data_extracao, link_pdp))
 
             # Verifica se o preço mudou para gravar no Histórico
             cursor.execute('''

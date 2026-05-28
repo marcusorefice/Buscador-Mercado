@@ -55,14 +55,23 @@ async def extrair_pagina_categoria(session, depto_slug, pagina, sem, agora):
                     ean_real = item.get('gtin', item.get('barcode', 'N/A'))
                     if ean_real: ean_real = str(ean_real).lstrip('0') or 'N/A'
 
-                    p_v, p_a = float(item.get('price', 0)), float(item.get('promotional_price') or item.get('price', 0))
+                    p_v, p_a = float(item.get('price') or 0), float(item.get('promotional_price') or item.get('price') or 0)
                     if p_a <= 0: continue
                     if p_v <= 0 or p_v < p_a: p_v = p_a
 
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
                     marca = str(item.get('brand', 'OUTROS')).upper()
                     img = item.get('image', {}).get('url', 'SEM IMAGEM') if isinstance(item.get('image'), dict) else 'SEM IMAGEM'
-                    condicao = "CLIENTE BOA" if p_a < p_v else "1 UN"
+                    
+                    tags = item.get('tags', [])
+                    selo_cartao = False
+                    if isinstance(tags, list):
+                        # Evita classificar "Cartão +amigo" como Cartão de Crédito Boa
+                        selo_cartao = any('CARTONISTA' in str(t.get('name', '')).upper() or ('CARTÃO' in str(t.get('name', '')).upper() and 'BOA' in str(t.get('name', '')).upper()) or ('CARTAO' in str(t.get('name', '')).upper() and 'BOA' in str(t.get('name', '')).upper()) for t in tags if isinstance(t, dict))
+                    
+                    condicao = "1 UN"
+                    if p_a < p_v:
+                        condicao = "EXCLUSIVO CARTÃO BOA" if selo_cartao else "CLUBE +AMIGO (CPF)"
                     link_pdp = item.get('url', '')
 
                     lote.append({

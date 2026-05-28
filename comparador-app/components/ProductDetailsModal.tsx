@@ -178,35 +178,51 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
               {isLoading && <ActivityIndicator size="small" color="#E5293E" />}
             </View>
 
-            {productToRender.Ofertas.map((oferta, index) => (
-              <View key={index} style={styles.offerRow}>
-                <View style={styles.marketInfo}>
-                  <Image source={getMarketLogo(oferta.Mercado)} style={styles.marketLogo} resizeMode="contain" />
-                  <View>
-                    <Text style={styles.marketName}>{oferta.Mercado}</Text>
-                    {oferta.Condicao ? (
-                      <Text style={styles.conditionText}>{oferta.Condicao}</Text>
-                    ) : null}
+            {productToRender.Ofertas.map((oferta, index) => {
+              const content = (
+                <View style={styles.offerRow}>
+                  <View style={styles.marketInfo}>
+                    <Image source={getMarketLogo(oferta.Mercado)} style={styles.marketLogo} resizeMode="contain" />
+                    <View>
+                      <Text style={styles.marketName}>{oferta.Mercado}</Text>
+                      {oferta.Condicao ? (
+                        <Text style={styles.conditionText}>{oferta.Condicao}</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                  <View style={styles.priceInfo}>
+                    {oferta.Preco_Atacado > 0 && oferta.Preco_Atacado < (oferta.Preco_Varejo || 999999) ? (
+                      <>
+                        <Text style={styles.priceText}>
+                          <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Atacado)}
+                        </Text>
+                        {oferta.Preco_Varejo > 0 && (
+                          <Text style={styles.retailText}>R$ {formatPrice(oferta.Preco_Varejo)}</Text>
+                        )}
+                      </>
+                    ) : (
+                      <Text style={styles.priceText}>
+                        <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Varejo)}
+                      </Text>
+                    )}
                   </View>
                 </View>
-                <View style={styles.priceInfo}>
-                  {oferta.Preco_Atacado > 0 && oferta.Preco_Atacado < (oferta.Preco_Varejo || 999999) ? (
-                    <>
-                      <Text style={styles.priceText}>
-                        <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Atacado)}
-                      </Text>
-                      {oferta.Preco_Varejo > 0 && (
-                        <Text style={styles.retailText}>R$ {formatPrice(oferta.Preco_Varejo)}</Text>
-                      )}
-                    </>
-                  ) : (
-                    <Text style={styles.priceText}>
-                      <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Varejo)}
-                    </Text>
-                  )}
-                </View>
-              </View>
-            ))}
+              );
+
+              if (oferta.Link_PDP) {
+                return (
+                  <TouchableOpacity 
+                    key={index} 
+                    onPress={() => Linking.openURL(oferta.Link_PDP!)}
+                    activeOpacity={0.7}
+                  >
+                    {content}
+                  </TouchableOpacity>
+                );
+              }
+
+              return <View key={index}>{content}</View>;
+            })}
           </View>
         </ScrollView>
       </SafeAreaView>

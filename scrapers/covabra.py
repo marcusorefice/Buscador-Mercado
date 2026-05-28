@@ -136,8 +136,17 @@ async def extrair_dados():
                             
                             p_venda = float(offer.get('Price', 0.0))
                             p_varejo = float(offer.get('ListPrice', p_venda))
-                            
+
                             if p_venda <= 0: continue
+
+                            # --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
+                            unit_multiplier = float(sku.get('unitMultiplier') or 1.0)
+                            if unit_multiplier > 0 and unit_multiplier < 1.0:
+                                if p_varejo > (p_venda * (1 / unit_multiplier) * 0.5): 
+                                    p_venda = p_venda / unit_multiplier
+                                elif p_varejo < (p_venda * 2):
+                                    p_varejo = p_varejo / unit_multiplier
+                                    p_venda = p_venda / unit_multiplier
 
                             p_atacado = p_venda
                             condicao = "OFERTA" if p_venda < p_varejo else "1 UN"

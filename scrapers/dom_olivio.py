@@ -179,7 +179,16 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_clust
                     
                     p_v = v_varejo if v_varejo > 0 else float(p.get('offers', {}).get('highPrice', 0.0))
                     p_a = v_atacado if v_atacado > 0 else float(p.get('offers', {}).get('lowPrice', p_v))
-                    
+
+                    # --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
+                    unit_multiplier = float(p.get('unitMultiplier') or 1.0)
+                    if unit_multiplier > 0 and unit_multiplier < 1.0:
+                        if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
+                            p_a = p_a / unit_multiplier
+                        elif p_v < (p_a * 2):
+                            p_v = p_v / unit_multiplier
+                            p_a = p_a / unit_multiplier
+
                     if p_v <= 0 and p_a <= 0: continue
                     if p_v <= 0: p_v = p_a
                     if p_v < p_a: p_v = p_a

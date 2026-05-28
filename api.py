@@ -35,8 +35,12 @@ class OfertaResponse(BaseModel):
     Preco_Varejo: float
     Preco_Atacado: float
     Nome_Original: str
+    Qtd_Valor: str
+    Medida: str
+    Unidade: str
     Condicao: str
     Data_Atualizacao: str
+    Link_PDP: Optional[str] = ""
 
 @app.get("/")
 def read_root():
@@ -77,7 +81,8 @@ def get_produtos(
     # Busca cruzando a Biblioteca Ouro com as Ofertas Atuais dos mercados
     query = '''
         SELECT p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
-               o.mercado, o.nome_original, o.preco_varejo, o.preco_atacado, o.condicao, o.data_atualizacao
+               o.mercado, o.nome_original, o.preco_varejo, o.preco_atacado, 
+               o.qtd_valor, o.medida, o.unidade, o.condicao, o.data_atualizacao, o.link_pdp
         FROM produtos p
         JOIN ofertas_atuais o ON p.ean = o.ean
     '''
@@ -128,8 +133,12 @@ def get_produtos(
             "Preco_Varejo": float(row["preco_varejo"]) if row["preco_varejo"] else 0.0,
             "Preco_Atacado": float(row["preco_atacado"]) if row["preco_atacado"] else 0.0,
             "Nome_Original": row["nome_original"] or "",
+            "Qtd_Valor": row["qtd_valor"] or "1",
+            "Medida": row["medida"] or "UN",
+            "Unidade": row["unidade"] or "UN",
             "Condicao": row["condicao"] or "",
-            "Data_Atualizacao": row["data_atualizacao"] or ""
+            "Data_Atualizacao": row["data_atualizacao"] or "",
+            "Link_PDP": row["link_pdp"] or ""
         }
         agrupados[ean]["Ofertas"].append(oferta)
 

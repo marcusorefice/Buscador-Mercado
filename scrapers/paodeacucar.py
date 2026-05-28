@@ -151,7 +151,7 @@ async def motor_extracao_paodeacucar():
 
                         # Captura as categorias da API
                         categorias_api = p.get('categories', [])
-                        cat_site = ""
+                        cat_site = "GERAL"
                         subcategoria = "N/A"
                         tipo_produto = "N/A"
 
@@ -160,6 +160,11 @@ async def motor_extracao_paodeacucar():
                             cat_site = partes_cat[0].upper() if len(partes_cat) > 0 else "GERAL"
                             if len(partes_cat) > 1: subcategoria = formatar_nome_categoria(partes_cat[1])
                             if len(partes_cat) > 2: tipo_produto = formatar_nome_categoria(partes_cat[2])
+                        else:
+                            if p.get('departmentName'):
+                                cat_site = str(p.get('departmentName')).upper()
+                            elif p.get('categoryName'):
+                                cat_site = str(p.get('categoryName')).upper()
 
                         # VERIFICAÇÃO DE CATEGORIA (Adicione um log aqui para saber o que está sendo pulado)
                         if cat_site in CATEGORIAS_IGNORADAS:
@@ -313,6 +318,25 @@ async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
                         if len(cats) > 0: result["cat"] = formatar_nome_categoria(cats[0])
                         if len(cats) > 1: result["subcat"] = formatar_nome_categoria(cats[1])
                         if len(cats) > 2: result["tipo"] = formatar_nome_categoria(cats[2])
+                
+                # Tenta extração via LD+JSON se o formato anterior falhou
+                if not result["cat"]:
+                    try:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(html, 'html.parser')
+                        for script in soup.find_all('script', type='application/ld+json'):
+                            try:
+                                data = json.loads(script.string)
+                                if isinstance(data, dict) and data.get('@type') == 'BreadcrumbList':
+                                    items = data.get('itemListElement', [])
+                                    if items:
+                                        cats = [i.get('item', {}).get('name', '').upper() for i in items if i.get('item', {}).get('name')]
+                                        if len(cats) > 0 and cats[0] == 'HOME': cats = cats[1:]
+                                        if len(cats) > 0: result["cat"] = formatar_nome_categoria(cats[0])
+                                        if len(cats) > 1: result["subcat"] = formatar_nome_categoria(cats[1])
+                                        if len(cats) > 2: result["tipo"] = formatar_nome_categoria(cats[2])
+                            except: pass
+                    except: pass
         except:
             pass
             

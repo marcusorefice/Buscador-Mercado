@@ -85,10 +85,12 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retrie
                 if not ean or ean == '0':
                     ean = 'N/A'
 
-                offers = p_data.get('offers', {})
+                offers = p_data.get('offers') or {}
                 if offers:
-                    list_price = float(offers.get('offers', [{}])[0].get('listPrice', 0.0))
-                    price = float(offers.get('lowPrice', 0.0))
+                    offer_list = offers.get('offers') or []
+                    first_offer = offer_list[0] if offer_list else {}
+                    list_price = float(first_offer.get('listPrice') or 0.0)
+                    price = float(offers.get('lowPrice') or 0.0)
                     return list_price, price, ean
                 
                 return 0.0, 0.0, ean # Retorna o EAN mesmo se não houver oferta
@@ -131,19 +133,35 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 nome_cru = p['name'].upper().strip()
                 
                 # Definição de Preços (Fallback para a vitrine se o detalhado falhar)
-                p_v = v_varejo if v_varejo > 0 else float(p.get('offers', {}).get('highPrice', 0.0))
-                p_a = v_atacado if v_atacado > 0 else float(p.get('offers', {}).get('lowPrice', p_v))
-                
+                offers_data = p.get('offers') or {}
+                p_v = v_varejo if v_varejo > 0 else float(offers_data.get('highPrice') or 0.0)
+                p_a = v_atacado if v_atacado > 0 else float(offers_data.get('lowPrice') or p_v or 0.0)
+
                 if p_v <= 0 and p_a <= 0: continue
                 if p_v <= 0: p_v = p_a
                 if p_a > 0 and p_v < p_a: p_v = p_a # Garante que varejo não seja menor que atacado
 
                 # Lógica de Condição Especial (Jundiaí)
                 condicao = "1 UN"
-                selos = [d['name'].upper() for d in p.get('clusterHighlights', [])]
-                selo_cartonista = any('CARTONISTA' in s or 'OFF' in s for s in selos)
+                selos = [d.get('name', '').upper() for d in p.get('clusterHighlights', []) if isinstance(d, dict)]
+                
+                # Também busca nas promoções da VTEX (teasers)
+                ofertas_array = p.get('offers', {}).get('offers', [])
+                if isinstance(ofertas_array, list):
+                    for oferta in ofertas_array:
+                        teasers = oferta.get('teasers', [])
+                        if isinstance(teasers, list):
+                            selos.extend([t.get('name', '').upper() for t in teasers if isinstance(t, dict)])
+
+                # O "Cartão +Amigo" é na verdade o clube (CPF). Só marcamos como 
+                # EXCLUSIVO CARTÃO BOA se o selo for de "CARTONISTA" ou disser explicitamente "CARTÃO BOA".
+                selo_cartao = any('CARTONISTA' in s or ('CARTÃO' in s and 'BOA' in s) or ('CARTAO' in s and 'BOA' in s) for s in selos)
+                
                 if p_a < p_v:
-                    condicao = "EXCLUSIVO CARTÃO BOA" if selo_cartonista else "CLUBE +AMIGO CPF"
+                    if selo_cartao:
+                        condicao = "EXCLUSIVO CARTÃO BOA"
+                    else:
+                        condicao = "CLUBE +AMIGO (CPF)"
 
                 # --- TRATAMENTO DE CATEGORIAS (HIERARQUIA) --- #
                 # O 'categoryTree' para o Boa é uma lista de strings de caminho (ex: '/BEBIDAS/').
@@ -163,8 +181,38 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 subcategoria = subcategoria_cru
                 tipo_produto = tipo_prod_cru
 
-                # Medidas e Imagem #
-                nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                # --- LÓGICA DE MEDIDAS (Baseada no FastStore/VTEX) ---
+                nome_limpo = nome_cru
+                qv, med = "1", "UN"
+                medida_extraida_api = False
+                
+                try:
+                    if 'unitMultiplier' in p and 'measurementUnit' in p:
+                        unit_multiplier = float(p['unitMultiplier'])
+                        measurement_unit = str(p['measurementUnit']).lower()
+
+                        if measurement_unit == 'kg':
+                            if unit_multiplier > 0 and unit_multiplier < 1.0:
+                                qv, med = str(int(unit_multiplier * 1000)), 'G'
+                                medida_extraida_api = True
+                            elif unit_multiplier >= 1.0:
+                                qv, med = (str(int(unit_multiplier)), 'KG') if unit_multiplier.is_integer() else (str(unit_multiplier), 'KG')
+                                medida_extraida_api = True
+                        elif measurement_unit == 'g':
+                            if unit_multiplier > 0:
+                                qv, med = str(int(unit_multiplier)), 'G'
+                                medida_extraida_api = True
+                except (ValueError, TypeError, IndexError, KeyError):
+                    pass
+                
+                if not medida_extraida_api:
+                    nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                else:
+                    nome_limpo = re.sub(r'\s*\d+[\.,]?\d*\s*(G|KG|L|ML|UN)\b', '', nome_cru, flags=re.IGNORECASE).strip()
+                    if nome_limpo.endswith(" KG"):
+                        nome_limpo = nome_limpo[:-3].strip()
+
+                # Imagem #
                 img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                 if img.startswith("//"): img = "https:" + img
                 

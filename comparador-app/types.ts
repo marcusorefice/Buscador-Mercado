@@ -5,6 +5,7 @@ export interface Oferta {
   Nome_Original: string;
   Condicao: string;
   Data_Atualizacao: string;
+  Link_PDP?: string;
 }
 export interface Product {
   EAN: string;
