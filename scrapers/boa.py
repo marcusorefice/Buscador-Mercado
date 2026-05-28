@@ -200,11 +200,16 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                 if img.startswith("//"): img = "https:" + img
                 
-                link_pdp_rel = p.get('url', '') or p.get('linkText', '')
+                link_pdp_rel = p.get('slug') or p.get('linkText') or p.get('url') or ''
                 if link_pdp_rel:
-                     link_pdp = f"https://www.boasupermercados.com.br{link_pdp_rel}" if link_pdp_rel.startswith('/') else f"https://www.boasupermercados.com.br/{link_pdp_rel}/p"
+                    if link_pdp_rel.startswith('http'):
+                        link_pdp = link_pdp_rel
+                    elif link_pdp_rel.startswith('/'):
+                        link_pdp = f"https://www.boasupermercados.com.br{link_pdp_rel}"
+                    else:
+                        link_pdp = f"https://www.boasupermercados.com.br/{link_pdp_rel}/p"
                 else:
-                     link_pdp = ""
+                    link_pdp = ""
 
                 lista_final.append({
                     "Mercado": NOME_MERCADO,

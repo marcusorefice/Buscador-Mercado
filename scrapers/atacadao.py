@@ -87,6 +87,9 @@ async def motor_extracao_atacadao():
                       id
                       gtin
                       name
+                      slug
+                      linkText
+                      link
                       image { url }
                       offers {
                         offers { price listPrice minQuantity }
@@ -286,9 +289,14 @@ async def motor_extracao_atacadao():
                             if p_atacado <= 0: continue
                             if p_varejo <= 0 or p_varejo < p_atacado: p_varejo = p_atacado
 
-                            link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                            link_pdp_rel = p.get('slug') or p.get('linkText') or p.get('link') or ''
                             if link_pdp_rel:
-                                link_pdp = f"https://www.atacadao.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                                if link_pdp_rel.startswith('http'):
+                                    link_pdp = link_pdp_rel
+                                elif link_pdp_rel.startswith('/'):
+                                    link_pdp = f"https://www.atacadao.com.br{link_pdp_rel}"
+                                else:
+                                    link_pdp = f"https://www.atacadao.com.br/{link_pdp_rel}/p"
                             else:
                                 link_pdp = ""
 

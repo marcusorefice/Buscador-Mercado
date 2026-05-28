@@ -118,9 +118,16 @@ async def motor_extracao_paodeacucar():
                         if not ean or ean == '0': ean = 'N/A'
 
                         # Extração da URL da página de detalhes do produto (PDP)
-                        link_pdp = p.get('urlDetails', '')
-                        if link_pdp and not link_pdp.startswith('http'):
-                            link_pdp = f"{BASE_URL_CONFIG}{link_pdp}"
+                        link_pdp_rel = p.get('urlDetails', '') or p.get('url', '')
+                        if link_pdp_rel:
+                            if link_pdp_rel.startswith('http'):
+                                link_pdp = link_pdp_rel
+                            elif link_pdp_rel.startswith('/'):
+                                link_pdp = f"{BASE_URL_CONFIG}{link_pdp_rel}"
+                            else:
+                                link_pdp = f"{BASE_URL_CONFIG}/{link_pdp_rel}"
+                        else:
+                            link_pdp = ""
 
                         # Extração de Preços via sellInfos
                         sell_infos = p.get('sellInfos', [{}])
@@ -379,10 +386,6 @@ async def enrich_eans_from_pdps(session, lista_produtos):
             p['subcategoria'] = subcat
             p['tipo_produto'] = tipo
             
-    # Limpa campo temporário
-    for p in lista_produtos:
-        p.pop('Link_PDP', None)
-
 async def extrair_dados():
     # ...
     # Essa chamada agora será gerida dentro do motor_extracao_paodeacucar, então no final dessa função vamos só chamar o motor

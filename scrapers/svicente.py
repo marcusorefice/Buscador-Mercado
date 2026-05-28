@@ -270,8 +270,18 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                     categoria_principal = padronizar_categoria(cat_nome, cat_nome)
                     subcategoria_base = formatar_nome_categoria(cat_nome)
 
-                    # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
-                    # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
+                    link_pdp_rel = p.get('url', '')
+                    pid = p.get('id')
+                    if link_pdp_rel:
+                        if link_pdp_rel.startswith('http'):
+                            link_pdp = link_pdp_rel
+                        else:
+                            link_pdp = f"https://www.svicente.com.br{link_pdp_rel if link_pdp_rel.startswith('/') else '/' + link_pdp_rel}"
+                    elif pid:
+                        link_pdp = f"https://www.svicente.com.br/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Product-Show?pid={pid}"
+                    else:
+                        link_pdp = ""
+
                     categoria = categoria_principal
                     subcategoria = subcategoria_base
                     tipo_produto = "N/A" # Será refinado depois
@@ -310,7 +320,8 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                         "Medida": med,
                         "Unidade": unid_venda,
                         "Condição": condicao, "Data_Hora": agora,
-                        "Link_Imagem": img_url if img_url else "SEM IMAGEM"
+                        "Link_Imagem": img_url if img_url else "SEM IMAGEM",
+                        "Link_PDP": link_pdp
                     })
                 except: continue
         

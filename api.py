@@ -93,11 +93,16 @@ def get_produtos(
     where_clauses = []
 
     if q:
-        # Permite múltiplas palavras-chave
-        termos = q.split()
-        for termo in termos:
-            where_clauses.append('(p.nome_comum ILIKE %s OR o.nome_original ILIKE %s OR p.marca ILIKE %s OR p.tags ILIKE %s)')
-            params.extend([f"%{termo}%", f"%{termo}%", f"%{termo}%", f"%{termo}%"])
+        # Se a busca for um número longo, trata como busca exata por EAN (usado pelo modal de detalhes)
+        if q.isdigit() and len(q) >= 8:
+            where_clauses.append('p.ean = %s')
+            params.append(q)
+        else:
+            # Permite múltiplas palavras-chave
+            termos = q.split()
+            for termo in termos:
+                where_clauses.append('(p.nome_comum ILIKE %s OR o.nome_original ILIKE %s OR p.marca ILIKE %s OR p.tags ILIKE %s)')
+                params.extend([f"%{termo}%", f"%{termo}%", f"%{termo}%", f"%{termo}%"])
 
     if market and market.lower() != "todos os mercados":
         where_clauses.append('o.mercado = %s')

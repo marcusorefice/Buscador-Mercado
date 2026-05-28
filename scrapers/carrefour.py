@@ -117,9 +117,16 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
                     # Pega o link da página do produto (PDP)
-                    link_pdp = item.get('link', '')
-                    if link_pdp and not link_pdp.startswith('http'):
-                        link_pdp = f"{BASE_URL_CONFIG}{link_pdp}"
+                    link_pdp_rel = item.get('linkText') or item.get('link') or item.get('url') or ''
+                    if link_pdp_rel:
+                        if link_pdp_rel.startswith('http'):
+                            link_pdp = link_pdp_rel
+                        elif link_pdp_rel.startswith('/'):
+                            link_pdp = f"{BASE_URL_CONFIG}{link_pdp_rel}"
+                        else:
+                            link_pdp = f"{BASE_URL_CONFIG}/{link_pdp_rel}/p"
+                    else:
+                        link_pdp = ""
 
                     lote.append({
                         "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": "GERAL",
