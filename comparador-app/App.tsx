@@ -12,7 +12,9 @@ import { SkeletonCard } from './components/SkeletonCard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
-const API_URL = 'https://buscador-mercado.onrender.com'; // Use o link que você pegou no site do Render
+const API_URL = __DEV__ 
+  ? 'https://badness-impale-suitably.ngrok-free.dev' // ngrok: Ignora o Firewall do Windows e atualiza na hora!
+  : 'https://buscador-mercado.onrender.com';         // Render: App Oficial da Nuvem
 
 const theme = {
   ...DefaultTheme,

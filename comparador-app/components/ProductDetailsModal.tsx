@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Modal, Image, ScrollView, ActivityIndicator, TouchableOpacity, ToastAndroid } from 'react-native';
+import { View, StyleSheet, Modal, Image, ScrollView, ActivityIndicator, TouchableOpacity, ToastAndroid, Linking, Alert } from 'react-native';
 import { Text, Title, IconButton, Divider, Chip, Button } from 'react-native-paper';
 import { Product } from '../types';
 import { getMarketLogo } from './ProductCard';
@@ -23,6 +23,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const [imageError, setImageError] = React.useState(false);
   const [detailedProduct, setDetailedProduct] = React.useState<Product | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [selectedOfferIndex, setSelectedOfferIndex] = React.useState<number>(0);
 
   React.useEffect(() => {
     setImageError(false);
@@ -31,6 +32,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
       // Começa com o produto parcial para a UI não piscar
       setDetailedProduct(product); 
       setIsLoading(true);
+      setSelectedOfferIndex(0); // Reseta a seleção para a melhor oferta ao abrir
 
       // Atrasar a busca levemente para não engasgar a animação de "Slide" do Modal
       const timer = setTimeout(() => {
@@ -65,15 +67,22 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
 
   if (!productToRender) return null;
 
-  // Lógica de Desconto
-  const maxOfferPrice = productToRender.Ofertas?.reduce((max, oferta) => {
-    return Math.max(max, oferta.Preco_Varejo || 0, oferta.Preco_Atacado || 0);
-  }, 0) || 0;
-  const originalPrice = (productToRender as any).Maior_Preco || maxOfferPrice;
-  const currentPrice = productToRender.Menor_Preco || 0;
-  const hasDiscount = originalPrice > currentPrice && originalPrice > 0 && currentPrice > 0;
-  const discountPercent = hasDiscount ? Math.round(((originalPrice - currentPrice) / originalPrice) * 100) : 0;
-  const bestOffer = productToRender.Ofertas && productToRender.Ofertas.length > 0 ? productToRender.Ofertas[0] : null;
+  // Oferta Ativa para o Card Superior (Atualizada ao clicar na lista de baixo)
+  const activeOffer = productToRender.Ofertas && productToRender.Ofertas.length > 0 
+    ? productToRender.Ofertas[selectedOfferIndex] || productToRender.Ofertas[0] 
+    : null;
+    
+  // Lógica de Desconto Dinâmica baseada na oferta selecionada
+  const originalPrice = activeOffer?.Preco_Varejo || 0;
+  const currentPrice = activeOffer && activeOffer.Preco_Atacado > 0 && activeOffer.Preco_Atacado < originalPrice 
+    ? activeOffer.Preco_Atacado 
+    : originalPrice;
+
+  const displayCurrentPrice = currentPrice > 0 ? currentPrice : (productToRender.Menor_Preco || 0);
+  const displayOriginalPrice = originalPrice > 0 ? originalPrice : displayCurrentPrice;
+
+  const hasDiscount = displayOriginalPrice > displayCurrentPrice && displayOriginalPrice > 0 && displayCurrentPrice > 0;
+  const discountPercent = hasDiscount ? Math.round(((displayOriginalPrice - displayCurrentPrice) / displayOriginalPrice) * 100) : 0;
   
   const showPlaceholder = !productToRender.Imagem || !productToRender.Imagem.startsWith('http') || imageError;
 
@@ -86,6 +95,14 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const copyToClipboard = async () => {
     await Clipboard.setStringAsync(eanStr);
     ToastAndroid.show('EAN copiado!', ToastAndroid.SHORT);
+  };
+
+  const abrirLinkDoProduto = (link?: string) => {
+    if (link && link !== "") {
+      Linking.openURL(link).catch(() => {
+        Alert.alert("Erro", "Não foi possível abrir o link do mercado.");
+      });
+    }
   };
 
   return (
@@ -135,22 +152,37 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
             )}
             
             <View style={styles.mainOfferContainer}>
-              <Text style={styles.mainOfferLabel}>Melhor oferta encontrada:</Text>
+              <Text style={styles.mainOfferLabel}>
+                {selectedOfferIndex === 0 ? 'Melhor oferta encontrada:' : 'Oferta selecionada:'}
+              </Text>
               <View style={styles.mainOfferRow}>
                 <Text style={styles.mainPriceText}>
-                  <Text style={styles.mainCurrencySymbol}>R$ </Text>{formatPrice(currentPrice)}
+                  <Text style={styles.mainCurrencySymbol}>R$ </Text>{formatPrice(displayCurrentPrice)}
                 </Text>
-                {bestOffer && (
-                  <View style={styles.topMarketBadge}>
-                    <Text style={styles.topMarketText}>{bestOffer.Mercado}</Text>
-                    <Image source={getMarketLogo(bestOffer.Mercado)} style={styles.topMarketLogo} resizeMode="contain" />
+                {activeOffer && (
+                  <View style={styles.bestOfferBadgeContainer}>
+                    <TouchableOpacity 
+                      style={styles.topMarketBadge}
+                      onPress={() => abrirLinkDoProduto(activeOffer.Link_PDP)}
+                      activeOpacity={activeOffer.Link_PDP ? 0.7 : 1}
+                    >
+                      <Text style={[styles.topMarketText, activeOffer.Link_PDP ? styles.marketNameLink : null]}>
+                        {activeOffer.Mercado} {activeOffer.Link_PDP ? '🔗' : ''}
+                      </Text>
+                      <Image source={getMarketLogo(activeOffer.Mercado)} style={styles.topMarketLogo} resizeMode="contain" />
+                    </TouchableOpacity>
+                    {activeOffer.Condicao && activeOffer.Condicao !== '1 UN' && (
+                      <Text style={styles.bestOfferCondition}>
+                        {activeOffer.Condicao}
+                      </Text>
+                    )}
                   </View>
                 )}
               </View>
               
               {hasDiscount && (
                 <View style={styles.discountInfoContainer}>
-                  <Text style={styles.originalPrice}>De R$ {formatPrice(originalPrice)}</Text>
+                  <Text style={styles.originalPrice}>De R$ {formatPrice(displayOriginalPrice)}</Text>
                   <Chip icon="arrow-down" style={styles.discountChip} textStyle={styles.discountChipText} compact>
                     {`-${discountPercent}%`}
                   </Chip>
@@ -179,12 +211,15 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
             </View>
 
             {productToRender.Ofertas.map((oferta, index) => {
+              const isSelected = index === selectedOfferIndex;
               const content = (
-                <View style={styles.offerRow}>
+                <View style={[styles.offerRow, isSelected && styles.offerRowSelected]}>
                   <View style={styles.marketInfo}>
                     <Image source={getMarketLogo(oferta.Mercado)} style={styles.marketLogo} resizeMode="contain" />
                     <View>
-                      <Text style={styles.marketName}>{oferta.Mercado}</Text>
+                      <Text style={styles.marketName}>
+                        {oferta.Mercado}
+                      </Text>
                       {oferta.Condicao ? (
                         <Text style={styles.conditionText}>{oferta.Condicao}</Text>
                       ) : null}
@@ -209,19 +244,15 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                 </View>
               );
 
-              if (oferta.Link_PDP) {
-                return (
-                  <TouchableOpacity 
-                    key={index} 
-                    onPress={() => Linking.openURL(oferta.Link_PDP!)}
-                    activeOpacity={0.7}
-                  >
-                    {content}
-                  </TouchableOpacity>
-                );
-              }
-
-              return <View key={index}>{content}</View>;
+              return (
+                <TouchableOpacity 
+                  key={index} 
+                  onPress={() => setSelectedOfferIndex(index)}
+                  activeOpacity={0.7}
+                >
+                  {content}
+                </TouchableOpacity>
+              );
             })}
           </View>
         </ScrollView>
@@ -335,6 +366,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'normal',
   },
+  bestOfferBadgeContainer: {
+    alignItems: 'flex-end',
+  },
   topMarketBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -353,6 +387,13 @@ const styles = StyleSheet.create({
   topMarketLogo: {
     width: 48,
     height: 24,
+  },
+  bestOfferCondition: {
+    fontSize: 10,
+    color: '#e67e22',
+    fontWeight: 'bold',
+    marginTop: 4,
+    textAlign: 'right',
   },
   addToListButtonModal: {
     marginTop: 16,
@@ -401,8 +442,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 12,
+    paddingHorizontal: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#f5f5f5',
+  },
+  offerRowSelected: {
+    backgroundColor: '#fff0f2',
+    borderRadius: 8,
+    borderBottomColor: 'transparent',
   },
   marketInfo: {
     flexDirection: 'row',
@@ -418,6 +465,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#333',
+  },
+  marketNameLink: {
+    color: '#0066cc',
+    textDecorationLine: 'underline',
   },
   conditionText: {
     fontSize: 12,

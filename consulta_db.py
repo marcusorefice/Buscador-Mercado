@@ -20,31 +20,32 @@ def consultar_itens(termo_busca=None, mercado=None, categoria=None, limite=50):
     # A query base é sempre a mesma, selecionando da tabela 'ofertas'.
     # A busca por texto usará LIKE, que não requer tabelas adicionais como FTS (causa do erro).
     query_parts = ["""
-        SELECT Mercado, Categoria, Produto, Marca,
-               Preco_Varejo AS "Preço Varejo",
-               Preco_Atacado AS "Preço Atacado",
-               Qtd_Valor, Medida, Condicao AS "Condição"
-        FROM ofertas
+        SELECT o.mercado AS Mercado, p.categoria AS Categoria, o.nome_original AS Produto, p.marca AS Marca,
+               o.preco_varejo AS "Preço Varejo",
+               o.preco_atacado AS "Preço Atacado",
+               o.qtd_valor AS Qtd_Valor, o.medida AS Medida, o.condicao AS "Condição"
+        FROM ofertas_atuais o
+        LEFT JOIN produtos p ON o.ean = p.ean
     """]
     where_clauses = ["1=1"]
     params = []
     
     # A ordenação padrão é pela data mais recente. Se houver busca, ordena pelo preço.
-    order_by_clause = "ORDER BY Data_Hora DESC"
+    order_by_clause = "ORDER BY o.data_atualizacao DESC"
     if termo_busca:
-        order_by_clause = 'ORDER BY CAST(REPLACE(REPLACE(Preco_Atacado, \'R$ \', \'\'), \',\', \'.\') AS REAL) ASC, Produto ASC'
+        order_by_clause = 'ORDER BY o.preco_atacado ASC, o.nome_original ASC'
 
     if termo_busca:
         # Adiciona a condição de busca por texto nos campos Produto e Marca.
-        where_clauses.append("(Produto LIKE ? OR Marca LIKE ?)")
+        where_clauses.append("(o.nome_original LIKE ? OR p.marca LIKE ?)")
         params.extend([f"%{termo_busca}%", f"%{termo_busca}%"])
 
     if mercado:
-        where_clauses.append("Mercado = ?")
+        where_clauses.append("o.mercado = ?")
         params.append(mercado)
         
     if categoria:
-        where_clauses.append("Categoria = ?")
+        where_clauses.append("p.categoria = ?")
         params.append(categoria)
     
     query_parts.append(f"WHERE {' AND '.join(where_clauses)}")

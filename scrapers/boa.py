@@ -137,6 +137,17 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 p_v = v_varejo if v_varejo > 0 else float(offers_data.get('highPrice') or 0.0)
                 p_a = v_atacado if v_atacado > 0 else float(offers_data.get('lowPrice') or p_v or 0.0)
 
+                # Correção VTEX: Produtos a granel (ex: Alho kg, Kiwi kg) têm o preço retornado para 100g
+                # O campo unitMultiplier indica essa fração (ex: 0.1). 
+                # Heurística: às vezes o preço de varejo já vem por 1KG (ex: 39,90) e o de atacado por 100g (ex: 2,69).
+                unit_multiplier = float(p.get('unitMultiplier') or 1.0)
+                if unit_multiplier > 0 and unit_multiplier < 1.0:
+                    if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
+                        p_a = p_a / unit_multiplier
+                    elif p_v < (p_a * 2):
+                        p_v = p_v / unit_multiplier
+                        p_a = p_a / unit_multiplier
+
                 if p_v <= 0 and p_a <= 0: continue
                 if p_v <= 0: p_v = p_a
                 if p_a > 0 and p_v < p_a: p_v = p_a # Garante que varejo não seja menor que atacado
@@ -182,35 +193,8 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 tipo_produto = tipo_prod_cru
 
                 # --- LÓGICA DE MEDIDAS (Baseada no FastStore/VTEX) ---
-                nome_limpo = nome_cru
-                qv, med = "1", "UN"
-                medida_extraida_api = False
-                
-                try:
-                    if 'unitMultiplier' in p and 'measurementUnit' in p:
-                        unit_multiplier = float(p['unitMultiplier'])
-                        measurement_unit = str(p['measurementUnit']).lower()
-
-                        if measurement_unit == 'kg':
-                            if unit_multiplier > 0 and unit_multiplier < 1.0:
-                                qv, med = str(int(unit_multiplier * 1000)), 'G'
-                                medida_extraida_api = True
-                            elif unit_multiplier >= 1.0:
-                                qv, med = (str(int(unit_multiplier)), 'KG') if unit_multiplier.is_integer() else (str(unit_multiplier), 'KG')
-                                medida_extraida_api = True
-                        elif measurement_unit == 'g':
-                            if unit_multiplier > 0:
-                                qv, med = str(int(unit_multiplier)), 'G'
-                                medida_extraida_api = True
-                except (ValueError, TypeError, IndexError, KeyError):
-                    pass
-                
-                if not medida_extraida_api:
-                    nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
-                else:
-                    nome_limpo = re.sub(r'\s*\d+[\.,]?\d*\s*(G|KG|L|ML|UN)\b', '', nome_cru, flags=re.IGNORECASE).strip()
-                    if nome_limpo.endswith(" KG"):
-                        nome_limpo = nome_limpo[:-3].strip()
+                # Utilizando apenas a extração inteligente baseada no nome para evitar bugs de "incremento de carrinho" da VTEX
+                nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
                 # Imagem #
                 img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')

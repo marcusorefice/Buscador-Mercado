@@ -13,10 +13,10 @@ echo   3. O Metro Bundler do Expo (frontend)
 echo.
 
 echo [1/3] Iniciando a API Python (FastAPI) na porta 8000...
-start "API Backend" cmd /k "cd /d "%~dp0" && python api.py"
+start "API Backend" cmd /k "cd /d "%~dp0" && call .venv\Scripts\activate && python api.py"
 
 echo [2/3] Iniciando o ngrok para expor a API (URL FIXA)...
-start "ngrok API" cmd /k "npx @ngrok/ngrok http 8000 --domain=badness-impale-suitably.ngrok-free.dev"
+start "ngrok API" cmd /k "ngrok http 8000 --domain=badness-impale-suitably.ngrok-free.dev"
 
 echo [3/3] Iniciando o Expo Metro Bundler...
 :: Inicia o Expo em modo LAN (mais estável). Use o QR Code no seu celular na mesma rede Wi-Fi.
