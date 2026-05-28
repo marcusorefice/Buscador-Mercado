@@ -10,7 +10,7 @@ interface Props {
 }
 
 export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
-  const { list, toggleProduct, clearList } = useShoppingListStore();
+  const { list, toggleProduct, clearList, updateQuantity } = useShoppingListStore();
   const [expandedMarkets, setExpandedMarkets] = useState<Record<string, boolean>>({});
 
   const toggleExpandedMarket = (marketName: string) => {
@@ -44,19 +44,19 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
     if (list.length === 0) return [];
 
     const allMarkets = new Set<string>();
-    list.forEach(product => {
-      product.Ofertas?.forEach(oferta => allMarkets.add(oferta.Mercado));
+    list.forEach(item => {
+      item.Ofertas?.forEach(oferta => allMarkets.add(oferta.Mercado));
     });
 
-    const marketStats: Record<string, { total: number; found: {product: Product, offer: any}[]; missing: Product[] }> = {};
+    const marketStats: Record<string, { total: number; found: {product: typeof list[0], offer: any}[]; missing: typeof list[0][] }> = {};
 
     allMarkets.forEach(m => {
       marketStats[m] = { total: 0, found: [], missing: [] };
     });
 
-    list.forEach(product => {
+    list.forEach(item => {
       allMarkets.forEach(marketName => {
-        const marketOffers = product.Ofertas?.filter(o => o.Mercado === marketName) || [];
+        const marketOffers = item.Ofertas?.filter(o => o.Mercado === marketName) || [];
         if (marketOffers.length > 0) {
           // Pega a melhor oferta se houver mais de uma no mesmo mercado
           let bestOffer = marketOffers[0];
@@ -68,10 +68,10 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
               bestOffer = marketOffers[i];
             }
           }
-          marketStats[marketName].total += bestPrice;
-          marketStats[marketName].found.push({ product, offer: bestOffer });
+          marketStats[marketName].total += bestPrice * (item.quantity || 1);
+          marketStats[marketName].found.push({ product: item, offer: bestOffer });
         } else {
-          marketStats[marketName].missing.push(product);
+          marketStats[marketName].missing.push(item);
         }
       });
     });
@@ -154,8 +154,8 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
                             <Text style={styles.expandedSectionTitle}>✅ Encontrados:</Text>
                             {rank.foundItems.map((item, idx) => (
                               <View key={`found-${idx}`} style={styles.expandedItemRow}>
-                                <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.Produto_Ouro}</Text>
-                                <Text style={styles.expandedItemPrice}>R$ {getBestPrice(item.offer).toFixed(2).replace('.', ',')}</Text>
+                                <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                               </View>
                             ))}
                           </>
@@ -194,7 +194,7 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
               </View>
 
               {list.map(item => (
-                <View key={item.EAN} style={styles.listItem}>
+                <View key={`${item.EAN}_${item.Produto_Ouro}`} style={styles.listItem}>
                   <Image 
                     source={item.Imagem && item.Imagem.startsWith('http') ? { uri: item.Imagem } : require('../assets/placeholder.png')} 
                     style={styles.listImage} 
@@ -204,11 +204,26 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
                     <Text style={styles.listProductName} numberOfLines={2}>{item.Produto_Ouro}</Text>
                     <Text style={styles.listBrand}>{item.Marca}</Text>
                   </View>
-                  <IconButton 
-                    icon="trash-can-outline" 
-                    iconColor="#ff5252" 
-                    onPress={() => toggleProduct(item)} 
-                  />
+                  <View style={styles.quantityControls}>
+                    <IconButton
+                      icon="minus-circle-outline"
+                      iconColor="#E5293E"
+                      size={24}
+                      style={{ margin: 0 }}
+                      onPress={() => {
+                        if (item.quantity > 1) updateQuantity(item, item.quantity - 1);
+                        else toggleProduct(item);
+                      }}
+                    />
+                    <Text style={styles.quantityText}>{item.quantity}</Text>
+                    <IconButton
+                      icon="plus-circle-outline"
+                      iconColor="#E5293E"
+                      size={24}
+                      style={{ margin: 0 }}
+                      onPress={() => updateQuantity(item, item.quantity + 1)}
+                    />
+                  </View>
                 </View>
               ))}
             </ScrollView>
@@ -251,5 +266,7 @@ const styles = StyleSheet.create({
   listImage: { width: 50, height: 50, borderRadius: 8, backgroundColor: '#fff' },
   listInfo: { flex: 1, marginLeft: 15 },
   listProductName: { fontSize: 14, fontWeight: '600', color: '#333' },
-  listBrand: { fontSize: 12, color: '#888', marginTop: 2 }
+  listBrand: { fontSize: 12, color: '#888', marginTop: 2 },
+  quantityControls: { flexDirection: 'row', alignItems: 'center' },
+  quantityText: { fontSize: 16, fontWeight: 'bold', marginHorizontal: 4, minWidth: 20, textAlign: 'center' },
 });

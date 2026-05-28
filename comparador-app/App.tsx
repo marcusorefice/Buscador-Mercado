@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform } from 'react-native';
-import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton } from 'react-native-paper';
+import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton, Button } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { ProductList } from './components/ProductList';
@@ -10,6 +10,7 @@ import { useShoppingListStore } from './components/useShoppingListStore';
 import { Product } from './types';
 import { SkeletonCard } from './components/SkeletonCard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
 const API_URL = __DEV__ 
@@ -54,6 +55,9 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isCartVisible, setCartVisible] = useState(false);
+  
+  const [isScanning, setIsScanning] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
 
   // Lendo a quantidade de itens na lista usando Zustand
   const cartItemsCount = useShoppingListStore(state => state.list.length);
@@ -180,17 +184,29 @@ export default function App() {
                 )}
               </View>
             </View>
-            <Searchbar
-              placeholder="Ex: Cerveja Heineken, Fralda..."
-              onChangeText={handleSearchChange}
-              value={searchQuery}
-              onSubmitEditing={onSearchSubmit}
-              onIconPress={onSearchSubmit}
-              onClearIconPress={clearSearch}
-              style={styles.searchbar}
-              inputStyle={styles.searchInput}
-              iconColor="#E5293E"
-            />
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Searchbar
+                placeholder="Ex: Cerveja Heineken, Fralda..."
+                onChangeText={handleSearchChange}
+                value={searchQuery}
+                onSubmitEditing={onSearchSubmit}
+                onIconPress={onSearchSubmit}
+                onClearIconPress={clearSearch}
+                style={[styles.searchbar, { flex: 1 }]}
+                inputStyle={styles.searchInput}
+                iconColor="#E5293E"
+              />
+              <IconButton
+                icon="barcode-scan"
+                iconColor="#fff"
+                size={28}
+                onPress={() => {
+                  if (!permission?.granted) requestPermission();
+                  setIsScanning(true);
+                }}
+                style={{ marginLeft: 8, marginRight: 0 }}
+              />
+            </View>
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsContainer} contentContainerStyle={{ paddingRight: 20 }}>
               {['cerveja', 'café', 'fralda', 'sabão em pó', 'arroz', 'leite'].map(tag => (
@@ -283,6 +299,39 @@ export default function App() {
                 </ScrollView>
               </View>
             </View>
+          </Modal>
+
+          {/* --- MODAL DA CÂMERA DE LEITURA DE EAN --- */}
+          <Modal visible={isScanning} animationType="slide" transparent={false} onRequestClose={() => setIsScanning(false)}>
+            <SafeAreaView style={{ flex: 1, backgroundColor: 'black' }} edges={['top', 'bottom']}>
+              <View style={styles.scannerHeader}>
+                <Text style={styles.scannerTitle}>Escanear Código de Barras</Text>
+                <IconButton icon="close" iconColor="white" size={24} onPress={() => setIsScanning(false)} />
+              </View>
+              {permission?.granted ? (
+                <View style={styles.scannerContainer}>
+                  <CameraView
+                    style={StyleSheet.absoluteFillObject}
+                    facing="back"
+                    barcodeScannerSettings={{ barcodeTypes: ["ean13", "ean8", "upc_a", "upc_e"] }}
+                    onBarcodeScanned={({ data }) => {
+                      setIsScanning(false);
+                      setSearchQuery(data);
+                      searchQueryRef.current = data;
+                      fetchProducts(data);
+                    }}
+                  />
+                  <View style={styles.scannerOverlay}>
+                    <View style={styles.scannerTarget} />
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.centerContainer}>
+                  <Text style={{ color: 'white', marginBottom: 20 }}>Precisamos de acesso à câmera.</Text>
+                  <Button mode="contained" onPress={requestPermission} buttonColor="#E5293E">Conceder Permissão</Button>
+                </View>
+              )}
+            </SafeAreaView>
           </Modal>
 
         </SafeAreaView>
@@ -433,5 +482,11 @@ const styles = StyleSheet.create({
   marketOptionTextSelected: {
     color: '#E5293E',
     fontWeight: 'bold',
-  }
+  },
+  // Estilos do Scanner
+  scannerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, backgroundColor: 'black' },
+  scannerTitle: { color: 'white', fontSize: 18, fontWeight: 'bold' },
+  scannerContainer: { flex: 1, position: 'relative' },
+  scannerOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
+  scannerTarget: { width: 250, height: 150, borderWidth: 2, borderColor: '#E5293E', borderRadius: 12, backgroundColor: 'transparent' },
 });

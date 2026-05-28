@@ -78,8 +78,11 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
   const discountPercent = React.useMemo(() => hasDiscount ? Math.round(((originalPrice - currentPrice) / originalPrice) * 100) : 0, [hasDiscount, originalPrice, currentPrice]);
 
   // Conectando com o Zustand para saber se este produto específico está na lista
-  const isInList = useShoppingListStore(state => state.list.some(p => p.EAN === product.EAN && p.Produto_Ouro === product.Produto_Ouro));
+  const cartItem = useShoppingListStore(state => state.list.find(p => p.EAN === product.EAN && p.Produto_Ouro === product.Produto_Ouro));
+  const isInList = !!cartItem;
+  const quantity = (cartItem as any)?.quantity || 1;
   const toggleProduct = useShoppingListStore(state => state.toggleProduct);
+  const updateQuantity = useShoppingListStore(state => (state as any).updateQuantity);
 
   return (
     <Card style={styles.card} onPress={() => onPress?.(product)}>
@@ -95,14 +98,37 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
               onError={() => setImageError(true)}
             />
           )}
-          <IconButton
-            icon={isInList ? "cart-check" : "cart-plus"}
-            size={20}
-            iconColor={isInList ? "#4CAF50" : "#E5293E"}
-            containerColor="rgba(255, 255, 255, 0.9)"
-            style={styles.addToListBtn}
-            onPress={() => toggleProduct(product)}
-          />
+          {!isInList ? (
+            <IconButton
+              icon="cart-plus"
+              size={20}
+              iconColor="#E5293E"
+              containerColor="rgba(255, 255, 255, 0.9)"
+              style={styles.addToListBtn}
+              onPress={() => toggleProduct(product)}
+            />
+          ) : (
+            <View style={styles.quantityContainer}>
+              <IconButton
+                icon="minus"
+                size={16}
+                iconColor="#E5293E"
+                style={styles.quantityBtn}
+                onPress={() => {
+                  if (quantity > 1 && updateQuantity) updateQuantity(product, quantity - 1);
+                  else toggleProduct(product); // Remove se chegar a zero
+                }}
+              />
+              <Text style={styles.quantityText}>{quantity}</Text>
+              <IconButton
+                icon="plus"
+                size={16}
+                iconColor="#E5293E"
+                style={styles.quantityBtn}
+                onPress={() => updateQuantity && updateQuantity(product, quantity + 1)}
+              />
+            </View>
+          )}
         </View>
 
         <View style={styles.contentContainer}>
@@ -179,6 +205,29 @@ const styles = StyleSheet.create({
     right: 4,
     margin: 0,
     elevation: 2,
+  },
+  quantityContainer: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 20,
+    elevation: 2,
+    paddingHorizontal: 2,
+  },
+  quantityBtn: {
+    margin: 0,
+    width: 24,
+    height: 24,
+  },
+  quantityText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333',
+    minWidth: 16,
+    textAlign: 'center',
   },
   image: { width: '100%', height: '100%' },
   contentContainer: {
