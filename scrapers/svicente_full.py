@@ -140,9 +140,17 @@ async def motor_extracao_svicente_full():
                             nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
                             marca = str(p.get('brand', 'OUTROS')).upper()
                             
-                            link_pdp = p.get('url', '')
-                            if link_pdp and not link_pdp.startswith('http'):
-                                link_pdp = f"https://www.svicente.com.br{link_pdp}"
+                            link_pdp_rel = p.get('url', '')
+                            pid = p.get('id')
+                            if link_pdp_rel:
+                                if link_pdp_rel.startswith('http'):
+                                    link_pdp = link_pdp_rel
+                                else:
+                                    link_pdp = f"https://www.svicente.com.br{link_pdp_rel if link_pdp_rel.startswith('/') else '/' + link_pdp_rel}"
+                            elif pid:
+                                link_pdp = f"https://www.svicente.com.br/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Product-Show?pid={pid}"
+                            else:
+                                link_pdp = ""
 
                             produtos_categoria.append({
                                 "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_nome,

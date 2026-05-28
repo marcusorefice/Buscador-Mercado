@@ -115,9 +115,14 @@ async def motor_extracao_covabra_full():
                                 marca = str(p.get('brand', 'OUTROS')).upper()
                                 img_url = item.get('images', [{}])[0].get('imageUrl', '')
                                 
-                                link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                                link_pdp_rel = p.get('linkText') or p.get('link') or p.get('url') or ''
                                 if link_pdp_rel:
-                                    link_pdp = f"https://www.covabra.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                                    if link_pdp_rel.startswith('http'):
+                                        link_pdp = link_pdp_rel
+                                    elif link_pdp_rel.startswith('/'):
+                                        link_pdp = f"https://www.covabra.com.br{link_pdp_rel}"
+                                    else:
+                                        link_pdp = f"https://www.covabra.com.br/{link_pdp_rel}/p"
                                 else:
                                     link_pdp = ""
                                 

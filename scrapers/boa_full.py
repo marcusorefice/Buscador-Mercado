@@ -56,6 +56,16 @@ async def extrair_pagina_categoria(session, depto_slug, pagina, sem, agora):
                     if ean_real: ean_real = str(ean_real).lstrip('0') or 'N/A'
 
                     p_v, p_a = float(item.get('price') or 0), float(item.get('promotional_price') or item.get('price') or 0)
+                    
+                    # Correção VTEX: Produtos a granel e Heurística de Preço
+                    unit_multiplier = float(item.get('unitMultiplier') or 1.0)
+                    if unit_multiplier > 0 and unit_multiplier < 1.0:
+                        if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
+                            p_a = p_a / unit_multiplier
+                        elif p_v < (p_a * 2):
+                            p_v = p_v / unit_multiplier
+                            p_a = p_a / unit_multiplier
+                            
                     if p_a <= 0: continue
                     if p_v <= 0 or p_v < p_a: p_v = p_a
 
@@ -72,7 +82,17 @@ async def extrair_pagina_categoria(session, depto_slug, pagina, sem, agora):
                     condicao = "1 UN"
                     if p_a < p_v:
                         condicao = "EXCLUSIVO CARTÃO BOA" if selo_cartao else "CLUBE +AMIGO (CPF)"
-                    link_pdp = item.get('url', '')
+                    
+                    link_pdp_rel = item.get('slug') or item.get('linkText') or item.get('url') or ''
+                    if link_pdp_rel:
+                        if link_pdp_rel.startswith('http'):
+                            link_pdp = link_pdp_rel
+                        elif link_pdp_rel.startswith('/'):
+                            link_pdp = f"https://www.boasupermercados.com.br{link_pdp_rel}"
+                        else:
+                            link_pdp = f"https://www.boasupermercados.com.br/{link_pdp_rel}/p"
+                    else:
+                        link_pdp = ""
 
                     lote.append({
                         "Mercado": NOME_MERCADO, "EAN": ean_real, "Categoria": "GERAL",

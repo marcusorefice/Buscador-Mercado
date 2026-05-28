@@ -151,9 +151,14 @@ async def motor_extracao_atacadao_full():
                         marca_str = str(p.get('brand', 'OUTROS')).upper()
                         nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
-                        link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                        link_pdp_rel = p.get('slug') or p.get('linkText') or p.get('link') or ''
                         if link_pdp_rel:
-                            link_pdp = f"https://www.atacadao.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                            if link_pdp_rel.startswith('http'):
+                                link_pdp = link_pdp_rel
+                            elif link_pdp_rel.startswith('/'):
+                                link_pdp = f"https://www.atacadao.com.br{link_pdp_rel}"
+                            else:
+                                link_pdp = f"https://www.atacadao.com.br/{link_pdp_rel}/p"
                         else:
                             link_pdp = ""
 

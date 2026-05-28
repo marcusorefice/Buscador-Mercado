@@ -94,6 +94,15 @@ async def motor_extracao_dom_olivio_full():
                                 p_venda = float(offer.get('Price', 0.0))
                                 p_varejo = float(offer.get('ListPrice', p_venda))
                                 
+                                # Correção VTEX: Produtos a granel e Heurística de Preço
+                                unit_multiplier = float(item.get('unitMultiplier') or 1.0)
+                                if unit_multiplier > 0 and unit_multiplier < 1.0:
+                                    if p_varejo > (p_venda * (1 / unit_multiplier) * 0.5): 
+                                        p_venda = p_venda / unit_multiplier
+                                    elif p_varejo < (p_venda * 2):
+                                        p_varejo = p_varejo / unit_multiplier
+                                        p_venda = p_venda / unit_multiplier
+                                        
                                 if p_venda <= 0: continue
                                 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
@@ -104,9 +113,14 @@ async def motor_extracao_dom_olivio_full():
                                 cats = p.get('categories', [])
                                 if cats: cat_site_cru = cats[0].strip('/').split('/')[0].upper()
                                 
-                                link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                                link_pdp_rel = p.get('slug') or p.get('linkText') or p.get('url') or ''
                                 if link_pdp_rel:
-                                    link_pdp = f"https://www.domolivio.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                                    if link_pdp_rel.startswith('http'):
+                                        link_pdp = link_pdp_rel
+                                    elif link_pdp_rel.startswith('/'):
+                                        link_pdp = f"https://www.domolivio.com.br{link_pdp_rel}"
+                                    else:
+                                        link_pdp = f"https://www.domolivio.com.br/{link_pdp_rel}/p"
                                 else:
                                     link_pdp = ""
 

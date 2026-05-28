@@ -59,7 +59,7 @@ async def motor_extracao_oba_full():
             while True:
                 async with sem:
                     _to = _from + PAGE_SIZE - 1
-                    url_final = f"{URL_LEGACY}?fq=c:{cat_id}&_from={_from}&_to={_to}"
+                    url_final = f"{URL_LEGACY}?fq=C:{cat_id}&_from={_from}&_to={_to}"
                     try:
                         res = await session.get(url_final, timeout=30)
                         if res.status_code not in [200, 206]: break
@@ -104,9 +104,14 @@ async def motor_extracao_oba_full():
                                 img_url = sku.get('images', [{}])[0].get('imageUrl', '')
                                 marca = p.get('brand', 'PRÓPRIA').upper()
                                 
-                                link_pdp_rel = p.get('linkText', '') or p.get('link', '')
+                                link_pdp_rel = p.get('linkText') or p.get('link') or p.get('url') or ''
                                 if link_pdp_rel:
-                                    link_pdp = f"https://www.obahortifruti.com.br/{link_pdp_rel}/p" if not link_pdp_rel.startswith('http') else link_pdp_rel
+                                    if link_pdp_rel.startswith('http'):
+                                        link_pdp = link_pdp_rel
+                                    elif link_pdp_rel.startswith('/'):
+                                        link_pdp = f"https://www.obahortifruti.com.br{link_pdp_rel}"
+                                    else:
+                                        link_pdp = f"https://www.obahortifruti.com.br/{link_pdp_rel}/p"
                                 else:
                                     link_pdp = ""
 

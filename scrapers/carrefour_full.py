@@ -100,25 +100,32 @@ async def extrair_lote_categoria(session, category_url, pagina, sem, agora, indi
                     else: ean = ean_oficial
                         
                     if not ean: ean = indice_reverso.get(normalizar_para_cache(nome_cru), "N/A")
-# Preços
-off = sku_p.get('sellers', [{}])[0].get('commertialOffer', {})
-p_v, p_a = float(off.get('ListPrice', 0)), float(off.get('Price', 0))
-if p_a <= 0: continue
-if p_v <= 0 or p_v < p_a: p_v = p_a
+                    # Preços
+                    off = sku_p.get('sellers', [{}])[0].get('commertialOffer', {})
+                    p_v, p_a = float(off.get('ListPrice', 0)), float(off.get('Price', 0))
+                    if p_a <= 0: continue
+                    if p_v <= 0 or p_v < p_a: p_v = p_a
 
-# --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
-unit_multiplier = float(sku_p.get('unitMultiplier') or 1.0)
-if unit_multiplier > 0 and unit_multiplier < 1.0:
-    if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
-        p_a = p_a / unit_multiplier
-    elif p_v < (p_a * 2):
-        p_v = p_v / unit_multiplier
-        p_a = p_a / unit_multiplier
+                    # --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
+                    unit_multiplier = float(sku_p.get('unitMultiplier') or 1.0)
+                    if unit_multiplier > 0 and unit_multiplier < 1.0:
+                        if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
+                            p_a = p_a / unit_multiplier
+                        elif p_v < (p_a * 2):
+                            p_v = p_v / unit_multiplier
+                            p_a = p_a / unit_multiplier
 
-nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
-                    link_pdp = item.get('link', '')
-                    if link_pdp and not link_pdp.startswith('http'):
-                        link_pdp = f"{BASE_URL_CONFIG}{link_pdp}"
+                    nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                    link_pdp_rel = item.get('linkText') or item.get('link') or item.get('url') or ''
+                    if link_pdp_rel:
+                        if link_pdp_rel.startswith('http'):
+                            link_pdp = link_pdp_rel
+                        elif link_pdp_rel.startswith('/'):
+                            link_pdp = f"{BASE_URL_CONFIG}{link_pdp_rel}"
+                        else:
+                            link_pdp = f"{BASE_URL_CONFIG}/{link_pdp_rel}/p"
+                    else:
+                        link_pdp = ""
 
                     lote.append({
                         "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": "GERAL",

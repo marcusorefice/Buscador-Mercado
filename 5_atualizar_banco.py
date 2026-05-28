@@ -178,6 +178,7 @@ def main():
 
         # Rastreador de produtos ativos de cada mercado na raspagem atual
         eans_processados_por_mercado = {}
+        scraper_origem_por_mercado = {}
 
         for item in itens_crus:
             ean = str(item.get("EAN", item.get("ean", "N/A"))).strip()
@@ -198,7 +199,11 @@ def main():
                 
             if mercado not in eans_processados_por_mercado:
                 eans_processados_por_mercado[mercado] = set()
+                scraper_origem_por_mercado[mercado] = False
+                
             eans_processados_por_mercado[mercado].add(ean)
+            if item.get("Scraper_Origem") == "FULL":
+                scraper_origem_por_mercado[mercado] = True
 
             condicao = item.get("Condicao", item.get("Condição", ""))
             data_extracao = item.get("Data_Hora", hoje)
@@ -264,6 +269,11 @@ def main():
             # Ignoramos a exclusão para não apagar todo o mercado por acidente.
             if len(eans_ativos) < 20:
                 print(f"⚠️ Limpeza ignorada para '{mercado_nome}' (apenas {len(eans_ativos)} itens processados, protegendo contra falha de scraper).")
+                continue
+                
+            # Proteção contra deleção em massa pelas raspagens diárias (que pegam só algumas ofertas)
+            if not scraper_origem_por_mercado.get(mercado_nome, False):
+                print(f"⏩ Limpeza ignorada para '{mercado_nome}' (Coleta diária/parcial não deleta o catálogo base do banco).")
                 continue
             
             # Deleta no Postgres

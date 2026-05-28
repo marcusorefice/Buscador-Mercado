@@ -123,9 +123,16 @@ async def motor_extracao_paodeacucar_full():
                                 img_path = p.get('productImages', [None])[0]
                                 img_url = f"{BASE_URL_CONFIG}/{img_path.lstrip('/')}" if img_path else ""
 
-                                link_pdp = p.get('urlDetails', '')
-                                if link_pdp and not link_pdp.startswith('http'):
-                                    link_pdp = f"{BASE_URL_CONFIG}{link_pdp}"
+                                link_pdp_rel = p.get('urlDetails', '') or p.get('url', '')
+                                if link_pdp_rel:
+                                    if link_pdp_rel.startswith('http'):
+                                        link_pdp = link_pdp_rel
+                                    elif link_pdp_rel.startswith('/'):
+                                        link_pdp = f"{BASE_URL_CONFIG}{link_pdp_rel}"
+                                    else:
+                                        link_pdp = f"{BASE_URL_CONFIG}/{link_pdp_rel}"
+                                else:
+                                    link_pdp = ""
 
                                 produtos_departamento.append({
                                     "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_site,
