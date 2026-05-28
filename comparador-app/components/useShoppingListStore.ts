@@ -3,12 +3,14 @@ import { Product } from '../types';
 
 interface ShoppingListItem extends Product {
   quantity: number;
+  pinnedMarket?: string;
 }
 
 interface ShoppingListState {
   list: ShoppingListItem[];
   toggleProduct: (product: Product) => void;
   updateQuantity: (product: Product, quantity: number) => void;
+  setPinnedMarket: (product: Product, marketName?: string) => void;
   clearList: () => void;
 }
 
@@ -24,6 +26,11 @@ export const useShoppingListStore = create<ShoppingListState>((set) => ({
   updateQuantity: (product, quantity) => set((state) => ({
     list: state.list.map(p => 
       (p.EAN === product.EAN && p.Produto_Ouro === product.Produto_Ouro) ? { ...p, quantity } : p
+    )
+  })),
+  setPinnedMarket: (product, marketName) => set((state) => ({
+    list: state.list.map(p => 
+      (p.EAN === product.EAN && p.Produto_Ouro === product.Produto_Ouro) ? { ...p, pinnedMarket: marketName } : p
     )
   })),
   clearList: () => set({ list: [] }),

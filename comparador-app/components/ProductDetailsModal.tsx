@@ -171,8 +171,8 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                       </Text>
                       <Image source={getMarketLogo(activeOffer.Mercado)} style={styles.topMarketLogo} resizeMode="contain" />
                     </TouchableOpacity>
-                    {activeOffer.Condicao && activeOffer.Condicao !== '1 UN' && (
-                      <Text style={styles.bestOfferCondition}>
+                    {activeOffer.Condicao && (
+                      <Text style={[styles.bestOfferCondition, activeOffer.Condicao === '1 UN' && { color: '#888' }]}>
                         {activeOffer.Condicao}
                       </Text>
                     )}
@@ -220,9 +220,9 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                       <Text style={styles.marketName}>
                         {oferta.Mercado}
                       </Text>
-                      {oferta.Condicao ? (
-                        <Text style={styles.conditionText}>{oferta.Condicao}</Text>
-                      ) : null}
+                      {oferta.Condicao && (
+                        <Text style={[styles.conditionText, oferta.Condicao === '1 UN' && { color: '#888' }]}>{oferta.Condicao}</Text>
+                      )}
                     </View>
                   </View>
                   <View style={styles.priceInfo}>
