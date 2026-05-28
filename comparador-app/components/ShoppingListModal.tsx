@@ -1,18 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import { View, StyleSheet, ScrollView, Modal, Image, TouchableOpacity } from 'react-native';
-import { Text, IconButton, Divider, Button, Chip } from 'react-native-paper';
+import { Text, IconButton, Divider, Button, Chip, Checkbox } from 'react-native-paper';
 import { useShoppingListStore } from './useShoppingListStore';
 import { Product } from '../types';
 
 interface Props {
   visible: boolean;
   onDismiss: () => void;
+  onProductPress?: (product: Product) => void;
 }
 
-export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
-  const { list, toggleProduct, clearList, updateQuantity, setPinnedMarket } = useShoppingListStore();
+export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props) => {
+  const { list, toggleProduct, clearList, updateQuantity, setPinnedMarket, toggleItemCheck } = useShoppingListStore();
   const [expandedMarkets, setExpandedMarkets] = useState<Record<string, boolean>>({});
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
+  const [shoppingMode, setShoppingMode] = useState<{ type: 'optimized' | 'single', market?: string, title: string } | null>(null);
 
   const toggleExpandedMarket = (marketName: string) => {
     setExpandedMarkets(prev => ({ ...prev, [marketName]: !prev[marketName] }));
@@ -131,12 +133,55 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
       });
   }, [list]);
 
+  // Componente que desenha o item no "Modo Compras"
+  const renderShoppingItem = (item: typeof list[0], offer: any) => {
+    const itemKey = `${item.EAN}_${item.Produto_Ouro}_${offer.Mercado}`;
+    const isChecked = !!item.checked;
+    return (
+      <View key={itemKey} style={[styles.listItemContainer, isChecked && { opacity: 0.5 }]}>
+        <View style={styles.listItemTopRow}>
+          <Checkbox
+            status={isChecked ? 'checked' : 'unchecked'}
+            onPress={() => toggleItemCheck(item)}
+            color="#4CAF50"
+          />
+        <TouchableOpacity 
+          style={{ flexDirection: 'row', flex: 1, alignItems: 'center' }}
+          onPress={() => onProductPress && onProductPress(item)}
+          activeOpacity={0.7}
+        >
+          <Image 
+            source={item.Imagem && item.Imagem.startsWith('http') ? { uri: item.Imagem } : require('../assets/placeholder.png')} 
+            style={[styles.listImage, { marginLeft: 4 }]} 
+            resizeMode="contain" 
+          />
+          <View style={styles.listInfo}>
+            <Text style={[styles.listProductName, isChecked && { textDecorationLine: 'line-through', color: '#888' }]} numberOfLines={2}>{item.Produto_Ouro}</Text>
+            <Text style={styles.listBrand}>{item.Marca}</Text>
+            <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#E5293E', marginTop: 4 }}>
+              {item.quantity}x R$ {getBestPrice(offer).toFixed(2).replace('.', ',')} 
+              <Text style={{ fontSize: 12, color: '#666', fontWeight: 'normal' }}> (Total: R$ {(getBestPrice(offer) * item.quantity).toFixed(2).replace('.', ',')})</Text>
+            </Text>
+          </View>
+        </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onDismiss}>
       <View style={styles.overlay}>
         <View style={styles.container}>
           <View style={styles.header}>
-            <Text style={styles.title}>Minha Lista de Compras</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+              {shoppingMode && (
+                <IconButton icon="arrow-left" size={24} onPress={() => setShoppingMode(null)} style={{ margin: 0, marginRight: 4, marginLeft: -8 }} />
+              )}
+              <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail">
+                {shoppingMode ? shoppingMode.title : 'Minha Lista de Compras'}
+              </Text>
+            </View>
             <IconButton icon="close" size={24} onPress={onDismiss} />
           </View>
 
@@ -146,6 +191,46 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
               <Text style={styles.emptyText}>Sua lista está vazia!</Text>
               <Text style={styles.emptySub}>Adicione produtos para descobrir onde é mais barato comprar tudo junto.</Text>
             </View>
+          ) : shoppingMode ? (
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+              {shoppingMode.type === 'optimized' && (
+                Object.entries(optimizedCart.markets).map(([mkt, items]) => (
+                  <View key={mkt} style={{ marginBottom: 20 }}>
+                    <View style={{ backgroundColor: '#f0f0f0', padding: 8, borderRadius: 8, marginBottom: 8 }}>
+                      <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#555' }}>🛒 {mkt}</Text>
+                    </View>
+                    {items.map(i => renderShoppingItem(i.product, i.offer))}
+                  </View>
+                ))
+              )}
+              {shoppingMode.type === 'single' && shoppingMode.market && (
+                <View>
+                  {marketRanking.find(r => r.market === shoppingMode.market)?.foundItems.map(i => renderShoppingItem(i.product, i.offer))}
+                  {marketRanking.find(r => r.market === shoppingMode.market)?.missingItems && marketRanking.find(r => r.market === shoppingMode.market)!.missingItems.length > 0 && (
+                     <View style={{ marginTop: 20 }}>
+                       <Text style={[styles.sectionTitle, { color: '#d32f2f' }]}>❌ Itens Indisponíveis</Text>
+                       {marketRanking.find(r => r.market === shoppingMode.market)?.missingItems.map((prod, idx) => (
+                          <View key={`missing-${idx}`} style={[styles.listItemContainer, { opacity: 0.5 }]}>
+                            <View style={styles.listItemTopRow}>
+                          <TouchableOpacity 
+                            style={{ flexDirection: 'row', flex: 1, alignItems: 'center', marginLeft: 36 }}
+                            onPress={() => onProductPress && onProductPress(prod)}
+                            activeOpacity={0.7}
+                          >
+                            <Image source={prod.Imagem && prod.Imagem.startsWith('http') ? { uri: prod.Imagem } : require('../assets/placeholder.png')} style={styles.listImage} resizeMode="contain" />
+                            <View style={styles.listInfo}>
+                              <Text style={styles.listProductName} numberOfLines={2}>{prod.Produto_Ouro}</Text>
+                              <Text style={{ color: '#d32f2f', fontSize: 12, marginTop: 4 }}>Não encontrado neste mercado</Text>
+                            </View>
+                          </TouchableOpacity>
+                            </View>
+                          </View>
+                       ))}
+                     </View>
+                  )}
+                </View>
+              )}
+            </ScrollView>
           ) : (
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
               
@@ -169,14 +254,25 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
                   {expandedMarkets['optimized'] && (
                     <View style={styles.expandedContent}>
                       <Divider style={styles.expandedDivider} />
+                      <Button 
+                        mode="contained" 
+                        buttonColor="#b8860b" 
+                        icon="cart-outline" 
+                        style={{ marginBottom: 16 }} 
+                        onPress={() => setShoppingMode({ type: 'optimized', title: 'Multi-Mercados' })}
+                      >
+                        Iniciar Compras
+                      </Button>
                       {Object.entries(optimizedCart.markets).map(([mkt, items]) => (
                         <View key={mkt} style={{ marginBottom: 12 }}>
                           <Text style={styles.optimizedMarketTitle}>🛒 {mkt}</Text>
                           {items.map((item, idx) => (
-                            <View key={`opt-${mkt}-${idx}`} style={styles.expandedItemRow}>
-                              <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
-                              <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
-                            </View>
+                              <TouchableOpacity key={`opt-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
+                                <View style={styles.expandedItemRow}>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
+                                </View>
+                              </TouchableOpacity>
                           ))}
                         </View>
                       ))}
@@ -220,14 +316,26 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
                       <View style={styles.expandedContent}>
                         <Divider style={styles.expandedDivider} />
                         
+                        <Button 
+                          mode="contained" 
+                          buttonColor="#E5293E" 
+                          icon="cart-outline" 
+                          style={{ marginBottom: 16 }} 
+                          onPress={() => setShoppingMode({ type: 'single', market: rank.market, title: rank.market })}
+                        >
+                          Ir para este Mercado
+                        </Button>
+                        
                         {rank.foundItems.length > 0 && (
                           <>
                             <Text style={styles.expandedSectionTitle}>✅ Encontrados:</Text>
                             {rank.foundItems.map((item, idx) => (
-                              <View key={`found-${idx}`} style={styles.expandedItemRow}>
-                                <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
-                                <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
-                              </View>
+                              <TouchableOpacity key={`found-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
+                                <View style={styles.expandedItemRow}>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
+                                </View>
+                              </TouchableOpacity>
                             ))}
                           </>
                         )}
@@ -239,10 +347,12 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
                               const alt = getBestAlternative(prod);
                               return (
                                 <View key={`missing-${idx}`} style={styles.expandedMissingContainer}>
-                                  <View style={styles.expandedItemRow}>
-                                    <Text style={[styles.expandedItemName, { color: '#888' }]} numberOfLines={1}>• {prod.Produto_Ouro}</Text>
-                                    {!alt && <Text style={[styles.expandedItemPrice, { color: '#888' }]}>Indisponível</Text>}
-                                  </View>
+                              <TouchableOpacity onPress={() => onProductPress && onProductPress(prod)} activeOpacity={0.7}>
+                                <View style={styles.expandedItemRow}>
+                                  <Text style={[styles.expandedItemName, { color: '#888' }]} numberOfLines={1}>• {prod.Produto_Ouro}</Text>
+                                  {!alt && <Text style={[styles.expandedItemPrice, { color: '#888' }]}>Indisponível</Text>}
+                                </View>
+                              </TouchableOpacity>
                                   {alt && (
                                     <Text style={styles.missingAlternativeText}>💡 Tem no {alt.market} por R$ {alt.price.toFixed(2).replace('.', ',')}</Text>
                                   )}
@@ -266,17 +376,27 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
 
               {list.map(item => {
                 const itemKey = `${item.EAN}_${item.Produto_Ouro}`;
+                const isChecked = !!item.checked;
                 return (
-                  <View key={itemKey} style={styles.listItemContainer}>
+                  <View key={itemKey} style={[styles.listItemContainer, isChecked && { opacity: 0.5 }]}>
                     <View style={styles.listItemTopRow}>
-                      <Image 
-                        source={item.Imagem && item.Imagem.startsWith('http') ? { uri: item.Imagem } : require('../assets/placeholder.png')} 
-                        style={styles.listImage} 
-                        resizeMode="contain" 
+                      <Checkbox
+                        status={isChecked ? 'checked' : 'unchecked'}
+                        onPress={() => toggleItemCheck(item)}
+                        color="#4CAF50"
                       />
+                  <TouchableOpacity onPress={() => onProductPress && onProductPress(item)} activeOpacity={0.7}>
+                    <Image 
+                      source={item.Imagem && item.Imagem.startsWith('http') ? { uri: item.Imagem } : require('../assets/placeholder.png')} 
+                      style={[styles.listImage, { marginLeft: 4 }]} 
+                      resizeMode="contain" 
+                    />
+                  </TouchableOpacity>
                       <View style={styles.listInfo}>
-                        <Text style={styles.listProductName} numberOfLines={2}>{item.Produto_Ouro}</Text>
-                        <Text style={styles.listBrand}>{item.Marca}</Text>
+                    <TouchableOpacity onPress={() => onProductPress && onProductPress(item)} activeOpacity={0.7}>
+                      <Text style={[styles.listProductName, isChecked && { textDecorationLine: 'line-through', color: '#888' }]} numberOfLines={2}>{item.Produto_Ouro}</Text>
+                      <Text style={styles.listBrand}>{item.Marca}</Text>
+                    </TouchableOpacity>
                         <TouchableOpacity onPress={() => toggleExpandItem(itemKey)} style={styles.pinnedMarketRow} activeOpacity={0.6}>
                           <Text style={styles.pinnedMarketText}>
                             📍 {item.pinnedMarket ? `Fixo: ${item.pinnedMarket}` : 'Melhor Preço Automático'}
@@ -345,7 +465,7 @@ export const ShoppingListModal = ({ visible, onDismiss }: Props) => {
 
 const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  container: { backgroundColor: '#fff', height: '85%', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20 },
+  container: { backgroundColor: '#fff', flex: 1, marginTop: 40, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eee', marginBottom: 10 },
   title: { fontSize: 20, fontWeight: 'bold', color: '#333' },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },

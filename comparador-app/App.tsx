@@ -272,6 +272,7 @@ export default function App() {
           <ShoppingListModal 
             visible={isCartVisible}
             onDismiss={() => setCartVisible(false)}
+            onProductPress={handleProductPress}
           />
 
           <Modal visible={isMarketModalVisible} animationType="slide" transparent={true}>
