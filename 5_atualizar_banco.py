@@ -297,6 +297,13 @@ def main():
         conn_pg.commit()
         conn_sl.commit()
         print("Bancos de dados PostgreSQL e SQLite (Local) atualizados com sucesso!")
+        
+        # --- LIMPEZA DA ÁREA DE STAGING ---
+        try:
+            os.remove(ITENS_CRUS_PATH)
+            print("🗑️ Arquivo 'itens_prontos_para_comparar.json' deletado com sucesso (Staging limpo)!")
+        except Exception as e:
+            print(f"⚠️ Aviso: Não foi possível deletar o arquivo temporário: {e}")
     else:
         print("Arquivo 'itens_prontos_para_comparar.json' nao encontrado. Voce rodou o passo 4?")
     

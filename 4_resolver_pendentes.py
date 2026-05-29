@@ -5,7 +5,6 @@ import logging
 
 # Importa as ferramentas da IA do seu classificador já existente
 from classificador_ia import (
-    _chamar_gemini_com_retry, 
     PROMPT_CLASSIFICACAO, 
     PROMPT_CONFLITO,
     CATEGORIAS_MASTER
@@ -21,113 +20,69 @@ ARQUIVO_PENDENTES = os.path.join(DATA_DIR, "pendentes_ia.json")
 ARQUIVO_BIBLIOTECA = os.path.join(DATA_DIR, "biblioteca_produtos.json")
 ARQUIVO_PROCESSADOS = os.path.join(DATA_DIR, "itens_prontos_para_comparar.json")
 
+def ean_eh_valido(ean_str):
+    ean_str = str(ean_str).strip()
+    if not ean_str.isdigit(): return False
+    if len(ean_str) not in (8, 12, 13, 14): return False
+    if len(set(ean_str)) == 1: return False
+    if ean_str.startswith('0000000'): return False
+    
+    padded = ean_str.zfill(14)
+    total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
+    return str((10 - (total % 10)) % 10) == padded[13]
+
 async def resolver_ean_novo(ean, itens_crus):
     """
-    Decide se apenas classifica (1 item) ou se resolve conflito (>1 itens).
-    Retorna o Produto Ouro para salvar na biblioteca.
+    Cria o Produto Ouro a partir dos itens recebidos.
+    Usa heurísticas de prioridade (sem IA) para garantir velocidade máxima e
+    evitar estourar o limite de requisições da API.
     """
-    # Se só tem um item, ou todos os itens têm exatamente o mesmo nome
-    nomes_unicos = {item.get("Produto", item.get("nome_comum", "")) for item in itens_crus}
+    # Encontra o item raiz que tem o nome mais longo e detalhado
+    melhor_item = max(itens_crus, key=lambda x: len(str(x.get("Produto", x.get("nome_comum", ""))).strip()))
+    melhor_nome = str(melhor_item.get("Produto", melhor_item.get("nome_comum", ""))).strip() or "PRODUTO DESCONHECIDO"
     
-    # --- NOVO PROMPT SIMPLIFICADO ---
-    PROMPT_SIMPLIFICADO_CONFLITO = """Vários supermercados enviaram nomes diferentes para o mesmo produto (EAN: {ean}).
-Sua tarefa é analisar as opções e retornar APENAS UM JSON válido com o melhor nome (mais claro e descritivo) e a marca.
-Não crie tags nem categorias.
-
-OPÇÕES RECEBIDAS:
-{opcoes}
-
-FORMATO DE SAÍDA EXATO:
-{{
-"nome_comum": "Melhor Nome Escolhido",
-"marca": "MARCA EM CAIXA ALTA"
-}}"""
-
-    if len(nomes_unicos) == 1:
-        # Só tem 1 variação de nome: NÃO USA IA! Economiza tempo e limite da API.
-        item_base = itens_crus[0]
-        nome = item_base.get("Produto", item_base.get("nome_comum", ""))
-        marca = str(item_base.get("Marca", item_base.get("marca", ""))).upper()
-        categoria = item_base.get("Categoria", "OUTROS")
+    # Escolhe a melhor marca (mais frequente, ignorando genéricas)
+    marcas = [str(item.get("Marca", item.get("marca", ""))).strip().upper() for item in itens_crus]
+    marcas_validas = [m for m in marcas if m not in ("OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "", "NONE")]
+    
+    if marcas_validas:
+        from collections import Counter
+        melhor_marca = Counter(marcas_validas).most_common(1)[0][0]
+    else:
+        melhor_marca = marcas[0] if marcas else "OUTROS"
         
-        logger.info(f"⚡ [Pulo IA] EAN {ean} - Apenas 1 variação: {nome}")
-        
-        # Garante o formato do Produto Ouro
-        produto_ouro = {
-            "id": str(ean),
-            "nome_comum": nome,
-            "marca": marca,
-            "ean": str(ean),
-            "Categoria": categoria,
-            "subcategoria": "N/A",
-            "tipo_produto": "N/A",
-            "tags": [],
-            "revisado_humano": False
-        }
-        
-        # Pega a imagem do primeiro item que tiver uma
+    categoria = itens_crus[0].get("Categoria", "OUTROS")
+    
+    # ANTI-FRANKENSTEIN: Atrela a imagem ao MESMO item que forneceu o nome!
+    imagem_escolhida = melhor_item.get("Link_Imagem", melhor_item.get("imagem", ""))
+    
+    # Se o melhor item não tiver imagem, busca nos outros de forma segura
+    if not imagem_escolhida or not str(imagem_escolhida).startswith("http"):
         for item in itens_crus:
             img = item.get("Link_Imagem", item.get("imagem", ""))
             if img and str(img).startswith("http"):
-                produto_ouro["imagem"] = img
-                break
-                
-        return produto_ouro
-
-    else:
-        # Conflito! Múltiplas variações para o mesmo EAN, então chama a IA
-        logger.info(f"⚔️ [Resolvendo Conflito IA] EAN {ean} - {len(nomes_unicos)} variações encontradas.")
-        
-        # Vamos passar as variações como JSON para a IA comparar
-        opcoes = []
-        for i, item in enumerate(itens_crus, 1):
-            opcoes.append({
-                "mercado": item.get("Mercado", f"Opção {i}"),
-                "nome_original": item.get("Produto", item.get("nome_comum", "")),
-                "marca": item.get("Marca", item.get("marca", ""))
-            })
-            
-        prompt = PROMPT_SIMPLIFICADO_CONFLITO.format(
-            ean=ean,
-            opcoes=json.dumps(opcoes, ensure_ascii=False, indent=2)
-        )
-
-        # Chama a IA
-        resposta_texto = await _chamar_gemini_com_retry(prompt)
-        if not resposta_texto:
-            return None
-
-        try:
-            import re
-            match = re.search(r'\{.*\}', resposta_texto, re.DOTALL)
-            json_str = match.group(0) if match else resposta_texto
-            resultado_json = json.loads(json_str)
-            
-            # Garante o formato do Produto Ouro
-            produto_ouro = {
-                "id": str(ean),
-                "nome_comum": resultado_json.get("nome_comum", list(nomes_unicos)[0]),
-                "marca": str(resultado_json.get("marca", itens_crus[0].get("Marca", ""))).upper(),
-                "ean": str(ean),
-                "Categoria": itens_crus[0].get("Categoria", "OUTROS"), # Mantém a original
-                "subcategoria": "N/A",
-                "tipo_produto": "N/A",
-                "tags": [],
-                "revisado_humano": False
-            }
-            
-            # Pega a imagem do primeiro item que tiver uma
-            for item in itens_crus:
-                img = item.get("Link_Imagem", item.get("imagem", ""))
-                if img and str(img).startswith("http"):
-                    produto_ouro["imagem"] = img
+                nome_deste = str(item.get("Produto", item.get("nome_comum", ""))).strip().upper()
+                p1 = nome_deste.split()[0] if nome_deste.split() else ""
+                p2 = melhor_nome.upper().split()[0] if melhor_nome.split() else ""
+                # Só pega a imagem emprestada se a primeira palavra do produto bater (Ex: DESODORANTE)
+                if p1 and p2 and p1 == p2:
+                    imagem_escolhida = img
                     break
-                    
-            return produto_ouro
-
-        except json.JSONDecodeError:
-            logger.error(f"❌ Erro ao parsear JSON da IA para o EAN {ean}")
-            return None
+    
+    produto_ouro = {
+        "id": str(ean),
+        "nome_comum": melhor_nome,
+        "marca": melhor_marca,
+        "ean": str(ean),
+        "Categoria": categoria,
+        "subcategoria": "N/A",
+        "tipo_produto": "N/A",
+        "imagem": imagem_escolhida,
+        "tags": [],
+        "revisado_humano": False
+    }
+            
+    return produto_ouro
 
 async def main():
     if not os.path.exists(ARQUIVO_PENDENTES):
@@ -160,7 +115,8 @@ async def main():
 
     for item in pendentes:
         ean = str(item.get("EAN", item.get("ean", "N/A"))).strip()
-        if ean in ("N/A", "", "None", "nan") or not ean.isdigit():
+        if ean in ("N/A", "", "None", "nan") or not ean_eh_valido(ean):
+            item["EAN"] = "N/A"
             itens_sem_ean.append(item)
             continue
             

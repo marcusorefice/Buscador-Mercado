@@ -13,6 +13,7 @@ logger = setup_logging()
 # --- GERENCIAMENTO DE CHAVES ---
 lista_chaves_texto = [k.strip().strip('"').strip("'") for k in os.getenv("GEMINI_API_KEYS", "").split(',') if k.strip()]
 indice_chave_texto_atual = 0
+_api_esgotada = False
 client = None
 if lista_chaves_texto:
     client = genai.Client(api_key=lista_chaves_texto[indice_chave_texto_atual])
@@ -81,7 +82,10 @@ def gerar_id_unico(nome_produto, marca):
     return f"{marca_limpa}_{nome_limpo}"
 
 async def _chamar_gemini_com_retry(prompt, model="gemini-2.5-flash", max_retries=None):
-    global client, indice_chave_texto_atual
+    global client, indice_chave_texto_atual, _api_esgotada
+    
+    if _api_esgotada:
+        return None
     
     # Tenta 2 vezes por cada chave disponível (ex: 3 chaves = 6 tentativas no total)
     if max_retries is None:
@@ -107,13 +111,21 @@ async def _chamar_gemini_com_retry(prompt, model="gemini-2.5-flash", max_retries
             if any(err in erro_str for err in ["429", "QUOTA", "EXHAUSTED", "503", "UNAVAILABLE"]):
                 logger.warning(f"⚠️ Limite excedido na chave [{indice_usado}]. Rotacionando... (Tentativa {tentativa+1}/{max_tentativas})")
                 _trocar_chave_texto(indice_falho=indice_usado)
-                await asyncio.sleep(2)
+                import random
+                await asyncio.sleep(2 + random.uniform(0.5, 2.0))
             else:
                 logger.error(f"❌ Erro na API do Gemini (Chave [{indice_usado}]): {e}")
                 _trocar_chave_texto(indice_falho=indice_usado)
-                await asyncio.sleep(1)
+                import random
+                await asyncio.sleep(1 + random.uniform(0.5, 1.5))
                 
     logger.error("❌ Todas as tentativas esgotadas. Nenhuma chave funcionou.")
+    
+    # Se esgotou todas as tentativas, ativa o Circuit Breaker para não travar a fila inteira
+    if max_tentativas > 0:
+        _api_esgotada = True
+        logger.critical("🛑 CIRCUIT BREAKER ATIVADO: A cota da API (limite financeiro) estourou. Desligando a IA para o resto desta sessão para evitar travamentos.")
+        
     return None
 
 PROMPT_CLASSIFICACAO = """Você é um assistente de IA especialista em categorização de produtos de supermercado.

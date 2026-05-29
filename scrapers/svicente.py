@@ -47,13 +47,21 @@ headers = {
     "Referer": f"{BASE_URL_CONFIG}/ofertas"
 }
 
+def ean_eh_valido(ean_str):
+    if not ean_str or not ean_str.isdigit(): return False
+    padded = ean_str.zfill(14)
+    total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
+    return str((10 - (total % 10)) % 10) == padded[13]
+
 def extrair_ean_pela_foto(url_imagem):
     """Técnica para capturar o EAN-13 embutido no nome do arquivo de imagem."""
     if not url_imagem or not isinstance(url_imagem, str):
         return None
     # Padrão para EAN-13 (iniciando com 789 ou 790, comum no Brasil)
     match = re.search(r'(789\d{10}|790\d{10})', url_imagem)
-    return match.group(1) if match else None
+    if match and ean_eh_valido(match.group(1)):
+        return match.group(1)
+    return None
 
 async def fetch_ean_from_product_page(session, product_id):
     """

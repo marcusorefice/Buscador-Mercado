@@ -1,53 +1,43 @@
 ﻿import json
+from curl_cffi import requests
 
-def limpeza_final_grabit(file_path):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        produtos = json.load(f)
-
-    # 1. Mapeamento de Correções de Subcategoria e Dados Fiscais
-    correcoes_especificas = {
-        "611269101713": {"subcategoria": "Energéticos e Isotônicos"},  # Red Bull Sugar Free
-        "7896051130116": {"subcategoria": "Laticínios e Iogurtes"},     # Leite Pó Itambé
-        "7896004400297": {"subcategoria": "Conservas e Enlatados"},    # Leite de Coco Mais Coco
-        "7896094919853": {"subcategoria": "Temperos e Condimentos"},   # Adoçante Zero-cal
-        "7896283800801": {"tipo_produto": "Leite Longa Vida Integral"} # Jussara Integral
+def mapear_categorias_boa():
+    base_url = "https://www.boasupermercados.com.br"
+    # O número "3" no final da URL define a profundidade da busca (Departamentos > Categorias > Subcategorias)
+    api_url = f"{base_url}/api/catalog_system/pub/category/tree/3"
+    
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
 
-    # 2. Listas de Tags de "Ruído" para remoção seletiva
-    tags_comida_em_higiene = ["frios", "laticinios", "leite", "bebidas", "despensa", "mercearia"]
-    tags_carne_em_pet = ["acougue", "peixaria", "carne"]
-    tags_pet_em_limpeza = ["pet", "shop"]
-
-    for ean, info in produtos.items():
-        # Aplicar correções manuais de subcategoria[cite: 2]
-        if ean in correcoes_especificas:
-            info.update(correcoes_especificas[ean])
-
-        # Limpeza específica do Toddynho (remover 'todeschini' das tags)[cite: 2]
-        if ean == "7894321722016":
-            info['tags'] = [t for t in info['tags'] if t != "todeschini"]
-
-        # Limpeza de Sabonetes e Higiene (Remover tags de comida)[cite: 2]
-        if info['Categoria'] == "Higiene e Cuidado Pessoal":
-            info['tags'] = [t for t in info['tags'] if t not in tags_comida_em_higiene]
-        
-        # Limpeza de Água Oxigenada (Remover 'bebidas')[cite: 2]
-        if ean == "7896213300111":
-            info['tags'] = [t for t in info['tags'] if t != "bebidas"]
-
-        # Limpeza de Rações e Proteína de Soja (Remover tags de carne humana)[cite: 2]
-        if info['Categoria'] == "Pet Shop" or "soja" in info['nome_comum'].lower():
-            info['tags'] = [t for t in info['tags'] if t not in tags_carne_carne_em_pet]
-
-        # Limpeza de Odorizadores (Bom Ar) (Remover 'pet' e 'shop')[cite: 2]
-        if "bom ar" in info['nome_comum'].lower():
-            info['tags'] = [t for t in info['tags'] if t not in tags_pet_em_limpeza]
-
-    # Salvar o arquivo final saneado
-    with open('biblioteca_produtos_final.json', 'w', encoding='utf-8') as f:
-        json.dump(produtos, f, indent=4, ensure_ascii=False)
+    print("🔍 Consultando a árvore de categorias do Boa Supermercados...")
     
-    print("Saneamento concluído com sucesso!")
+    try:
+        # O impersonate ajuda a passar direto por eventuais bloqueios de firewall (WAF)
+        resposta = requests.get(api_url, headers=headers, impersonate="chrome124", timeout=20)
+        
+        if resposta.status_code != 200:
+            print(f"❌ Erro ao acessar a API: Status HTTP {resposta.status_code}")
+            return
 
-# Execução
-limpeza_final_grabit('data/biblioteca_produtos_new.json')
+        dados = resposta.json()
+        
+        print("\n✅ Estrutura de Categorias Encontrada:\n" + "="*50)
+        
+        for depto in dados:
+            nome_depto = depto.get("name", "")
+            # Limpa o domínio principal para deixar só o caminho útil
+            slug_depto = depto.get("url", "").replace(base_url, "").strip("/")
+            print(f"\n📂 {nome_depto.upper()} (/{slug_depto})")
+            
+            for sub in depto.get("children", []):
+                nome_sub = sub.get("name", "")
+                slug_sub = sub.get("url", "").replace(base_url, "").strip("/")
+                print(f"   ├── {nome_sub} -> /{slug_sub}")
+                
+    except Exception as e:
+        print(f"❌ Falha na requisição: {e}")
+
+if __name__ == "__main__":
+    mapear_categorias_boa()

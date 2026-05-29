@@ -31,7 +31,7 @@ API_ENDPOINT = CONFIG.get("api_endpoint", "/api/graphql")
 URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
 
 REGIONALIZATION = CONFIG.get("regionalization", {})
-REGION_ID = REGIONALIZATION.get("region_id", "v2.BD821CBD8067F03D236A5416A87F4B3B")
+REGION_ID = REGIONALIZATION.get("region_id", "v2.EBEC2773AEB7AB10BA5DC9345C78B236")
 CEP_JUNDIAI = REGIONALIZATION.get("cep_jundiai", "13211-745")
 SALES_CHANNEL_SHELF = REGIONALIZATION.get("channel", "1")
 SALES_CHANNEL_PRICE = REGIONALIZATION.get("price_channel", "2") # Canal 2 é essencial para Clube +Amigo em Jundiaí
@@ -238,6 +238,11 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_clust
     async with PAGE_SEMAPHORE:
         try:
             facets = [{"key": "productclusterids", "value": CLUSTER_ID}] if use_cluster else []
+            facets.extend([
+                {"key": "fuzzy", "value": "0"},
+                {"key": "operator", "value": "and"},
+                {"key": "region-id", "value": REGION_ID}
+            ])
             sort_order = "score_desc" if use_cluster else "discount_desc"
 
             variables_shelf = {
@@ -247,7 +252,11 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_clust
                     "page": pagina,
                     "sort": sort_order, 
                     "term": "", 
-                    "selectedFacets": facets
+                    "selectedFacets": facets,
+                    "hasChangeOrder": False, 
+                    "hasClubWithRegion": True, 
+                    "cmsPostalCode": CEP_JUNDIAI, 
+                    "clubSc": int(SALES_CHANNEL_PRICE)
                 }
             }
             params_shelf = {

@@ -14,7 +14,7 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
   const { list, toggleProduct, clearList, updateQuantity, setPinnedMarket, toggleItemCheck } = useShoppingListStore();
   const [expandedMarkets, setExpandedMarkets] = useState<Record<string, boolean>>({});
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
-  const [shoppingMode, setShoppingMode] = useState<{ type: 'optimized' | 'single', market?: string, title: string } | null>(null);
+  const [shoppingMode, setShoppingMode] = useState<{ type: 'cheapest' | 'custom' | 'single', market?: string, title: string } | null>(null);
 
   const toggleExpandedMarket = (marketName: string) => {
     setExpandedMarkets(prev => ({ ...prev, [marketName]: !prev[marketName] }));
@@ -46,8 +46,8 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
     return { market: bestOffer.Mercado, price: bestPrice };
   };
 
-  // Carrinho Otimizado (Multi-Mercados + Customizações do Usuário)
-  const optimizedCart = useMemo(() => {
+  // Carrinho Absoluto Mais Barato (Ignora customizações, sempre o menor preço)
+  const cheapestCart = useMemo(() => {
     let total = 0;
     const markets: Record<string, { product: typeof list[0], offer: any }[]> = {};
     let missingCount = 0;
@@ -57,9 +57,32 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
         missingCount++;
         return;
       }
+      const bestOffer = item.Ofertas.reduce((best, curr) => getBestPrice(curr) < getBestPrice(best) ? curr : best);
+      
+      total += getBestPrice(bestOffer) * item.quantity;
+      if (!markets[bestOffer.Mercado]) markets[bestOffer.Mercado] = [];
+      markets[bestOffer.Mercado].push({ product: item, offer: bestOffer });
+    });
 
+    return { total, markets, missingCount };
+  }, [list]);
+
+  // Carrinho Personalizado (Respeita as escolhas manuais / Pins do usuário)
+  const customCart = useMemo(() => {
+    let total = 0;
+    const markets: Record<string, { product: typeof list[0], offer: any }[]> = {};
+    let missingCount = 0;
+    let hasCustomPins = false;
+
+    list.forEach(item => {
+      if (!item.Ofertas || item.Ofertas.length === 0) {
+        missingCount++;
+        return;
+      }
+      
       let chosenOffer = null;
       if (item.pinnedMarket) {
+        hasCustomPins = true;
         chosenOffer = item.Ofertas.find(o => o.Mercado === item.pinnedMarket);
       }
       if (!chosenOffer) {
@@ -75,7 +98,7 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
       }
     });
 
-    return { total, markets, missingCount };
+    return { total, markets, missingCount, hasCustomPins };
   }, [list]);
 
   // MÁGICA: Cálculo do carrinho e Ranking por mercado
@@ -193,8 +216,8 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
             </View>
           ) : shoppingMode ? (
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-              {shoppingMode.type === 'optimized' && (
-                Object.entries(optimizedCart.markets).map(([mkt, items]) => (
+              {(shoppingMode.type === 'cheapest' || shoppingMode.type === 'custom') && (
+                Object.entries(shoppingMode.type === 'cheapest' ? cheapestCart.markets : customCart.markets).map(([mkt, items]) => (
                   <View key={mkt} style={{ marginBottom: 20 }}>
                     <View style={{ backgroundColor: '#f0f0f0', padding: 8, borderRadius: 8, marginBottom: 8 }}>
                       <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#555' }}>🛒 {mkt}</Text>
@@ -236,22 +259,22 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
               
               <Text style={styles.sectionTitle}>🏆 Onde comprar mais barato?</Text>
               
-              {Object.keys(optimizedCart.markets).length > 0 && (
+              {Object.keys(cheapestCart.markets).length > 0 && (
                 <View style={[styles.marketCard, styles.optimizedCard]}>
-                  <TouchableOpacity onPress={() => toggleExpandedMarket('optimized')} activeOpacity={0.7}>
+                  <TouchableOpacity onPress={() => toggleExpandedMarket('cheapest')} activeOpacity={0.7}>
                     <View style={styles.marketHeader}>
                       <View style={styles.marketNameRow}>
-                        <Text style={styles.optimizedName}>⚡ Multi-Mercados (Otimizado)</Text>
-                        <IconButton icon={expandedMarkets['optimized'] ? "chevron-up" : "chevron-down"} size={18} style={styles.expandIcon} iconColor="#b8860b" />
+                        <Text style={styles.optimizedName}>⚡ Mais Barato (Vários Mercados)</Text>
+                        <IconButton icon={expandedMarkets['cheapest'] ? "chevron-up" : "chevron-down"} size={18} style={styles.expandIcon} iconColor="#b8860b" />
                       </View>
-                      <Text style={styles.optimizedTotal}>R$ {optimizedCart.total.toFixed(2).replace('.', ',')}</Text>
+                      <Text style={styles.optimizedTotal}>R$ {cheapestCart.total.toFixed(2).replace('.', ',')}</Text>
                     </View>
                     <Text style={styles.marketDetails}>
-                      Comprando em {Object.keys(optimizedCart.markets).length} mercado(s) diferentes
-                      {optimizedCart.missingCount > 0 && ` (Faltam ${optimizedCart.missingCount})`}
+                      Comprando em {Object.keys(cheapestCart.markets).length} mercado(s) diferentes
+                      {cheapestCart.missingCount > 0 && ` (Faltam ${cheapestCart.missingCount})`}
                     </Text>
                   </TouchableOpacity>
-                  {expandedMarkets['optimized'] && (
+                  {expandedMarkets['cheapest'] && (
                     <View style={styles.expandedContent}>
                       <Divider style={styles.expandedDivider} />
                       <Button 
@@ -259,15 +282,60 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
                         buttonColor="#b8860b" 
                         icon="cart-outline" 
                         style={{ marginBottom: 16 }} 
-                        onPress={() => setShoppingMode({ type: 'optimized', title: 'Multi-Mercados' })}
+                        onPress={() => setShoppingMode({ type: 'cheapest', title: 'Mais Barato Geral' })}
                       >
                         Iniciar Compras
                       </Button>
-                      {Object.entries(optimizedCart.markets).map(([mkt, items]) => (
+                      {Object.entries(cheapestCart.markets).map(([mkt, items]) => (
                         <View key={mkt} style={{ marginBottom: 12 }}>
                           <Text style={styles.optimizedMarketTitle}>🛒 {mkt}</Text>
                           {items.map((item, idx) => (
-                              <TouchableOpacity key={`opt-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
+                              <TouchableOpacity key={`cheap-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
+                                <View style={styles.expandedItemRow}>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
+                                </View>
+                              </TouchableOpacity>
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {customCart.hasCustomPins && Object.keys(customCart.markets).length > 0 && (
+                <View style={[styles.marketCard, styles.customCard]}>
+                  <TouchableOpacity onPress={() => toggleExpandedMarket('custom')} activeOpacity={0.7}>
+                    <View style={styles.marketHeader}>
+                      <View style={styles.marketNameRow}>
+                        <Text style={styles.customName}>🛠️ Rota Personalizada</Text>
+                        <IconButton icon={expandedMarkets['custom'] ? "chevron-up" : "chevron-down"} size={18} style={styles.expandIcon} iconColor="#0066cc" />
+                      </View>
+                      <Text style={styles.customTotal}>R$ {customCart.total.toFixed(2).replace('.', ',')}</Text>
+                    </View>
+                    <Text style={styles.marketDetails}>
+                      Sua seleção manual de mercados
+                      {customCart.missingCount > 0 && ` (Faltam ${customCart.missingCount})`}
+                    </Text>
+                  </TouchableOpacity>
+                  {expandedMarkets['custom'] && (
+                    <View style={styles.expandedContent}>
+                      <Divider style={styles.expandedDivider} />
+                      <Button 
+                        mode="contained" 
+                        buttonColor="#0066cc" 
+                        icon="cart-outline" 
+                        style={{ marginBottom: 16 }} 
+                        onPress={() => setShoppingMode({ type: 'custom', title: 'Rota Personalizada' })}
+                      >
+                        Iniciar Compras
+                      </Button>
+                      {Object.entries(customCart.markets).map(([mkt, items]) => (
+                        <View key={mkt} style={{ marginBottom: 12 }}>
+                          <Text style={[styles.optimizedMarketTitle, { color: '#0066cc', backgroundColor: '#e3f2fd' }]}>🛒 {mkt}</Text>
+                          {items.map((item, idx) => (
+                              <TouchableOpacity key={`cust-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
                                   <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
                                   <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
@@ -476,15 +544,18 @@ const styles = StyleSheet.create({
   marketCard: { backgroundColor: '#f9f9f9', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#eee' },
   bestMarketCard: { backgroundColor: '#fff0f2', borderColor: '#E5293E', borderWidth: 2 },
   optimizedCard: { backgroundColor: '#fffdf5', borderColor: '#ffd700', borderWidth: 2 },
+  customCard: { backgroundColor: '#f0f8ff', borderColor: '#0066cc', borderWidth: 2 },
   marketHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   marketNameRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   expandIcon: { margin: 0, padding: 0, width: 24, height: 24, marginLeft: 4 },
   marketName: { fontSize: 16, fontWeight: 'bold', color: '#555' },
   bestMarketName: { color: '#E5293E', fontSize: 18 },
   optimizedName: { color: '#b8860b', fontSize: 16, fontWeight: 'bold' },
+  customName: { color: '#0066cc', fontSize: 16, fontWeight: 'bold' },
   marketTotal: { fontSize: 16, fontWeight: 'bold', color: '#333' },
   bestMarketTotal: { color: '#E5293E', fontSize: 18 },
   optimizedTotal: { color: '#b8860b', fontSize: 18, fontWeight: 'bold' },
+  customTotal: { color: '#0066cc', fontSize: 18, fontWeight: 'bold' },
   marketDetails: { fontSize: 12, color: '#777' },
   expandedContent: { marginTop: 12 },
   expandedDivider: { marginBottom: 12, backgroundColor: '#ddd' },
