@@ -48,7 +48,7 @@ async def main():
     scrapers_full = [
         (atacadao_full, "Atacadão (Full)"),
         (carrefour_full, "Carrefour (Full)"),
-        (boa_full, "Boa Supermercados (Full)"),
+        (boa_full, "Boa Supermercadose (Full)"),
         (covabra_full, "Covabra (Full)"),
         (dom_olivio_full, "Dom Olívio (Full)"),
         (oba_full, "Oba Hortifruti (Full)"),

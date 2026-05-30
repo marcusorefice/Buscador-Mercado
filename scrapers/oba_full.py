@@ -97,10 +97,10 @@ async def motor_extracao_oba_full():
                                 unit_multiplier = float(sku.get('unitMultiplier') or 1.0)
                                 if unit_multiplier > 0 and unit_multiplier < 1.0:
                                     if p_varejo > (p_venda * (1 / unit_multiplier) * 0.5): 
-                                        p_venda = p_venda / unit_multiplier
-                                    elif p_varejo < (p_venda * 2):
-                                        p_varejo = p_varejo / unit_multiplier
-                                        p_venda = p_venda / unit_multiplier
+                                        p_varejo = p_varejo * unit_multiplier
+                                    else:
+                                        p_varejo = p_varejo * unit_multiplier
+                                        p_venda = p_venda * unit_multiplier
 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
                                 img_url = sku.get('images', [{}])[0].get('imageUrl', '')

@@ -19,6 +19,39 @@ def is_valid_ean(ean_str):
     total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
     return str((10 - (total % 10)) % 10) == padded[13]
 
+def simplificar_termo(nome: str, marca: str) -> str:
+    """Limpa o nome do produto para evitar pesquisas gigantes que os buscadores não acham."""
+    # Remove pesos e medidas grudados (ex: 250G, 1L, 500ML)
+    nome_limpo = re.sub(r'\b\d+[,.]?\d*(kg|g|ml|l|un|m|cm|mm|mg)\b', '', str(nome), flags=re.IGNORECASE)
+    # Remove caracteres especiais
+    nome_limpo = re.sub(r'[^\w\s]', ' ', nome_limpo)
+    palavras = [p for p in nome_limpo.split() if len(p) > 2]
+    # Pega apenas as 4 primeiras palavras cruciais do produto
+    termo = " ".join(palavras[:4])
+    # Garante que a marca esteja presente na busca
+    marca_limpa = str(marca).upper().strip()
+    if marca_limpa and marca_limpa not in termo.upper() and marca_limpa not in ["OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "NONE"]:
+        termo += f" {marca_limpa}"
+    return termo.strip()
+
+async def buscar_ean_cosmos_web(session: AsyncSession, termo_busca: str):
+    """Web Scraping direto no portal Cosmos (Bypass da API de 25 req/dia, é ilimitado!)."""
+    url = f"https://cosmos.bluesoft.com.br/pesquisar?q={urllib.parse.quote(termo_busca)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Referer": "https://cosmos.bluesoft.com.br/",
+    }
+    try:
+        response = await session.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            matches = re.findall(r'href="/produtos/(\d{8,14})-[^"]+"', response.text)
+            for ean in matches:
+                if is_valid_ean(ean):
+                    return {"ean": ean, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Cosmos Web (Scraper)"}
+    except Exception: pass
+    return None
+
 async def buscar_ean_open_food_facts(session: AsyncSession, nome_produto: str, marca: str = ""):
     """
     Busca o EAN de um produto usando a API do Open Food Facts.
@@ -229,34 +262,44 @@ async def tentar_recuperar_ean(nome_produto: str, marca: str = "") -> dict:
     e faz fallback para o Google Search.
     Retorna o dicionário de dados ou None.
     """
-    async with AsyncSession(impersonate="chrome120") as session:
-        # 1. Tenta Open Food Facts (Melhor para dados estruturados e comparação)
-        resultado_off = await buscar_ean_open_food_facts(session, nome_produto, marca)
-        if resultado_off:
-            return resultado_off
+    termo_simples = simplificar_termo(nome_produto, marca)
+    
+    try:
+        async with AsyncSession(impersonate="chrome120") as session:
+            # 1. Tenta Open Food Facts (Melhor para dados estruturados e comparação)
+            resultado_off = await buscar_ean_open_food_facts(session, nome_produto, marca)
+            if resultado_off:
+                return resultado_off
+                
+            # 2. Tenta Cosmos WEB (Scraping direto, super assertivo e ilimitado)
+            resultado_cosmos_web = await buscar_ean_cosmos_web(session, termo_simples)
+            if resultado_cosmos_web:
+                return resultado_cosmos_web
+                
+            # 3. Fallback: Google Custom Search API (Com termo simplificado)
+            resultado_google = await buscar_ean_google_api(session, termo_simples, "")
+            if resultado_google:
+                return resultado_google
+                
+            # 4. Fallback: DuckDuckGo
+            resultado_ddg = await buscar_ean_duckduckgo(session, termo_simples, "")
+            if resultado_ddg:
+                return resultado_ddg
+                
+            # 5. Fallback: Yahoo Search
+            resultado_yahoo = await buscar_ean_yahoo(session, termo_simples, "")
+            if resultado_yahoo:
+                return resultado_yahoo
+                
+            # 6. Fallback: Bing Search
+            resultado_bing = await buscar_ean_bing(session, termo_simples, "")
+            if resultado_bing:
+                return resultado_bing
+    except Exception as e:
+        logger.debug(f"Erro na criação da sessão de busca: {e}")
             
-        # 2. Fallback: Google Custom Search API
-        resultado_google = await buscar_ean_google_api(session, nome_produto, marca)
-        if resultado_google:
-            return resultado_google
-            
-        # 3. Fallback: DuckDuckGo (Grátis, Sem Chave, Ilimitado)
-        resultado_ddg = await buscar_ean_duckduckgo(session, nome_produto, marca)
-        if resultado_ddg:
-            return resultado_ddg
-            
-        # 4. Fallback: Yahoo Search
-        resultado_yahoo = await buscar_ean_yahoo(session, nome_produto, marca)
-        if resultado_yahoo:
-            return resultado_yahoo
-            
-        # 5. Fallback: Bing Search
-        resultado_bing = await buscar_ean_bing(session, nome_produto, marca)
-        if resultado_bing:
-            return resultado_bing
-            
-    # 6. Fallback Final: Cosmos API
-    resultado_cosmos = await buscar_ean_cosmos_api(nome_produto, marca)
+    # 7. Fallback Final: Cosmos API (Com termo simplificado)
+    resultado_cosmos = await buscar_ean_cosmos_api(termo_simples, "")
     if resultado_cosmos:
         return resultado_cosmos
         

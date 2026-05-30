@@ -131,10 +131,10 @@ def _parse_produto(item, agora, indice_reverso, cat_path):
         unit_multiplier = float(sku_p.get('unitMultiplier') or 1.0)
         if unit_multiplier > 0 and unit_multiplier < 1.0:
             if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
-                p_a = p_a / unit_multiplier
-            elif p_v < (p_a * 2):
-                p_v = p_v / unit_multiplier
-                p_a = p_a / unit_multiplier
+                p_v = p_v * unit_multiplier
+            else:
+                p_v = p_v * unit_multiplier
+                p_a = p_a * unit_multiplier
 
         nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
         

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform } from 'react-native';
-import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton, Button } from 'react-native-paper';
+import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform, Alert, Image } from 'react-native';
+import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton, Button, TextInput } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { ProductList } from './components/ProductList';
@@ -11,6 +11,8 @@ import { Product } from './types';
 import { SkeletonCard } from './components/SkeletonCard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
+import Constants from 'expo-constants';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
 const API_URL = __DEV__ 
@@ -55,6 +57,11 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isCartVisible, setCartVisible] = useState(false);
+  const [isSidebarVisible, setSidebarVisible] = useState(false);
+  const [isSuggestionModalVisible, setSuggestionModalVisible] = useState(false);
+  const [suggestionText, setSuggestionText] = useState('');
+  const [suggestionImage, setSuggestionImage] = useState<string | null>(null);
+  const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
   
   const [isScanning, setIsScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -88,6 +95,34 @@ export default function App() {
           'Bypass-Tunnel-Reminder': 'true'
         }
       });
+      
+      // --- O SCANNER MÁGICO (TRADUTOR DE CÓDIGO DE BARRAS) ---
+      // Se a pessoa escaneou o EAN e não achou no nosso banco (pode estar salvo como INT_)
+      if (response.data.length === 0 && /^\d{8,14}$/.test(currentQuery)) {
+        try {
+          const offRes = await axios.get(`https://br.openfoodfacts.org/api/v0/product/${currentQuery}.json`);
+          if (offRes.data && offRes.data.status === 1) {
+            const translatedName = offRes.data.product.product_name;
+            const translatedBrand = offRes.data.product.brands || '';
+            if (translatedName) {
+              const fallbackQuery = `${translatedName} ${translatedBrand}`.trim();
+              const fallbackRes = await axios.get<Product[]>(`${API_URL}/produtos`, {
+                params: { q: fallbackQuery, sort_by: sortBy, ...(selectedMarket !== 'Todos os Mercados' && { market: selectedMarket }) },
+                headers: { 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' }
+              });
+              if (fallbackRes.data.length > 0) {
+                setProducts(fallbackRes.data);
+                setLoading(false);
+                setRefreshing(false);
+                return;
+              }
+            }
+          }
+        } catch (e) {
+          // Silencia erros externos e segue para mostrar a tela de vazio
+        }
+      }
+
       setProducts(response.data);
 
       // Otimização Extrema (Offline-first): Salva em cache se for a busca inicial padrão
@@ -159,6 +194,50 @@ export default function App() {
     setModalVisible(true);
   }, []);
 
+  const handlePickImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.7,
+    });
+    if (!result.canceled) {
+      setSuggestionImage(result.assets[0].uri);
+    }
+  };
+
+  const handleSendSuggestion = async () => {
+    if (!suggestionText.trim()) return;
+    setIsSendingSuggestion(true);
+    try {
+      // ⚠️ COLE AQUI A URL DO SEU WEBHOOK DO DISCORD
+      const WEBHOOK_URL = '***WEBHOOK_REMOVIDO***';
+      
+      const formData = new FormData();
+      formData.append('content', `💡 **Nova Sugestão / Bug:**\n${suggestionText}`);
+      
+      if (suggestionImage) {
+        const filename = suggestionImage.split('/').pop() || 'print.jpg';
+        const match = /\.(\w+)$/.exec(filename);
+        const type = match ? `image/${match[1]}` : `image/jpeg`;
+        formData.append('file', { uri: suggestionImage, name: filename, type } as any);
+      }
+
+      const response = await fetch(WEBHOOK_URL, { method: 'POST', body: formData });
+      
+      if (response.ok || response.status === 204) {
+        Alert.alert('Sucesso!', 'Sua sugestão foi enviada. Obrigado por ajudar a melhorar o app!');
+        setSuggestionModalVisible(false);
+        setSuggestionText('');
+        setSuggestionImage(null);
+      } else {
+        throw new Error('Falha no envio');
+      }
+    } catch (error) {
+      Alert.alert('Erro', 'Não foi possível enviar a sugestão. Verifique sua conexão e tente novamente.');
+    } finally {
+      setIsSendingSuggestion(false);
+    }
+  };
+
   return (
     <SafeAreaProvider>
       <PaperProvider theme={theme}>
@@ -167,9 +246,12 @@ export default function App() {
           
           <View style={styles.header}>
             <View style={styles.headerTop}>
-              <TouchableOpacity onPress={clearSearch}>
-                <Text style={styles.headerTitle}>Comparador Jundiaí</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <IconButton icon="menu" iconColor="#fff" size={28} onPress={() => setSidebarVisible(true)} style={{ marginLeft: -8, marginRight: 0 }} />
+                <TouchableOpacity onPress={clearSearch}>
+                  <Text style={styles.headerTitle}>Comparador</Text>
+                </TouchableOpacity>
+              </View>
               <View>
                 <IconButton
                   icon="cart-outline"
@@ -334,6 +416,89 @@ export default function App() {
               )}
             </SafeAreaView>
           </Modal>
+          
+          {/* --- MENU LATERAL (SIDEBAR) --- */}
+          <Modal visible={isSidebarVisible} animationType="fade" transparent={true} onRequestClose={() => setSidebarVisible(false)}>
+            <View style={styles.sidebarOverlay}>
+              <View style={styles.sidebarContent}>
+                <View style={styles.sidebarHeader}>
+                  <Text style={styles.sidebarTitle}>Comparador Jundiaí</Text>
+                </View>
+                <ScrollView style={{ flex: 1, paddingTop: 10 }}>
+                  <TouchableOpacity 
+                    style={styles.sidebarItem} 
+                    onPress={() => {
+                      setSidebarVisible(false);
+                      setSuggestionModalVisible(true);
+                    }}
+                  >
+                    <IconButton icon="lightbulb-on-outline" size={24} iconColor="#555" style={{ margin: 0, marginRight: 10 }} />
+                    <Text style={styles.sidebarItemText}>Enviar Sugestão</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.sidebarItem} onPress={() => setSidebarVisible(false)}>
+                    <IconButton icon="cog-outline" size={24} iconColor="#555" style={{ margin: 0, marginRight: 10 }} />
+                    <Text style={styles.sidebarItemText}>Configurações</Text>
+                  </TouchableOpacity>
+                </ScrollView>
+                <View style={styles.sidebarFooter}>
+                  <Text style={styles.versionText}>Versão {Constants.expoConfig?.version || '1.0.0'}</Text>
+                </View>
+              </View>
+              <TouchableOpacity style={styles.sidebarCloseArea} activeOpacity={1} onPress={() => setSidebarVisible(false)} />
+            </View>
+          </Modal>
+
+          {/* --- MODAL DE SUGESTÕES (IN-APP) --- */}
+          <Modal visible={isSuggestionModalVisible} animationType="slide" transparent={true} onRequestClose={() => setSuggestionModalVisible(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>💡 Enviar Sugestão</Text>
+                  <IconButton icon="close" onPress={() => setSuggestionModalVisible(false)} />
+                </View>
+                <View style={{ padding: 20 }}>
+                  <Text style={{ marginBottom: 15, color: '#555', fontSize: 15, lineHeight: 22 }}>
+                    Encontrou algum erro ou tem uma ideia? Envie direto por aqui!
+                  </Text>
+                  <TextInput
+                    mode="outlined"
+                    label="Sua mensagem"
+                    placeholder="Descreva o problema ou a sugestão..."
+                    multiline
+                    numberOfLines={4}
+                    value={suggestionText}
+                    onChangeText={setSuggestionText}
+                    style={{ backgroundColor: '#fff', marginBottom: 15 }}
+                    activeOutlineColor="#E5293E"
+                  />
+                  
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+                    <Button mode="outlined" icon="camera-image" onPress={handlePickImage} textColor="#555" style={{ flex: 1, borderColor: '#ccc' }}>
+                      {suggestionImage ? 'Trocar Imagem' : 'Anexar Print (Opcional)'}
+                    </Button>
+                    {suggestionImage && (
+                      <View style={{ marginLeft: 10, position: 'relative' }}>
+                        <Image source={{ uri: suggestionImage }} style={{ width: 40, height: 40, borderRadius: 8 }} />
+                        <IconButton 
+                          icon="close-circle" size={18} iconColor="#E5293E"
+                          style={{ position: 'absolute', top: -15, right: -15, margin: 0, backgroundColor: '#fff' }}
+                          onPress={() => setSuggestionImage(null)}
+                        />
+                      </View>
+                    )}
+                  </View>
+
+                  <Button
+                    mode="contained" buttonColor="#E5293E" icon="send"
+                    loading={isSendingSuggestion} onPress={handleSendSuggestion}
+                    disabled={suggestionText.trim().length === 0 || isSendingSuggestion}
+                  >
+                    Enviar Mensagem
+                  </Button>
+                </View>
+              </View>
+            </View>
+          </Modal>
 
         </SafeAreaView>
       </PaperProvider>
@@ -490,4 +655,14 @@ const styles = StyleSheet.create({
   scannerContainer: { flex: 1, position: 'relative' },
   scannerOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
   scannerTarget: { width: 250, height: 150, borderWidth: 2, borderColor: '#E5293E', borderRadius: 12, backgroundColor: 'transparent' },
+  // Estilos do Menu Lateral
+  sidebarOverlay: { flex: 1, flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.5)' },
+  sidebarCloseArea: { flex: 1 },
+  sidebarContent: { width: '75%', maxWidth: 300, backgroundColor: '#fff', height: '100%', elevation: 16, shadowColor: '#000', shadowOffset: { width: 5, height: 0 }, shadowOpacity: 0.3, shadowRadius: 5 },
+  sidebarHeader: { backgroundColor: '#E5293E', padding: 20, paddingTop: Platform.OS === 'ios' ? 50 : 20, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  sidebarTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
+  sidebarItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 },
+  sidebarItemText: { fontSize: 16, color: '#333', fontWeight: '500' },
+  sidebarFooter: { padding: 20, borderTopWidth: 1, borderTopColor: '#eee', alignItems: 'center' },
+  versionText: { color: '#999', fontSize: 12, fontWeight: 'bold' },
 });

@@ -113,10 +113,10 @@ async def motor_extracao_covabra_full():
                                 unit_multiplier = float(item.get('unitMultiplier') or 1.0)
                                 if unit_multiplier > 0 and unit_multiplier < 1.0:
                                     if p_varejo > (p_venda * (1 / unit_multiplier) * 0.5): 
-                                        p_venda = p_venda / unit_multiplier
-                                    elif p_varejo < (p_venda * 2):
-                                        p_varejo = p_varejo / unit_multiplier
-                                        p_venda = p_venda / unit_multiplier
+                                        p_varejo = p_varejo * unit_multiplier
+                                    else:
+                                        p_varejo = p_varejo * unit_multiplier
+                                        p_venda = p_venda * unit_multiplier
 
                                 condicao = "1 UN"
                                 marca = str(p.get('brand', 'OUTROS')).upper()
