@@ -3,8 +3,21 @@ import re
 import urllib.parse
 from curl_cffi.requests import AsyncSession
 import logging
+import os
+import httpx
 
 logger = logging.getLogger(__name__)
+
+cosmos_esgotado = False
+google_esgotado = False
+
+def is_valid_ean(ean_str):
+    if not ean_str or not ean_str.isdigit(): return False
+    if len(ean_str) not in (8, 12, 13, 14): return False
+    if len(set(ean_str)) == 1: return False
+    padded = ean_str.zfill(14)
+    total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
+    return str((10 - (total % 10)) % 10) == padded[13]
 
 async def buscar_ean_open_food_facts(session: AsyncSession, nome_produto: str, marca: str = ""):
     """
@@ -34,34 +47,156 @@ async def buscar_ean_open_food_facts(session: AsyncSession, nome_produto: str, m
     
     return None
 
-async def buscar_ean_google(session: AsyncSession, nome_produto: str, marca: str = ""):
+async def buscar_ean_google_api(session: AsyncSession, nome_produto: str, marca: str = ""):
     """
-    Faz uma busca no Google e tenta extrair um EAN brasileiro (789 ou 790 + 10 dígitos)
-    dos resultados da página.
+    Busca usando a API oficial do Google Custom Search (100 requisições/dia grátis).
     """
-    termo_busca = f'"{nome_produto}" {marca} "EAN"'.strip()
-    url = f"https://www.google.com/search?q={urllib.parse.quote(termo_busca)}"
+    global google_esgotado
+    api_key = os.getenv("GOOGLE_SEARCH_API_KEY")
+    cx = os.getenv("GOOGLE_SEARCH_CX")
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    }
+    if not api_key or not cx or google_esgotado:
+        return None
+        
+    # Pesquisa flexível: sem aspas! Deixa o Google cruzar as palavras do nome da melhor forma.
+    termo_busca = f'{nome_produto} {marca} EAN'.strip()
+    url = f"https://www.googleapis.com/customsearch/v1?q={urllib.parse.quote(termo_busca)}&key={api_key}&cx={cx}"
     
     try:
-        response = await session.get(url, headers=headers, timeout=15)
+        response = await session.get(url, timeout=10)
         if response.status_code == 200:
-            html = response.text
-            # Procura por padrões de EAN-13 comuns no Brasil (789 ou 790) no HTML dos resultados
-            match = re.search(r'\b(789\d{10}|790\d{10})\b', html)
-            if match:
-                ean = match.group(1)
-                return {
-                    "ean": ean,
-                    "nome_encontrado": "N/A", # O Google não devolve o nome estruturado facilmente
-                    "marca_encontrada": "N/A",
-                    "fonte": "Google Search"
-                }
+            dados = response.json()
+            items = dados.get("items", [])
+            
+            # Concatena os snippets (resumos) e títulos dos resultados para caçar o EAN
+            texto_resultados = " ".join([item.get("snippet", "") + " " + item.get("title", "") for item in items])
+            
+            # Procura por qualquer sequência de 8, 12, 13 ou 14 dígitos numéricos e valida matematicamente
+            matches = re.findall(r'\b(\d{8}|\d{12,14})\b', texto_resultados)
+            for ean_candidato in matches:
+                if is_valid_ean(ean_candidato):
+                    return {
+                        "ean": ean_candidato,
+                        "nome_encontrado": "N/A",
+                        "marca_encontrada": "N/A",
+                        "fonte": "Google Custom Search API"
+                    }
+        elif response.status_code in [403, 429]:
+            logger.warning("⚠️ Limite diário de 100 requisições do Google Search API esgotado (403/429).")
+            google_esgotado = True
     except Exception as e:
-        logger.debug(f"Erro ao buscar '{termo_busca}' no Google: {e}")
+        logger.debug(f"Erro na API do Google Search: {e}")
+        
+    return None
+
+async def buscar_ean_duckduckgo(session: AsyncSession, nome_produto: str, marca: str = ""):
+    """
+    Busca o EAN usando a versão HTML (Lite) do DuckDuckGo. Grátis e sem limites de API.
+    """
+    termo_busca = f'{nome_produto} {marca} EAN'.strip()
+    url = "https://html.duckduckgo.com/html/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    try:
+        response = await session.post(url, data={"q": termo_busca}, headers=headers, timeout=10)
+        if response.status_code == 200:
+            matches = re.findall(r'\b(\d{8}|\d{12,14})\b', response.text)
+            for ean_candidato in matches:
+                if is_valid_ean(ean_candidato):
+                    return {
+                        "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "DuckDuckGo HTML"
+                    }
+    except Exception as e:
+        pass
+    return None
+
+async def buscar_ean_yahoo(session: AsyncSession, nome_produto: str, marca: str = ""):
+    """
+    Busca o EAN usando o Yahoo Search, que é muito mais permissivo com raspagem.
+    """
+    termo_busca = f'{nome_produto} {marca} EAN'.strip()
+    url = f"https://br.search.yahoo.com/search?p={urllib.parse.quote(termo_busca)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    try:
+        response = await session.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            texto_limpo = re.sub(r'<[^>]+>', ' ', response.text)
+            matches = re.findall(r'\b(\d{8}|\d{12,14})\b', texto_limpo)
+            for ean_candidato in matches:
+                if is_valid_ean(ean_candidato):
+                    return {
+                        "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Yahoo Search"
+                    }
+    except Exception:
+        pass
+    return None
+
+async def buscar_ean_bing(session: AsyncSession, nome_produto: str, marca: str = ""):
+    """
+    Busca o EAN usando o Bing Search.
+    """
+    termo_busca = f'{nome_produto} {marca} EAN'.strip()
+    url = f"https://www.bing.com/search?q={urllib.parse.quote(termo_busca)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "pt-BR,pt;q=0.9",
+    }
+    try:
+        response = await session.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            texto_limpo = re.sub(r'<[^>]+>', ' ', response.text)
+            matches = re.findall(r'\b(\d{8}|\d{12,14})\b', texto_limpo)
+            for ean_candidato in matches:
+                if is_valid_ean(ean_candidato):
+                    return {
+                        "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Bing Search"
+                    }
+    except Exception:
+        pass
+    return None
+
+async def buscar_ean_cosmos_api(nome_produto: str, marca: str = ""):
+    """
+    Busca o EAN de um produto usando a Cosmos API (Bluesoft).
+    """
+    global cosmos_esgotado
+    token_cosmos = os.getenv("COSMOS_API_TOKEN")
+    
+    if not token_cosmos or cosmos_esgotado:
+        return None
+        
+    query_cosmos = f"{nome_produto} {marca}".strip()
+    url_cosmos = f"https://api.cosmos.bluesoft.com.br/products?description={urllib.parse.quote(query_cosmos)}"
+    
+    try:
+        async with httpx.AsyncClient() as client_http:
+            res_cosmos = await client_http.get(
+                url_cosmos, 
+                headers={"X-Cosmos-Token": token_cosmos, "User-Agent": "ComparadorApp/1.0"},
+                timeout=5.0
+            )
+            if res_cosmos.status_code == 200:
+                data_cosmos = res_cosmos.json()
+                lista = data_cosmos if isinstance(data_cosmos, list) else data_cosmos.get("data", [])
+                if lista and isinstance(lista, list) and len(lista) > 0:
+                    ean_cosmos = str(lista[0].get("gtin", ""))
+                    if ean_cosmos.isdigit():
+                        return {
+                            "ean": ean_cosmos,
+                            "nome_encontrado": "N/A",
+                            "marca_encontrada": "N/A",
+                            "fonte": "Cosmos API"
+                        }
+            elif res_cosmos.status_code == 429:
+                logger.warning("⚠️ Limite diário de 25 requisições da API Cosmos esgotado.")
+                cosmos_esgotado = True
+    except Exception as e:
+        logger.debug(f"Erro na API Cosmos: {e}")
         
     return None
 
@@ -100,11 +235,31 @@ async def tentar_recuperar_ean(nome_produto: str, marca: str = "") -> dict:
         if resultado_off:
             return resultado_off
             
-        # 2. Fallback: Google Search (Apenas extração bruta de código)
-        resultado_google = await buscar_ean_google(session, nome_produto, marca)
+        # 2. Fallback: Google Custom Search API
+        resultado_google = await buscar_ean_google_api(session, nome_produto, marca)
         if resultado_google:
             return resultado_google
             
+        # 3. Fallback: DuckDuckGo (Grátis, Sem Chave, Ilimitado)
+        resultado_ddg = await buscar_ean_duckduckgo(session, nome_produto, marca)
+        if resultado_ddg:
+            return resultado_ddg
+            
+        # 4. Fallback: Yahoo Search
+        resultado_yahoo = await buscar_ean_yahoo(session, nome_produto, marca)
+        if resultado_yahoo:
+            return resultado_yahoo
+            
+        # 5. Fallback: Bing Search
+        resultado_bing = await buscar_ean_bing(session, nome_produto, marca)
+        if resultado_bing:
+            return resultado_bing
+            
+    # 6. Fallback Final: Cosmos API
+    resultado_cosmos = await buscar_ean_cosmos_api(nome_produto, marca)
+    if resultado_cosmos:
+        return resultado_cosmos
+        
     return None
 
 if __name__ == "__main__":

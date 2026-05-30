@@ -2,6 +2,7 @@ import json
 import os
 import asyncio
 import logging
+import re
 
 # Importa as ferramentas da IA do seu classificador já existente
 from classificador_ia import (
@@ -22,6 +23,7 @@ ARQUIVO_PROCESSADOS = os.path.join(DATA_DIR, "itens_prontos_para_comparar.json")
 
 def ean_eh_valido(ean_str):
     ean_str = str(ean_str).strip()
+    if ean_str.startswith('INT_'): return True
     if not ean_str.isdigit(): return False
     if len(ean_str) not in (8, 12, 13, 14): return False
     if len(set(ean_str)) == 1: return False
@@ -136,13 +138,19 @@ async def main():
             if b_nome:
                 local_lookup[f"{b_nome}|{b_marca}"] = (b_ean, b_item)
 
-        sem_recuperacao = asyncio.Semaphore(10)
+        # Reduzindo a concorrência para 2 para evitar bloqueio (429) do Google Search
+        sem_recuperacao = asyncio.Semaphore(2)
         
         async def recuperar_ean(item):
             async with sem_recuperacao:
-                nome = item.get("Produto", item.get("nome_comum", ""))
-                marca = item.get("Marca", item.get("marca", ""))
-                chave_busca = f"{str(nome).strip().upper()}|{str(marca).strip().upper()}"
+                import random
+                await asyncio.sleep(random.uniform(1.0, 2.5)) # Atraso para simular um humano pesquisando e não tomar block
+                nome = str(item.get("Produto", item.get("nome_comum", ""))).strip()
+                marca_bruta = str(item.get("Marca", item.get("marca", ""))).strip()
+                
+                # Remove marcas genéricas que estragam a busca na API/Google
+                marca_busca = marca_bruta if marca_bruta.upper() not in ["OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "NONE", "GERAL"] else ""
+                chave_busca = f"{nome.upper()}|{marca_bruta.upper()}"
                 
                 # Busca Local
                 if chave_busca in local_lookup:
@@ -159,15 +167,23 @@ async def main():
                     logger.info(f"   ✅ EAN Local: '{nome}' -> {item['EAN']}")
                     return item
                 
-                # Busca Web (Open Food Facts / Google)
-                resultado = await tentar_recuperar_ean(nome, marca)
+                # 2. Busca Externa (Open Food Facts -> Google Custom Search -> Cosmos API)
+                resultado = await tentar_recuperar_ean(nome, marca_busca)
                 if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
                     item["EAN"] = str(resultado["ean"])
                     item["Fonte_EAN"] = resultado.get("fonte", "Web")
                     logger.info(f"   🌐 EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
                     return item
                     
-                return None
+                # 3. Fallback: EAN Interno (Para não ficar preso no pendentes_ia.json para sempre)
+                nome_limpo = re.sub(r'[^a-zA-Z0-9]', '', str(nome).upper())
+                marca_limpa = re.sub(r'[^a-zA-Z0-9]', '', str(marca_bruta).upper())
+                id_interno = f"INT_{marca_limpa}_{nome_limpo}"[:50]
+                
+                item["EAN"] = id_interno
+                item["Fonte_EAN"] = "Gerado_Internamente"
+                logger.info(f"   ⚙️ EAN Interno gerado: '{nome}' -> {item['EAN']}")
+                return item
 
         TAMANHO_LOTE_REC = 50
         lotes_recuperacao = [itens_sem_ean[i:i + TAMANHO_LOTE_REC] for i in range(0, len(itens_sem_ean), TAMANHO_LOTE_REC)]
@@ -269,7 +285,7 @@ async def main():
             itens_restantes = []
             for item in pendentes:
                 ean_str = str(item.get("EAN", item.get("ean", "N/A"))).strip()
-                if ean_str in ("N/A", "", "None", "nan") or not ean_str.isdigit() or ean_str in eans_com_falha:
+                if ean_str in ("N/A", "", "None", "nan") or not ean_eh_valido(ean_str) or ean_str in eans_com_falha:
                     itens_restantes.append(item)
                 elif ean_str in biblioteca:
                     # Garante que o item herde a categoria correta da biblioteca antes de ir para os prontos
@@ -302,7 +318,7 @@ async def main():
     itens_restantes = []
     for item in pendentes:
         ean = str(item.get("EAN", item.get("ean", "N/A"))).strip()
-        if ean in ("N/A", "", "None", "nan") or not ean.isdigit() or ean in eans_com_falha:
+        if ean in ("N/A", "", "None", "nan") or not ean_eh_valido(ean) or ean in eans_com_falha:
             itens_restantes.append(item)
         elif ean in biblioteca:
             # Garante a herança também na verificação final
@@ -332,6 +348,8 @@ async def main():
         logger.warning(f"⚠️ Não foi possível atualizar o arquivo 'pendentes_ia.json': {e}")
 
 if __name__ == "__main__":
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
     if os.name == 'nt':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

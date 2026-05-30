@@ -171,6 +171,11 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
                 <Image source={getMarketLogo(bestOffer.Mercado)} style={styles.smallStoreLogo} resizeMode="contain" />
               </View>
             )}
+            {product.EAN && product.EAN.startsWith('INT_') && (
+              <View style={styles.internalEanBadge}>
+                <Text style={styles.internalEanText}>⚠️ Sem Cód. Barras</Text>
+              </View>
+            )}
           </View>
         </View>
       </View>
@@ -341,5 +346,18 @@ const styles = StyleSheet.create({
   storeLogo: {
     width: 40,
     height: 16,
+  },
+  internalEanBadge: {
+    backgroundColor: '#fff3cd',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginTop: 4,
+  },
+  internalEanText: {
+    fontSize: 9,
+    color: '#856404',
+    fontWeight: 'bold',
   },
 });

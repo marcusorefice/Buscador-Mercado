@@ -182,7 +182,7 @@ def main():
 
         for item in itens_crus:
             ean = str(item.get("EAN", item.get("ean", "N/A"))).strip()
-            if ean in ("N/A", "", "None", "nan") or not ean.isdigit():
+            if ean in ("N/A", "", "None", "nan") or (not ean.isdigit() and not ean.startswith("INT_")):
                 continue
 
             mercado = item.get("Mercado", "Desconhecido")
