@@ -46,12 +46,12 @@ async def main():
         logger.info(f"🔄 Retomando extração. Mercados já seguros no disco: {', '.join(mercados_concluidos)}")
 
     scrapers_full = [
-        # (atacadao_full, "Atacadão (Full)"),
-        # (carrefour_full, "Carrefour (Full)"),
-        # (boa_full, "Boa Supermercados (Full)"),
+        (atacadao_full, "Atacadão (Full)"),
+        (carrefour_full, "Carrefour (Full)"),
+        (boa_full, "Boa Supermercados (Full)"),
         (covabra_full, "Covabra (Full)"),
-        # (dom_olivio_full, "Dom Olívio (Full)"),
-        # (oba_full, "Oba Hortifruti (Full)"),
+        (dom_olivio_full, "Dom Olívio (Full)"),
+        (oba_full, "Oba Hortifruti (Full)"),
         # (paodeacucar_full, "Pão de Açúcar (Full)"),
         # (svicente_full, "São Vicente (Full)")
     ]

@@ -23,15 +23,17 @@ IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome110")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 CONCURRENCY = 5
 
-def extract_category_ids(category_tree):
-    """Extrai IDs de categorias folhas recursivamente"""
-    ids = []
+def extract_category_paths(category_tree, current_path=""):
+    """Extrai caminhos completos de categorias folhas recursivamente"""
+    paths = []
     for category in category_tree:
+        cat_id = str(category.get('id'))
+        new_path = f"{current_path}{cat_id}/" if current_path else f"{cat_id}/"
         if category.get('hasChildren') and category.get('children'):
-            ids.extend(extract_category_ids(category.get('children')))
+            paths.extend(extract_category_paths(category.get('children'), new_path))
         else:
-            ids.append((category.get('id'), category.get('name')))
-    return ids
+            paths.append((new_path, category.get('name')))
+    return paths
 
 async def motor_extracao_covabra_full():
     logger.info(f"🚀 Iniciando extração FULL CATALOG para {NOME_MERCADO}...")
@@ -53,21 +55,21 @@ async def motor_extracao_covabra_full():
             if res_tree.status_code != 200:
                 logger.error("   Falha ao obter categorias.")
                 return []
-            categorias_folhas = extract_category_ids(res_tree.json())
+            categorias_folhas = extract_category_paths(res_tree.json())
             logger.info(f"   Foram encontradas {len(categorias_folhas)} subcategorias para explorar.")
         except Exception as e:
             logger.error(f"   Erro ao acessar categorias: {e}")
             return []
 
         # 2. Extrair produtos de cada categoria
-        async def process_category(cat_id, cat_name):
+        async def process_category(cat_path, cat_name):
             produtos_categoria = []
             _from = 0
             
             while True:
                 async with sem:
                     _to = _from + PAGE_SIZE - 1
-                    url_final = f"{URL_LEGACY}?fq=C:{cat_id}&_from={_from}&_to={_to}"
+                    url_final = f"{URL_LEGACY}?fq=C:{cat_path}&_from={_from}&_to={_to}"
                     try:
                         response = await session.get(url_final, timeout=30)
                         
@@ -85,9 +87,14 @@ async def motor_extracao_covabra_full():
 
                                 categorias_vtex = p.get('categories', [])
                                 cat_site_cru = ""
+                                subcategoria_cru = "N/A"
+                                tipo_produto_cru = "N/A"
+
                                 if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
                                     partes_cat = categorias_vtex[0].strip('/').split('/')
                                     if len(partes_cat) > 0: cat_site_cru = partes_cat[0].upper()
+                                    if len(partes_cat) > 1: subcategoria_cru = formatar_nome_categoria(partes_cat[1])
+                                    if len(partes_cat) > 2: tipo_produto_cru = formatar_nome_categoria(partes_cat[2])
                                 
                                 if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                                 
@@ -130,6 +137,8 @@ async def motor_extracao_covabra_full():
                                     "Mercado": NOME_MERCADO,
                                     "EAN": ean,
                                     "Categoria": cat_site_cru,
+                                    "subcategoria": subcategoria_cru,
+                                    "tipo_produto": tipo_produto_cru,
                                     "Produto": nome_limpo,
                                     "Marca": marca,
                                     "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
@@ -149,13 +158,13 @@ async def motor_extracao_covabra_full():
                         _from += PAGE_SIZE
                         if _from >= 2500: break # Limite VTEX
                     except Exception as e:
-                        logger.error(f"Erro na categoria {cat_id} pag {_from}: {e}")
+                        logger.error(f"Erro na categoria {cat_path} pag {_from}: {e}")
                         break
             
-            logger.info(f"   - Categoria {cat_name} ({cat_id}): {len(produtos_categoria)} itens capturados.")
+            logger.info(f"   - Categoria {cat_name} ({cat_path.strip('/')}): {len(produtos_categoria)} itens capturados.")
             return produtos_categoria
 
-        tarefas = [process_category(cat_id, cat_name) for cat_id, cat_name in categorias_folhas]
+        tarefas = [process_category(cat_path, cat_name) for cat_path, cat_name in categorias_folhas]
         
         # Executa em lotes
         chunk_size = 5

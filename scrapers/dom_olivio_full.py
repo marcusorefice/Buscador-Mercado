@@ -3,15 +3,23 @@ import asyncio
 import json
 import urllib.parse
 import warnings
+import re
 from datetime import datetime
+import curl_cffi
 from curl_cffi.requests import AsyncSession
-from utils import extrair_medidas_inteligente, setup_logging, read_json_file
+from utils import (
+    extrair_medidas_inteligente, 
+    setup_logging, 
+    read_json_file, 
+    CATEGORIAS_IGNORADAS,
+    formatar_nome_categoria
+)
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
 
 # ==========================================
-# CONFIGURAÇÕES (SPECS)
+# CONFIGURAÇÕES TÉCNICAS (NÃO ALTERAR)
 # ==========================================
 SPEC_FILE = os.path.join(os.path.dirname(__file__), '..', 'specs', 'dom_olivio_spec.json')
 CONFIG = read_json_file(SPEC_FILE)
@@ -22,96 +30,254 @@ API_ENDPOINT = CONFIG.get("api_endpoint", "/api/graphql")
 URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
 
 REGIONALIZATION = CONFIG.get("regionalization", {})
-REGION_ID = REGIONALIZATION.get("region_id")
+REGION_ID = REGIONALIZATION.get("region_id") # Pode ser null
 CEP_JUNDIAI = REGIONALIZATION.get("cep_jundiai", "13211-745")
 SALES_CHANNEL_SHELF = REGIONALIZATION.get("channel", "1")
+SALES_CHANNEL_PRICE = REGIONALIZATION.get("price_channel", "2")
 
 API_HASHES = CONFIG.get("api_hashes", {})
 GET_PRODUCTS_HASH = API_HASHES.get("get_products", "ae50c5a735b1464f0ba48be4f2b32f7289ce6284")
+CLIENT_PRODUCT_HASH = API_HASHES.get("client_product", "47aa22eb750cb2c529e5eeafb921bfeadb67db71")
 
-IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
+API_SEMAPHORE = asyncio.Semaphore(10)
 
-# O Dom Olívio usa FastStore GraphQL, vamos pegar a árvore de categorias via API Legacy se possível
-URL_CATEGORY_TREE = f"{BASE_URL_CONFIG}/api/catalog_system/pub/category/tree/3"
+TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
+IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
+CONCURRENCY = 5
 
-def extract_category_ids(category_tree):
-    ids = []
-    for category in category_tree:
-        if category.get('hasChildren') and category.get('children'):
-            ids.extend(extract_category_ids(category.get('children')))
-        else:
-            ids.append((category.get('id'), category.get('name')))
-    return ids
+DEPARTAMENTOS_FALLBACK = [
+    "alimentos", "bebidas", "carnes-e-aves", "frios-e-laticinios", 
+    "hortifruti", "limpeza", "higiene-e-beleza", "padaria", 
+    "congelados", "pet-shop", "saudaveis", "bebes"
+]
+
+async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retries=3, delay=1.0) -> tuple[float, float, str]:
+    """Consulta o preço real e o EAN/GTIN com um sistema de retentativas para erros de servidor."""
+    async with API_SEMAPHORE:
+        variables = {
+            "locator": [
+                {"key": "id", "value": str(product_id)},
+                {"key": "channel", "value": json.dumps({"salesChannel": SALES_CHANNEL_PRICE, "regionId": REGION_ID}, separators=(',',':'))},
+                {"key": "locale", "value": "pt-BR"}
+            ]
+        }
+        params = {
+            "operationName": "ClientProductQuery",
+            "operationHash": CLIENT_PRODUCT_HASH,
+            "variables": json.dumps(variables, separators=(',', ':'))
+        }
+        url = f"{URL_BASE}?" + urllib.parse.urlencode(params)
+        
+        for tentativa in range(retries):
+            try:
+                res = await session.get(url, timeout=10)
+                res.raise_for_status()
+                data = res.json()
+                if not isinstance(data, dict):
+                    return 0.0, 0.0, 'N/A'
+                
+                p_data = data.get('data', {}).get('product', {})
+                
+                ean = str(p_data.get('gtin', '')).strip()
+                if not ean or ean == '0' or ean == 'None':
+                    ean = str(p_data.get('ean', '')).strip()
+                if not ean or ean == '0' or ean == 'None':
+                    ean = 'N/A'
+
+                offers = p_data.get('offers') or {}
+                if offers:
+                    offer_list = offers.get('offers') or []
+                    first_offer = offer_list[0] if offer_list else {}
+                    list_price = float(first_offer.get('listPrice') or 0.0)
+                    price = float(offers.get('lowPrice') or 0.0)
+                    return list_price, price, ean
+                
+                return 0.0, 0.0, ean
+
+            except (asyncio.TimeoutError, curl_cffi.requests.errors.RequestsError) as e:
+                if tentativa < retries - 1:
+                    await asyncio.sleep(delay)
+                else:
+                    break
+            except Exception as e:
+                break
+
+        return 0.0, 0.0, 'N/A'
 
 async def motor_extracao_dom_olivio_full():
     logger.info(f"🚀 Iniciando extração FULL CATALOG para {NOME_MERCADO}...")
     lista_final = []
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(CONCURRENCY)
 
     async with AsyncSession(impersonate=IMPERSONATE) as session:
-        # Tenta obter categorias via legacy (costuma funcionar em FastStore)
+        # 1. Obter os sub-departamentos via Facets GraphQL (Varredura Profunda)
+        logger.info("   Mapeando sub-departamentos via Facets GraphQL (Varredura Profunda)...")
+        departamentos_ativos = []
         try:
-            res_tree = await session.get(URL_CATEGORY_TREE, timeout=20)
-            categorias_folhas = []
-            if res_tree.status_code == 200:
-                categorias_folhas = extract_category_ids(res_tree.json())
-        except:
-            categorias_folhas = []
+            novos_deptos = set()
+            termos_estrategicos = [
+                "arroz", "feijao", "oleo", "macarrao", "cafe", "acucar", "leite",
+                "carne", "frango", "linguica", "peixe", "hamburguer",
+                "queijo", "presunto", "manteiga", "iogurte", "requeijao",
+                "refrigerante", "cerveja", "suco", "agua", "vinho",
+                "maca", "banana", "batata", "tomate", "cebola", "alface",
+                "pao", "bolo", "biscoito", "chocolate", "sorvete",
+                "detergente", "sabao", "amaciante", "desinfetante", "papel",
+                "shampoo", "sabonete", "creme", "desodorante", "fralda",
+                "racao", "petisco", ""
+            ]
+            for termo_busca in termos_estrategicos:
+                selected_facets_shelf = [{"key": "fuzzy", "value": "0"}, {"key": "operator", "value": "and"}]
+                if REGION_ID:
+                    selected_facets_shelf.append({"key": "region-id", "value": REGION_ID})
+                    
+                variables_shelf = {
+                    "input": {
+                        "activeSalesChannel": SALES_CHANNEL_SHELF, 
+                        "postalCode": CEP_JUNDIAI, 
+                        "page": 1, "sort": "score_desc", "term": termo_busca, 
+                        "selectedFacets": selected_facets_shelf,
+                        "hasChangeOrder": False, 
+                        "hasClubWithRegion": True, 
+                        "cmsPostalCode": CEP_JUNDIAI, 
+                        "clubSc": int(SALES_CHANNEL_PRICE)
+                    }
+                }
+                params_shelf = {
+                    "operationName": "GetProductsQuery",
+                    "operationHash": GET_PRODUCTS_HASH,
+                    "variables": json.dumps(variables_shelf, separators=(',', ':'))
+                }
+                res_facets = await session.get(f"{URL_BASE}?" + urllib.parse.urlencode(params_shelf), timeout=20)
+                if res_facets.status_code == 200:
+                    data_facets = res_facets.json()
+                    facets_array = data_facets.get('data', {}).get('getProducts', {}).get('data', {}).get('facets', [])
+                    for f in facets_array:
+                        key_str = str(f.get('key', '')).lower()
+                        if key_str in ['category-1', 'category-2', 'category-3', 'department', 'c']:
+                            k = f.get('key')
+                            for v in f.get('values', []):
+                                val = v.get('value')
+                                if val:
+                                    novos_deptos.add((k, val))
+                                
+            if novos_deptos:
+                departamentos_ativos = list(novos_deptos)
+                logger.info(f"   Mapeados {len(departamentos_ativos)} blocos de categorias (Níveis 1, 2 e 3) para varredura massiva.")
+            else:
+                logger.warning("   Nenhum departamento retornado nas Facets. Usando Fallback.")
+                departamentos_ativos = [("category-1", d) for d in DEPARTAMENTOS_FALLBACK]
+        except Exception as e:
+            logger.warning(f"   Falha ao obter Facets Dinâmicas: {e}. Usando Fallback.")
+            departamentos_ativos = [("category-1", d) for d in DEPARTAMENTOS_FALLBACK]
 
-        if not categorias_folhas:
-            logger.warning("Falha ao obter categorias via legacy. O Dom Olívio Full Catalog precisa de um mapeamento manual ou GraphQL complexo para varrer tudo. Usando fallback de ClusterID se configurado, mas isso não é o catálogo completo.")
-            return []
-            
-        # 2. Extrair produtos de cada categoria (usando Legacy Search para varrer, pois GraphQL pagina pior)
-        URL_LEGACY = f"{BASE_URL_CONFIG}/api/catalog_system/pub/products/search"
-        
-        async def process_category(cat_id, cat_name):
+        async def process_category(chave_dept, dept_slug):
             produtos_categoria = []
-            _from = 0
+            pagina = 1
             
             while True:
                 async with sem:
-                    _to = _from + 49
-                    url_final = f"{URL_LEGACY}?fq=C:{cat_id}&_from={_from}&_to={_to}"
                     try:
-                        response = await session.get(url_final, timeout=30)
-                        if response.status_code not in [200, 206]: break
+                        selected_facets_cat = [
+                            {"key": chave_dept, "value": dept_slug},
+                            {"key": "fuzzy", "value": "0"},
+                            {"key": "operator", "value": "and"}
+                        ]
+                        if REGION_ID:
+                            selected_facets_cat.append({"key": "region-id", "value": REGION_ID})
+                            
+                        variables_shelf = {
+                            "input": {
+                                "activeSalesChannel": SALES_CHANNEL_SHELF, 
+                                "postalCode": CEP_JUNDIAI, 
+                                "page": pagina,
+                                "sort": "score_desc", 
+                                "term": "", 
+                                "selectedFacets": selected_facets_cat,
+                                "hasChangeOrder": False, 
+                                "hasClubWithRegion": True, 
+                                "cmsPostalCode": CEP_JUNDIAI, 
+                                "clubSc": int(SALES_CHANNEL_PRICE)
+                            }
+                        }
+                        params_shelf = {
+                            "operationName": "GetProductsQuery",
+                            "operationHash": GET_PRODUCTS_HASH,
+                            "variables": json.dumps(variables_shelf, separators=(',', ':'))
+                        }
+                        url_shelf = f"{URL_BASE}?" + urllib.parse.urlencode(params_shelf)
                         
-                        produtos_raw = response.json()
-                        if not produtos_raw or not isinstance(produtos_raw, list): break
+                        res = await session.get(url_shelf, timeout=20)
+                        if res.status_code != 200:
+                            logger.error(f"   ❌ Erro HTTP {res.status_code} na categoria '{dept_slug}' (Página {pagina})")
+                            break
                         
-                        for p in produtos_raw:
+                        res_json = res.json()
+                        edges = []
+                        try:
+                            edges = res_json['data']['getProducts']['data']['products']['edges']
+                        except (KeyError, TypeError):
+                            pass
+                            
+                        if not edges:
+                            break
+
+                        tarefas_precos = [_buscar_preco_calculado(session, e['node']['id']) for e in edges]
+                        precos_finais = await asyncio.gather(*tarefas_precos)
+
+                        def get_last_path_part(path_str: str) -> str:
+                            if not isinstance(path_str, str): return ""
+                            parts = [path_str.split('/')[-1]] if '/' not in path_str else [part for part in path_str.split('/') if part]
+                            return parts[-1] if parts else ""
+
+                        for edge, (v_varejo, v_atacado, ean_detalhado) in zip(edges, precos_finais):
                             try:
-                                nome_cru = str(p.get('productName', '')).upper().strip()
-                                if not nome_cru: continue
+                                p = edge['node']
+                                ean = ean_detalhado if ean_detalhado not in ['N/A', '', 'None'] else str(p.get('ean', 'N/A')).strip()
+                                if ean == 'None': ean = 'N/A'
                                 
-                                item = p.get('items', [{}])[0]
-                                ean = str(item.get('ean', 'N/A')).strip()
-                                offer = item.get('sellers', [{}])[0].get('commertialOffer', {})
+                                nome_cru = p['name'].upper().strip()
                                 
-                                p_venda = float(offer.get('Price', 0.0))
-                                p_varejo = float(offer.get('ListPrice', p_venda))
-                                
-                                # Correção VTEX: Produtos a granel e Heurística de Preço
-                                unit_multiplier = float(item.get('unitMultiplier') or 1.0)
+                                offers_data = p.get('offers') or {}
+                                p_v = v_varejo if v_varejo > 0 else float(offers_data.get('highPrice') or 0.0)
+                                p_a = v_atacado if v_atacado > 0 else float(offers_data.get('lowPrice') or p_v or 0.0)
+
+                                unit_multiplier = float(p.get('unitMultiplier') or 1.0)
                                 if unit_multiplier > 0 and unit_multiplier < 1.0:
-                                    if p_varejo > (p_venda * (1 / unit_multiplier) * 0.5): 
-                                        p_venda = p_venda / unit_multiplier
-                                    elif p_varejo < (p_venda * 2):
-                                        p_varejo = p_varejo / unit_multiplier
-                                        p_venda = p_venda / unit_multiplier
-                                        
-                                if p_venda <= 0: continue
+                                    if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
+                                        p_a = p_a / unit_multiplier
+                                    elif p_v < (p_a * 2):
+                                        p_v = p_v / unit_multiplier
+                                        p_a = p_a / unit_multiplier
+
+                                if p_v <= 0 and p_a <= 0: continue
+                                if p_v <= 0: p_v = p_a
+                                if p_a > 0 and p_v < p_a: p_v = p_a
+
+                                condicao = "1 UN"
+                                if p_a < p_v:
+                                    condicao = "EXCLUSIVO CLUBE DOM (CPF)"
+
+                                cat_tree = p.get('categoryTree', [])
+                                categorias_extraidas = []
+                                if isinstance(cat_tree, list) and cat_tree:
+                                    if isinstance(cat_tree[0], dict):
+                                        categorias_extraidas = [c.get('name', '').upper() for c in cat_tree]
+                                    elif isinstance(cat_tree[0], str):
+                                        categorias_extraidas = [get_last_path_part(c).upper() for c in cat_tree]
+
+                                cat_site_cru = categorias_extraidas[0] if categorias_extraidas and categorias_extraidas[0] else "OUTROS"
+                                subcategoria_cru = formatar_nome_categoria(categorias_extraidas[1]) if len(categorias_extraidas) > 1 else "N/A"
+                                tipo_prod_cru = formatar_nome_categoria(categorias_extraidas[2]) if len(categorias_extraidas) > 2 else "N/A"
+                                
+                                if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                                 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
-                                img_url = item.get('images', [{}])[0].get('imageUrl', '')
-                                marca = str(p.get('brand', 'OUTROS')).upper()
-                                
-                                cat_site_cru = "GERAL"
-                                cats = p.get('categories', [])
-                                if cats: cat_site_cru = cats[0].strip('/').split('/')[0].upper()
+
+                                img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
+                                if img.startswith("//"): img = "https:" + img
                                 
                                 link_pdp_rel = p.get('slug') or p.get('linkText') or p.get('url') or ''
                                 if link_pdp_rel:
@@ -125,31 +291,44 @@ async def motor_extracao_dom_olivio_full():
                                     link_pdp = ""
 
                                 produtos_categoria.append({
-                                    "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_site_cru,
-                                    "Produto": nome_limpo, "Marca": marca,
-                                    "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
-                                    "Preço Atacado": f"R$ {p_venda:.2f}".replace('.', ','),
-                                    "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": "1 UN",
-                                    "Data_Hora": agora, "Link_Imagem": img_url,
+                                    "Mercado": NOME_MERCADO,
+                                    "EAN": ean,
+                                    "Categoria": cat_site_cru,
+                                    "subcategoria": subcategoria_cru,
+                                    "tipo_produto": tipo_prod_cru,
+                                    "Produto": nome_limpo,
+                                    "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
+                                    "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
+                                    "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
+                                    "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
                                     "Link_PDP": link_pdp
                                 })
-                            except: continue
+                            except Exception as e:
+                                continue
+
+                        page_info = res_json.get('data', {}).get('getProducts', {}).get('data', {}).get('products', {}).get('pageInfo', {})
+                        if page_info and page_info.get('hasNextPage') is False:
+                            break
                             
-                        if len(produtos_raw) < 50: break
-                        _from += 50
-                        if _from >= 2500: break
-                    except: break
-            logger.info(f"   - Categoria {cat_name}: {len(produtos_categoria)} itens")
+                        pagina += 1
+                    except Exception as e:
+                        logger.error(f"Erro no departamento {dept_slug}: {e}")
+                        break
+                        
+            logger.info(f"   - Departamento {dept_slug}: {len(produtos_categoria)} itens capturados.")
             return produtos_categoria
 
-        tarefas = [process_category(cat_id, cat_name) for cat_id, cat_name in categorias_folhas]
+        tarefas = [process_category(chave, dept) for chave, dept in departamentos_ativos]
+        
         chunk_size = 5
         for i in range(0, len(tarefas), chunk_size):
-            resultados_chunk = await asyncio.gather(*tarefas[i:i+chunk_size])
-            for res in resultados_chunk: lista_final.extend(res)
+            chunk = tarefas[i:i+chunk_size]
+            resultados_chunk = await asyncio.gather(*chunk)
+            for res in resultados_chunk:
+                lista_final.extend(res)
 
-    lista_unica = list({f"{v['Produto']}_{v['Marca']}": v for v in lista_final}.values())
-    logger.info(f"✅ {len(lista_unica)} produtos coletados para {NOME_MERCADO} Full Catalog.")
+    lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
+    logger.info(f"✅ Extração FULL concluída. {len(lista_unica)} produtos únicos capturados no {NOME_MERCADO}.")
     return lista_unica
 
 async def extrair_dados():

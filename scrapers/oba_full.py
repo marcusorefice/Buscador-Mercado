@@ -23,13 +23,15 @@ IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 CONCURRENCY = 5
 
-def extract_category_ids(category_tree):
+def extract_category_ids(category_tree, path=""):
     ids = []
     for category in category_tree:
+        c_id = category.get('id')
+        current_path = f"{path}/{c_id}" if path else str(c_id)
         if category.get('hasChildren') and category.get('children'):
-            ids.extend(extract_category_ids(category.get('children')))
+            ids.extend(extract_category_ids(category.get('children'), current_path))
         else:
-            ids.append((category.get('id'), category.get('name')))
+            ids.append((current_path, category.get('name')))
     return ids
 
 async def motor_extracao_oba_full():
