@@ -101,6 +101,24 @@ async def motor_extracao_covabra_full():
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_original)
 
                                 item = p.get('items', [{}])[0]
+                                
+                                measurement_unit = str(item.get('measurementUnit', '')).lower()
+                                
+                                if measurement_unit == 'kg' or nome_original.upper().endswith(' KG'):
+                                    unidade_venda = "KG"
+                                else:
+                                    unidade_venda = "UN"
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                if nome_original.endswith(" KG"):
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+                                
                                 ean = str(item.get('ean', 'N/A')).strip()
                                 offer = item.get('sellers', [{}])[0].get('commertialOffer', {})
                                 
@@ -145,7 +163,7 @@ async def motor_extracao_covabra_full():
                                     "Preço Atacado": f"R$ {p_venda:.2f}".replace('.', ','),
                                     "Qtd_Valor": qv,
                                     "Medida": med,
-                                    "Unidade": "UN", "Condição": condicao,
+                                    "Unidade": unidade_venda, "Condição": condicao,
                                     "Data_Hora": agora,
                                     "Link_Imagem": img_url,
                                     "Link_PDP": link_pdp

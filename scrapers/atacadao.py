@@ -285,6 +285,23 @@ async def motor_extracao_atacadao():
                             marca_str = marca_obj.get('name', 'OUTROS').upper() if isinstance(marca_obj, dict) else str(marca_obj or 'OUTROS').upper()
 
                             nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                            
+                            measurement_unit = str(p.get('measurementUnit', '')).lower()
+                            
+                            if measurement_unit == 'kg' or nome_cru.upper().endswith(' KG'):
+                                unidade_venda = "KG"
+                            else:
+                                unidade_venda = "UN"
+                                unidade_venda = "KG"
+                                if qv == "1" and med == "UN":
+                                    qv, med = "1", "KG"
+                                    
+                            if nome_cru.endswith(" KG"):
+                                unidade_venda = "KG"
+                                if qv == "1" and med == "UN":
+                                    qv, med = "1", "KG"
+                                    
+                            nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
 
                             if p_atacado <= 0: continue
                             if p_varejo <= 0 or p_varejo < p_atacado: p_varejo = p_atacado
@@ -305,7 +322,7 @@ async def motor_extracao_atacadao():
                                 "subcategoria": subcategoria, "tipo_produto": tipo_produto,
                                 "Produto": nome_limpo, "Marca": marca_str,
                                 "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','), "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
-                                "Qtd_Valor": qv, "Medida": med, "Unidade": "UN",
+                                "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda,
                                 "Condição": condicao, "Data_Hora": agora, "Link_Imagem": imagem_url,
                                 "Link_PDP": link_pdp
                             })

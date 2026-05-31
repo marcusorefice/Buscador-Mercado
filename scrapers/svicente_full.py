@@ -146,6 +146,18 @@ async def motor_extracao_svicente_full():
                             if p_v <= 0 or p_v < p_a: p_v = p_a
 
                             nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                            
+                            measurement_unit = str(p.get('measurementUnit', '')).lower()
+                            if measurement_unit == 'kg' or nome_bruto.upper().endswith(' KG'):
+                                unid_venda = "KG"
+                            else:
+                                unid_venda = "UN"
+
+                            if unid_venda == "KG" and qv == "1" and med == "UN":
+                                qv, med = "1", "KG"
+                                
+                            nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+                            
                             marca = str(p.get('brand', 'OUTROS')).upper()
                             
                             link_pdp_rel = p.get('url', '')
@@ -165,7 +177,7 @@ async def motor_extracao_svicente_full():
                                 "Produto": nome_limpo, "Marca": marca,
                                 "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                                 "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                                "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": "1 UN",
+                                "Qtd_Valor": qv, "Medida": med, "Unidade": unid_venda, "Condição": "1 UN",
                                 "Data_Hora": agora, "Link_Imagem": img_url if img_url else "SEM IMAGEM",
                                 "Link_PDP": link_pdp
                             })

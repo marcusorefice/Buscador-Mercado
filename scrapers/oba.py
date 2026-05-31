@@ -195,6 +195,19 @@ async def motor_extracao_oba():
 
                         # A unidade de venda será definida com base na medida extraída, e refinada no motor de validação.
                         unidade_venda = "KG" if med == "KG" else "UN"
+                        measurement_unit = str(sku.get('measurementUnit', '')).lower()
+                        
+                        if measurement_unit == 'kg':
+                            unidade_venda = "KG"
+                            if qv == "1" and med == "UN":
+                                qv, med = "1", "KG"
+                                
+                        if nome_bruto.endswith(" KG"):
+                            unidade_venda = "KG"
+                            if qv == "1" and med == "UN":
+                                qv, med = "1", "KG"
+                                
+                        nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
 
                         link_pdp_rel = p.get('linkText') or p.get('link') or p.get('url') or ''
                         if link_pdp_rel:

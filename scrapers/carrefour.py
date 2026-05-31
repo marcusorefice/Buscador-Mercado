@@ -141,7 +141,7 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                         "Produto": nome_limpo, "Marca": str(item.get('brand', 'OUTROS')).upper(),
                         "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                         "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                        "Qtd_Valor": qv, "Medida": med, "Unidade": "UN",
+                        "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda,
                         "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN", 
                         "Data_Hora": agora, "Link_Imagem": link_foto,
                         "Link_PDP": link_pdp

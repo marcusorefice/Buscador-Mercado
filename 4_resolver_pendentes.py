@@ -86,6 +86,20 @@ async def resolver_ean_novo(ean, itens_crus):
             
     return produto_ouro
 
+def checar_conflito_anomalia(nome_base, nome_novo):
+    nome_base, nome_novo = str(nome_base).upper(), str(nome_novo).upper()
+    def tem(padrao, texto): return bool(re.search(padrao, texto))
+    
+    p_kg = r'\bKG\b|/KG\b|\bQUILO\b'
+    p_cx = r'\bCX\b|\bCAIXA\b|\bDISPLAY\b|\bFARDO\b|\bFD\b'
+    
+    if tem(p_kg, nome_base) != tem(p_kg, nome_novo): return True
+    if ("RALADO" in nome_base) != ("RALADO" in nome_novo): return True
+    if ("FATIADO" in nome_base) != ("FATIADO" in nome_novo): return True
+    if (" PEDAÇO" in nome_base or " PEDACO" in nome_base) != (" PEDAÇO" in nome_novo or " PEDACO" in nome_novo): return True
+    if tem(p_cx, nome_base) != tem(p_cx, nome_novo): return True
+    return False
+
 async def main():
     if not os.path.exists(ARQUIVO_PENDENTES):
         logger.info("✅ Arquivo pendentes_ia.json não existe. Nenhum item para processar.")
@@ -117,6 +131,40 @@ async def main():
 
     for item in pendentes:
         ean = str(item.get("EAN", item.get("ean", "N/A"))).strip()
+        nome_item = str(item.get("Produto", item.get("nome_comum", ""))).strip().upper()
+        mercado_item = item.get("Mercado", "")
+        
+        # DEFESA AUTOMÁTICA DE EAN (Universal Anti-Collision)
+        if ean != "N/A" and ean_eh_valido(ean):
+            conflito = False
+            nome_conflito = ""
+            
+            # 1. Checa contra a base Ouro existente
+            if ean in biblioteca:
+                nome_ouro = str(biblioteca[ean].get("nome_comum", "")).upper()
+                if checar_conflito_anomalia(nome_ouro, nome_item):
+                    conflito = True
+                    nome_conflito = nome_ouro
+            # 2. Checa contra o mesmo lote (itens novos)
+            elif ean in itens_por_ean:
+                nome_primeiro = str(itens_por_ean[ean][0].get("Produto", "")).upper()
+                if checar_conflito_anomalia(nome_primeiro, nome_item):
+                    conflito = True
+                    nome_conflito = nome_primeiro
+                    
+            if conflito:
+                sufixos = []
+                if re.search(r'\bKG\b|/KG\b|\bQUILO\b', nome_item) or item.get("Unidade") == "KG": sufixos.append("KG")
+                if "RALADO" in nome_item: sufixos.append("RALADO")
+                if "FATIADO" in nome_item: sufixos.append("FATIADO")
+                if re.search(r'\bCX\b|\bCAIXA\b|\bDISPLAY\b|\bFARDO\b|\bFD\b', nome_item): sufixos.append("CX")
+                
+                suf_str = "_".join(sufixos) if sufixos else "VARIANTE"
+                novo_ean = f"INT_{ean}_{suf_str}"
+                logger.warning(f"🛡️ Defesa Automática: Separando '{nome_item}' de '{nome_conflito}' (EAN: {ean} -> {novo_ean}) no mercado {mercado_item}")
+                ean = novo_ean
+                item["EAN"] = novo_ean
+
         if ean in ("N/A", "", "None", "nan") or not ean_eh_valido(ean):
             item["EAN"] = "N/A"
             itens_sem_ean.append(item)
@@ -128,7 +176,8 @@ async def main():
 
     # --- TENTATIVA DE RECUPERAÇÃO DE EANs FALTANTES ---
     if itens_sem_ean:
-        logger.info(f"🔍 Tentando recuperar EAN para {len(itens_sem_ean)} itens sem código...")
+        total_sem_ean = len(itens_sem_ean)
+        logger.info(f"🔍 Tentando recuperar EAN para {total_sem_ean} itens sem código...")
         
         # 1. Cria índice da biblioteca local para buscas rápidas (Nome|Marca -> EAN)
         local_lookup = {}
@@ -140,9 +189,14 @@ async def main():
 
         # Reduzindo a concorrência para 2 para evitar bloqueio (429) do Google Search
         sem_recuperacao = asyncio.Semaphore(2)
+        progresso_ean = {"atual": 0}
         
         async def recuperar_ean(item):
             async with sem_recuperacao:
+                progresso_ean["atual"] += 1
+                atual = progresso_ean["atual"]
+                prefixo_progresso = f"[{atual}/{total_sem_ean}]"
+                
                 import random
                 await asyncio.sleep(random.uniform(1.0, 2.5)) # Atraso para simular um humano pesquisando e não tomar block
                 nome = str(item.get("Produto", item.get("nome_comum", ""))).strip()
@@ -164,7 +218,7 @@ async def main():
                         item["subcategoria"] = b_item.get("subcategoria", "N/A")
                         item["tipo_produto"] = b_item.get("tipo_produto", "N/A")
                         
-                    logger.info(f"   ✅ EAN Local: '{nome}' -> {item['EAN']}")
+                    logger.info(f"   ✅ {prefixo_progresso} EAN Local: '{nome}' -> {item['EAN']}")
                     return item
                 
                 # 2. Busca Externa (Open Food Facts -> Google Custom Search -> Cosmos API)
@@ -172,7 +226,7 @@ async def main():
                 if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
                     item["EAN"] = str(resultado["ean"])
                     item["Fonte_EAN"] = resultado.get("fonte", "Web")
-                    logger.info(f"   🌐 EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
+                    logger.info(f"   🌐 {prefixo_progresso} EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
                     return item
                     
                 # 3. Fallback: EAN Interno (Para não ficar preso no pendentes_ia.json para sempre)
@@ -182,7 +236,7 @@ async def main():
                 
                 item["EAN"] = id_interno
                 item["Fonte_EAN"] = "Gerado_Internamente"
-                logger.info(f"   ⚙️ EAN Interno gerado: '{nome}' -> {item['EAN']}")
+                logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
                 return item
 
         TAMANHO_LOTE_REC = 50

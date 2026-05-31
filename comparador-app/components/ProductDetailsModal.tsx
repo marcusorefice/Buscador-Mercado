@@ -158,6 +158,13 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
               <View style={styles.mainOfferRow}>
                 <Text style={styles.mainPriceText}>
                   <Text style={styles.mainCurrencySymbol}>R$ </Text>{formatPrice(displayCurrentPrice)}
+                  {activeOffer?.Unidade && activeOffer.Unidade !== 'UN' ? (
+                    <Text style={{ fontSize: 16, color: '#888', fontWeight: 'normal' }}> / {activeOffer.Unidade.toLowerCase()}</Text>
+                  ) : activeOffer?.Medida === 'KG' && activeOffer?.Qtd_Valor === '1' ? (
+                    <Text style={{ fontSize: 16, color: '#888', fontWeight: 'normal' }}> / kg</Text>
+                  ) : (
+                    <Text style={{ fontSize: 16, color: '#888', fontWeight: 'normal' }}> un</Text>
+                  )}
                 </Text>
                 {activeOffer && (
                   <View style={styles.bestOfferBadgeContainer}>
@@ -230,6 +237,13 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                       <>
                         <Text style={styles.priceText}>
                           <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Atacado)}
+                          {oferta.Unidade && oferta.Unidade !== 'UN' ? (
+                            <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / {oferta.Unidade.toLowerCase()}</Text>
+                          ) : oferta.Medida === 'KG' && oferta.Qtd_Valor === '1' ? (
+                            <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / kg</Text>
+                          ) : (
+                            <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> un</Text>
+                          )}
                         </Text>
                         {oferta.Preco_Varejo > 0 && (
                           <Text style={styles.retailText}>R$ {formatPrice(oferta.Preco_Varejo)}</Text>
@@ -238,6 +252,13 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                     ) : (
                       <Text style={styles.priceText}>
                         <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Varejo)}
+                        {oferta.Unidade && oferta.Unidade !== 'UN' ? (
+                          <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / {oferta.Unidade.toLowerCase()}</Text>
+                        ) : oferta.Medida === 'KG' && oferta.Qtd_Valor === '1' ? (
+                          <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / kg</Text>
+                        ) : (
+                          <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> un</Text>
+                        )}
                       </Text>
                     )}
                   </View>

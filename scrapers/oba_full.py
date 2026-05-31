@@ -103,6 +103,24 @@ async def motor_extracao_oba_full():
                                         p_venda = p_venda * unit_multiplier
 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                                
+                                measurement_unit = str(sku.get('measurementUnit', '')).lower()
+                                
+                                if measurement_unit == 'kg' or nome_bruto.upper().endswith(' KG'):
+                                    unidade_venda = "KG"
+                                else:
+                                    unidade_venda = "UN"
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                if nome_bruto.endswith(" KG"):
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+                                
                                 img_url = sku.get('images', [{}])[0].get('imageUrl', '')
                                 marca = p.get('brand', 'PRÓPRIA').upper()
                                 
@@ -121,7 +139,7 @@ async def motor_extracao_oba_full():
                                     "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_site,
                                     "Produto": nome_limpo, "Marca": marca,
                                     "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','), "Preço Atacado": f"R$ {p_venda:.2f}".replace('.', ','),
-                                    "Qtd_Valor": qv, "Medida": med, "Unidade": "KG" if med == "KG" else "UN",
+                                    "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda,
                                     "Condição": "1 UN", "Data_Hora": agora, "Link_Imagem": img_url,
                                     "Link_PDP": link_pdp
                                 })

@@ -235,6 +235,19 @@ async def motor_extracao_paodeacucar():
 
                         nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
                         
+                        unidade_venda = "UN"
+                        if str(p.get('unit', '')).lower() == 'kg' or str(p.get('measurementUnit', '')).lower() == 'kg':
+                            unidade_venda = "KG"
+                            if qv == "1" and med == "UN":
+                                qv, med = "1", "KG"
+                                
+                        if nome_bruto.endswith(" KG"):
+                            unidade_venda = "KG"
+                            if qv == "1" and med == "UN":
+                                qv, med = "1", "KG"
+                                
+                        nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+                        
                         # USAMOS O SKU OU NOME+MARCA PARA EVITAR APAGAR ITENS REPETIDOS
                         # O SKU, se disponível, é um identificador único mais confiável para evitar colisões
                         # e garantir a integridade dos dados durante a deduplicação.
@@ -256,7 +269,7 @@ async def motor_extracao_paodeacucar():
                             "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
                             "Qtd_Valor": qv,
                             "Medida": med,
-                            "Unidade": "UN",
+                            "Unidade": unidade_venda,
                             "Condição": txt_condicao, "Data_Hora": agora,
                             "Link_Imagem": img_url,
                             "Link_PDP": link_pdp

@@ -138,6 +138,26 @@ def _parse_produto(item, agora, indice_reverso, cat_path):
 
         nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
         
+        measurement_unit = str(sku_p.get('measurementUnit', '')).lower()
+        
+        if measurement_unit == 'kg' or nome_cru.upper().endswith(' KG'):
+            unidade_venda = "KG"
+            if qv == "1" and med == "UN":
+                qv, med = "1", "KG"
+        elif measurement_unit == 'g':
+            unidade_venda = "UN"
+            if qv == "1" and med == "UN":
+                qv, med = str(int(unit_multiplier)), "G"
+        else:
+            unidade_venda = "UN"
+                
+        if nome_cru.endswith(" KG"):
+            unidade_venda = "KG"
+            if qv == "1" and med == "UN":
+                qv, med = "1", "KG"
+                
+        nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+
         partes_cat = cat_path.split('/')
         cat_site = partes_cat[0].upper() if partes_cat else "GERAL"
 
@@ -165,7 +185,7 @@ def _parse_produto(item, agora, indice_reverso, cat_path):
             "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
             "Qtd_Valor": qv,
             "Medida": med,
-            "Unidade": "UN",
+            "Unidade": unidade_venda,
             "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN",
             "Data_Hora": agora,
             "Link_Imagem": link_foto,

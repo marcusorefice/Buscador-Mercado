@@ -62,6 +62,7 @@ export default function App() {
   const [suggestionText, setSuggestionText] = useState('');
   const [suggestionImage, setSuggestionImage] = useState<string | null>(null);
   const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
+  const [dynamicTags, setDynamicTags] = useState<string[]>(['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó']);
   
   const [isScanning, setIsScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -146,6 +147,18 @@ export default function App() {
         if (cached) {
           setProducts(JSON.parse(cached));
         }
+        
+        // Carrega o histórico de pesquisas para as tags dinâmicas
+        const history = await AsyncStorage.getItem('@search_history');
+        if (history) {
+          const parsed = JSON.parse(history);
+          const sorted = Object.entries(parsed).sort((a: any, b: any) => b[1] - a[1]).map(e => String(e[0]));
+          const defaultTags = ['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó'];
+          const finalTags = Array.from(new Set([...sorted, ...defaultTags])).slice(0, 8);
+          if (finalTags.length > 0) {
+            setDynamicTags(finalTags);
+          }
+        }
       } catch (e) {}
     };
     loadCache();
@@ -160,7 +173,23 @@ export default function App() {
     searchQueryRef.current = text;
   };
 
+  const saveSearchToHistory = async (query: string) => {
+    if (!query || query.trim().length < 3) return;
+    const q = query.trim().toLowerCase();
+    try {
+      const history = await AsyncStorage.getItem('@search_history');
+      let parsed: Record<string, number> = history ? JSON.parse(history) : {};
+      parsed[q] = (parsed[q] || 0) + 1;
+      await AsyncStorage.setItem('@search_history', JSON.stringify(parsed));
+      
+      const sorted = Object.entries(parsed).sort((a: any, b: any) => b[1] - a[1]).map(e => String(e[0]));
+      const defaultTags = ['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó'];
+      setDynamicTags(Array.from(new Set([...sorted, ...defaultTags])).slice(0, 8));
+    } catch (e) {}
+  };
+
   const onSearchSubmit = () => {
+    saveSearchToHistory(searchQueryRef.current);
     fetchProducts();
   };
 
@@ -173,6 +202,7 @@ export default function App() {
   const handleTagPress = (tag: string) => {
     setSearchQuery(tag);
     searchQueryRef.current = tag;
+    saveSearchToHistory(tag);
     fetchProducts(tag);
   };
 
@@ -291,7 +321,7 @@ export default function App() {
             </View>
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagsContainer} contentContainerStyle={{ paddingRight: 20 }}>
-              {['cerveja', 'café', 'fralda', 'sabão em pó', 'arroz', 'leite'].map(tag => (
+              {dynamicTags.map(tag => (
                 <Chip 
                   key={tag} 
                   style={styles.tagChip} 

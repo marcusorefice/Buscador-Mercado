@@ -300,7 +300,7 @@ async def motor_extracao_dom_olivio_full():
                                     "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
                                     "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                                     "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                                    "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
+                                    "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
                                     "Link_PDP": link_pdp
                                 })
                             except Exception as e:

@@ -95,8 +95,9 @@ def get_produtos(
     if q:
         # Se a busca for um número longo, trata como busca exata por EAN (usado pelo modal de detalhes)
         if q.isdigit() and len(q) >= 8:
-            where_clauses.append('p.ean = %s')
-            params.append(q)
+            # Permite buscar pelo EAN original OU pelas variações internas de colisão (ex: INT_1234_KG)
+            where_clauses.append('(p.ean = %s OR p.ean LIKE %s)')
+            params.extend([q, f"INT_{q}_%"])
         else:
             # Permite múltiplas palavras-chave
             termos = q.split()

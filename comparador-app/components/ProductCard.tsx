@@ -62,8 +62,15 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
 
   const showPlaceholder = !product.Imagem || !product.Imagem.startsWith('http') || imageError;
 
-  const weightInfo = product.weight || product.volume || product.unidade_medida;
-  const showWeight = weightInfo && !titleText.toLowerCase().includes(weightInfo.toLowerCase());
+  // Extrai a informação de peso/volume da melhor oferta
+  let weightInfo = '';
+  if (bestOffer && bestOffer.Qtd_Valor && bestOffer.Medida) {
+    // Só monta a badge se não for um item genérico "1 UN"
+    if (bestOffer.Qtd_Valor !== "1" || bestOffer.Medida !== "UN") {
+      weightInfo = `${bestOffer.Qtd_Valor}${bestOffer.Medida}`;
+    }
+  }
+  const showWeight = weightInfo !== '' && !titleText.toLowerCase().includes(weightInfo.toLowerCase());
 
   // Lógica de cálculo de desconto: buscando o maior preço entre as ofertas para comparação
   const maxOfferPrice = React.useMemo(() => {
@@ -157,6 +164,13 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
               )}
               <Text style={styles.currentPrice}>
                 <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(product.Menor_Preco)}
+                {bestOffer?.Unidade && bestOffer.Unidade !== 'UN' ? (
+                  <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / {bestOffer.Unidade.toLowerCase()}</Text>
+                ) : bestOffer?.Medida === 'KG' && bestOffer?.Qtd_Valor === '1' ? (
+                  <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / kg</Text>
+                ) : (
+                  <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> un</Text>
+                )}
               </Text>
             </View>
           </View>

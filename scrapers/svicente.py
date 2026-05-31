@@ -312,7 +312,17 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                                         nome_bruto = nome_url
 
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
-                    unid_venda = "KG" if " KG" in nome_bruto else "UN"
+                    
+                    measurement_unit = str(p.get('measurementUnit', '')).lower()
+                    if measurement_unit == 'kg' or nome_bruto.upper().endswith(' KG'):
+                        unid_venda = "KG"
+                    else:
+                        unid_venda = "UN"
+
+                    if unid_venda == "KG" and qv == "1" and med == "UN":
+                        qv, med = "1", "KG"
+                        
+                    nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
 
                     produtos_categoria.append({
                         "Mercado": NOME_MERCADO,

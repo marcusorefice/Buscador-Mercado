@@ -120,6 +120,19 @@ async def motor_extracao_paodeacucar_full():
 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
                                 
+                                unidade_venda = "UN"
+                                if str(p.get('unit', '')).lower() == 'kg' or str(p.get('measurementUnit', '')).lower() == 'kg':
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                if nome_bruto.endswith(" KG"):
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+                                
                                 img_path = p.get('productImages', [None])[0]
                                 img_url = f"{BASE_URL_CONFIG}/{img_path.lstrip('/')}" if img_path else ""
 
@@ -139,7 +152,7 @@ async def motor_extracao_paodeacucar_full():
                                     "Produto": nome_limpo, "Marca": str(p.get('brand', 'PRÓPRIA')).upper(),
                                     "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
                                     "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
-                                    "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": "1 UN",
+                                    "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": "1 UN",
                                     "Data_Hora": agora, "Link_Imagem": img_url,
                                     "Link_PDP": link_pdp
                                 })

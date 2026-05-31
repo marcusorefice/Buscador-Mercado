@@ -277,6 +277,23 @@ async def motor_extracao_boa_full():
                                 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
+                                measurement_unit = str(p.get('measurementUnit', '')).lower()
+                                
+                                if measurement_unit == 'kg' or nome_cru.upper().endswith(' KG'):
+                                    unidade_venda = "KG"
+                                else:
+                                    unidade_venda = "UN"
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                if nome_cru.endswith(" KG"):
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+
                                 img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                                 if img.startswith("//"): img = "https:" + img
                                 
@@ -301,7 +318,7 @@ async def motor_extracao_boa_full():
                                     "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
                                     "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
                                     "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                                    "Qtd_Valor": qv, "Medida": med, "Unidade": "UN", "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
+                                    "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
                                     "Link_PDP": link_pdp
                                 })
                             except Exception as e:
