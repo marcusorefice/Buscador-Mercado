@@ -108,9 +108,6 @@ async def motor_extracao_covabra_full():
                                     unidade_venda = "KG"
                                 else:
                                     unidade_venda = "UN"
-                                    unidade_venda = "KG"
-                                    if qv == "1" and med == "UN":
-                                        qv, med = "1", "KG"
                                         
                                 if nome_original.endswith(" KG"):
                                     unidade_venda = "KG"
