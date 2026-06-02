@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
 from utils import extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
@@ -158,7 +159,7 @@ async def extrair_dados():
                             if p_venda <= 0: continue
 
                             # --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
-                            unit_multiplier = float(sku.get('unitMultiplier') or 1.0)
+                            unit_multiplier = float(item.get('unitMultiplier') or 1.0)
                             if unit_multiplier > 0 and unit_multiplier < 1.0:
                                 if p_varejo > (p_venda * (1 / unit_multiplier) * 0.5): 
                                     p_varejo = p_varejo * unit_multiplier

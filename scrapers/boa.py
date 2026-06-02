@@ -196,6 +196,21 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 # Utilizando apenas a extração inteligente baseada no nome para evitar bugs de "incremento de carrinho" da VTEX
                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
+                unidade_venda = "UN"
+                measurement_unit = str(p.get('measurementUnit', '')).lower()
+                
+                if measurement_unit == 'kg':
+                    unidade_venda = "KG"
+                    if qv == "1" and med == "UN":
+                        qv, med = "1", "KG"
+                        
+                if nome_cru.endswith(" KG"):
+                    unidade_venda = "KG"
+                    if qv == "1" and med == "UN":
+                        qv, med = "1", "KG"
+                        
+                nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+
                 # Imagem #
                 img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                 if img.startswith("//"): img = "https:" + img

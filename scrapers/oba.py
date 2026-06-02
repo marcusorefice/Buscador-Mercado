@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
 from utils import (
@@ -237,7 +238,8 @@ async def motor_extracao_oba():
                             "Link_Imagem": img_url,
                             "Link_PDP": link_pdp
                         })
-                    except Exception:
+                    except Exception as e:
+                        logger.error(f"Erro em oba.py loop: {e}")
                         continue
 
                 # Avança os ponteiros de paginação

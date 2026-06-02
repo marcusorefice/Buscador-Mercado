@@ -77,8 +77,21 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
             
             dados_brutos = res.json()
             dados = reconstruir_json_remix(dados_brutos, 0)
-            colecao = dados.get("routes/colecao.$collectionId", {})
-            produtos_raw = colecao.get("products", []) or colecao.get("data", {}).get("products", [])
+            
+            produtos_raw = []
+            def procurar_produtos(d):
+                nonlocal produtos_raw
+                if produtos_raw: return
+                if isinstance(d, dict):
+                    if "products" in d and isinstance(d["products"], list) and len(d["products"]) > 0:
+                        if isinstance(d["products"][0], dict) and ("productName" in d["products"][0] or "name" in d["products"][0] or "node" in d["products"][0]):
+                            produtos_raw = d["products"]
+                            return
+                    for v in d.values(): procurar_produtos(v)
+                elif isinstance(d, list):
+                    for v in d: procurar_produtos(v)
+            
+            procurar_produtos(dados)
             
             if not produtos_raw: return []
 
@@ -123,6 +136,25 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                             p_a = p_a * unit_multiplier
 
                     nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+
+                    measurement_unit = str(sku_p.get('measurementUnit', '')).lower()
+                    if measurement_unit == 'kg' or nome_cru.upper().endswith(' KG'):
+                        unidade_venda = "KG"
+                        if qv == "1" and med == "UN":
+                            qv, med = "1", "KG"
+                    elif measurement_unit == 'g':
+                        unidade_venda = "UN"
+                        if qv == "1" and med == "UN":
+                            qv, med = str(int(unit_multiplier)), "G"
+                    else:
+                        unidade_venda = "UN"
+                            
+                    if nome_cru.endswith(" KG"):
+                        unidade_venda = "KG"
+                        if qv == "1" and med == "UN":
+                            qv, med = "1", "KG"
+                            
+                    nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
 
                     # Pega o link da página do produto (PDP)
                     link_pdp_rel = item.get('linkText') or item.get('link') or item.get('url') or ''
