@@ -289,6 +289,8 @@ async def motor_extracao_dom_olivio_full():
                                         link_pdp = f"https://www.domolivio.com.br/{link_pdp_rel}/p"
                                 else:
                                     link_pdp = ""
+                                
+                                unidade_venda = "KG" if med == "KG" else "UN"
 
                                 produtos_categoria.append({
                                     "Mercado": NOME_MERCADO,

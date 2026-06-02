@@ -6,6 +6,9 @@ export interface Oferta {
   Condicao: string;
   Data_Atualizacao: string;
   Link_PDP?: string;
+  Qtd_Valor?: string;
+  Medida?: string;
+  Unidade?: string;
 }
 export interface Product {
   EAN: string;
@@ -19,6 +22,5 @@ export interface Product {
   weight?: string;
   volume?: string;
   unidade_medida?: string;
-}
   Categoria?: string; // para não quebrar filtro antigo
 }

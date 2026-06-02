@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform, Alert, Image } from 'react-native';
+import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform, Alert, Image, Keyboard } from 'react-native';
 import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton, Button, TextInput } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
@@ -18,6 +18,14 @@ import Constants from 'expo-constants';
 const API_URL = __DEV__ 
   ? 'https://badness-impale-suitably.ngrok-free.dev' // ngrok: Ignora o Firewall do Windows e atualiza na hora!
   : 'https://buscador-mercado.onrender.com';         // Render: App Oficial da Nuvem
+
+// Lista base para o Autocomplete Inteligente
+const POPULAR_TERMS = [
+  'coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó', 'arroz', 'feijão', 
+  'açúcar', 'cerveja', 'fralda', 'desodorante', 'shampoo', 'manteiga', 'queijo', 'presunto', 'macarrão', 'detergente', 
+  'sabão', 'carne', 'frango', 'refrigerante', 'iogurte', 'biscoito', 'chocolate', 'água', 'amaciante', 'creme dental', 
+  'desinfetante', 'salsicha', 'linguiça', 'peixe', 'batata', 'cebola', 'tomate', 'banana', 'maçã', 'pão', 'bolo', 'sorvete', 'ração'
+];
 
 const theme = {
   ...DefaultTheme,
@@ -63,6 +71,10 @@ export default function App() {
   const [suggestionImage, setSuggestionImage] = useState<string | null>(null);
   const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
   const [dynamicTags, setDynamicTags] = useState<string[]>(['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó']);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [textSuggestions, setTextSuggestions] = useState<string[]>([]);
   
   const [isScanning, setIsScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -171,6 +183,26 @@ export default function App() {
   const handleSearchChange = (text: string) => {
     setSearchQuery(text);
     searchQueryRef.current = text;
+    setIsSearchFocused(true);
+    
+    // Gera as sugestões de autocomplete
+    if (text.length > 0) {
+      const query = text.toLowerCase();
+      const allTerms = Array.from(new Set([...dynamicTags, ...POPULAR_TERMS]));
+      const matches = allTerms.filter(t => t.toLowerCase().includes(query) && t.toLowerCase() !== query).slice(0, 5);
+      setTextSuggestions(matches);
+    } else {
+      setTextSuggestions([]);
+    }
+
+    // Cancela a busca anterior se o usuário continuar digitando
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    // Aguarda 500ms após o usuário parar de digitar para buscar automaticamente
+    searchTimeoutRef.current = setTimeout(() => {
+      fetchProducts(text);
+    }, 500);
   };
 
   const saveSearchToHistory = async (query: string) => {
@@ -189,13 +221,38 @@ export default function App() {
   };
 
   const onSearchSubmit = () => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
     saveSearchToHistory(searchQueryRef.current);
     fetchProducts();
   };
 
-  const clearSearch = () => {
+  const handleTextSuggestionPress = (suggestion: string) => {
+    setSearchQuery(suggestion);
+    searchQueryRef.current = suggestion;
+    setIsSearchFocused(false);
+    setTextSuggestions([]);
+    Keyboard.dismiss();
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    fetchProducts(suggestion);
+    saveSearchToHistory(suggestion);
+  };
+
+  const clearSearchText = () => {
     setSearchQuery('');
     searchQueryRef.current = '';
+    setTextSuggestions([]);
+    setIsSearchFocused(true);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+  };
+
+  const returnHome = () => {
+    setSearchQuery('');
+    searchQueryRef.current = '';
+    setTextSuggestions([]);
+    setIsSearchFocused(false);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     fetchProducts('');
   };
 
@@ -278,7 +335,7 @@ export default function App() {
             <View style={styles.headerTop}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <IconButton icon="menu" iconColor="#fff" size={28} onPress={() => setSidebarVisible(true)} style={{ marginLeft: -8, marginRight: 0 }} />
-                <TouchableOpacity onPress={clearSearch}>
+                <TouchableOpacity onPress={returnHome}>
                   <Text style={styles.headerTitle}>Comparador</Text>
                 </TouchableOpacity>
               </View>
@@ -296,18 +353,34 @@ export default function App() {
                 )}
               </View>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Searchbar
-                placeholder="Ex: Cerveja Heineken, Fralda..."
-                onChangeText={handleSearchChange}
-                value={searchQuery}
-                onSubmitEditing={onSearchSubmit}
-                onIconPress={onSearchSubmit}
-                onClearIconPress={clearSearch}
-                style={[styles.searchbar, { flex: 1 }]}
-                inputStyle={styles.searchInput}
-                iconColor="#E5293E"
-              />
+            <View style={{ flexDirection: 'row', alignItems: 'center', zIndex: 20 }}>
+              <View style={{ flex: 1, position: 'relative' }}>
+                <Searchbar
+                  placeholder="Ex: Cerveja Heineken, Fralda..."
+                  onChangeText={handleSearchChange}
+                  value={searchQuery}
+                  onSubmitEditing={onSearchSubmit}
+                  onIconPress={onSearchSubmit}
+                  onClearIconPress={clearSearchText}
+                  onFocus={() => setIsSearchFocused(true)}
+                  onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                  style={styles.searchbar}
+                  inputStyle={styles.searchInput}
+                  iconColor="#E5293E"
+                />
+                {isSearchFocused && textSuggestions.length > 0 && (
+                  <View style={styles.autocompleteOverlay}>
+                    <ScrollView keyboardShouldPersistTaps="handled">
+                      {textSuggestions.map(s => (
+                        <TouchableOpacity key={s} style={styles.autocompleteItem} onPress={() => handleTextSuggestionPress(s)}>
+                          <IconButton icon="magnify" size={16} iconColor="#888" style={{ margin: 0, marginRight: 8 }} />
+                          <Text style={styles.autocompleteText}>{s}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
               <IconButton
                 icon="barcode-scan"
                 iconColor="#fff"
@@ -606,6 +679,33 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 12,
+  },
+  autocompleteOverlay: {
+    position: 'absolute',
+    top: 52,
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    zIndex: 999,
+    maxHeight: 250,
+  },
+  autocompleteItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  autocompleteText: {
+    fontSize: 15,
+    color: '#333',
   },
   filtersRow: {
     flexDirection: 'row',

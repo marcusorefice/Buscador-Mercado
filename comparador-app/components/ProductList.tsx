@@ -28,6 +28,8 @@ export const ProductList = memo(({ products, refreshing, onRefresh, ListEmptyCom
       onRefresh={onRefresh}
       refreshing={refreshing}
       ListEmptyComponent={ListEmptyComponent}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
       // Otimização de performance para listas grandes
       removeClippedSubviews={true}
       maxToRenderPerBatch={12}
