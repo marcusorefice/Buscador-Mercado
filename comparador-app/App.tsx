@@ -19,13 +19,9 @@ const API_URL = __DEV__
   ? 'https://badness-impale-suitably.ngrok-free.dev' // ngrok: Ignora o Firewall do Windows e atualiza na hora!
   : 'https://buscador-mercado.onrender.com';         // Render: App Oficial da Nuvem
 
-// Lista base para o Autocomplete Inteligente
-const POPULAR_TERMS = [
-  'coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó', 'arroz', 'feijão', 
-  'açúcar', 'cerveja', 'fralda', 'desodorante', 'shampoo', 'manteiga', 'queijo', 'presunto', 'macarrão', 'detergente', 
-  'sabão', 'carne', 'frango', 'refrigerante', 'iogurte', 'biscoito', 'chocolate', 'água', 'amaciante', 'creme dental', 
-  'desinfetante', 'salsicha', 'linguiça', 'peixe', 'batata', 'cebola', 'tomate', 'banana', 'maçã', 'pão', 'bolo', 'sorvete', 'ração'
-];
+// --- CONFIGURAÇÃO TYPESENSE (BUSCA INSTANTÂNEA) ---
+const TYPESENSE_HOST = 'http://34.16.54.234:8108'; // Substitua pelo seu IP/URL do Typesense
+const TYPESENSE_SEARCH_KEY = '***REMOVIDO***'; // ⚠️ Use apenas a Search-Only API Key aqui!
 
 const theme = {
   ...DefaultTheme,
@@ -71,7 +67,8 @@ export default function App() {
   const [suggestionImage, setSuggestionImage] = useState<string | null>(null);
   const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
   const [dynamicTags, setDynamicTags] = useState<string[]>(['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó']);
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autocompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [textSuggestions, setTextSuggestions] = useState<string[]>([]);
@@ -185,12 +182,29 @@ export default function App() {
     searchQueryRef.current = text;
     setIsSearchFocused(true);
     
-    // Gera as sugestões de autocomplete
+    if (autocompleteTimeoutRef.current) clearTimeout(autocompleteTimeoutRef.current);
+
+    // Sugestões instantâneas via Typesense
     if (text.length > 0) {
-      const query = text.toLowerCase();
-      const allTerms = Array.from(new Set([...dynamicTags, ...POPULAR_TERMS]));
-      const matches = allTerms.filter(t => t.toLowerCase().includes(query) && t.toLowerCase() !== query).slice(0, 5);
-      setTextSuggestions(matches);
+      autocompleteTimeoutRef.current = setTimeout(async () => {
+        try {
+          const response = await axios.get(`${TYPESENSE_HOST}/collections/produtos/documents/search`, {
+            params: {
+              q: text,
+              query_by: 'nome_comum,marca,tags', // Campos onde o Typesense vai buscar
+              per_page: 6,
+              prefix: true // Importante: Habilita busca parcial (ex: "cerv" acha "cerveja")
+            },
+            headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_SEARCH_KEY }
+          });
+          const hits = response.data.hits || [];
+          // Remove possíveis EANs com nomes repetidos e extrai os títulos
+          const suggestions = Array.from(new Set(hits.map((h: any) => h.document.nome_comum)));
+          setTextSuggestions(suggestions as string[]);
+        } catch (e) {
+          console.error("Falha no Typesense:", e);
+        }
+      }, 40); // Debounce quase instantâneo de 40ms
     } else {
       setTextSuggestions([]);
     }
@@ -368,18 +382,6 @@ export default function App() {
                   inputStyle={styles.searchInput}
                   iconColor="#E5293E"
                 />
-                {isSearchFocused && textSuggestions.length > 0 && (
-                  <View style={styles.autocompleteOverlay}>
-                    <ScrollView keyboardShouldPersistTaps="handled">
-                      {textSuggestions.map(s => (
-                        <TouchableOpacity key={s} style={styles.autocompleteItem} onPress={() => handleTextSuggestionPress(s)}>
-                          <IconButton icon="magnify" size={16} iconColor="#888" style={{ margin: 0, marginRight: 8 }} />
-                          <Text style={styles.autocompleteText}>{s}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                )}
               </View>
               <IconButton
                 icon="barcode-scan"
@@ -447,6 +449,20 @@ export default function App() {
             )}
           </View>
 
+          {/* Overlay de Autocomplete Movido para a Raiz (Resolve o bug de rolagem no Android) */}
+          {isSearchFocused && textSuggestions.length > 0 && (
+            <View style={[styles.autocompleteOverlay, { top: Platform.OS === 'ios' ? 110 : 118, left: 16, right: 68 }]}>
+              <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled={true}>
+                {textSuggestions.map(s => (
+                  <TouchableOpacity key={s} style={styles.autocompleteItem} onPress={() => handleTextSuggestionPress(s)}>
+                    <IconButton icon="magnify" size={16} iconColor="#888" style={{ margin: 0, marginRight: 8 }} />
+                    <Text style={styles.autocompleteText}>{s}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
           <ProductDetailsModal
             visible={isModalVisible}
             onDismiss={() => setModalVisible(false)}
@@ -457,6 +473,7 @@ export default function App() {
           <ShoppingListModal 
             visible={isCartVisible}
             onDismiss={() => setCartVisible(false)}
+            allProducts={products}
             onProductPress={handleProductPress}
           />
 
@@ -682,9 +699,6 @@ const styles = StyleSheet.create({
   },
   autocompleteOverlay: {
     position: 'absolute',
-    top: 52,
-    left: 0,
-    right: 0,
     backgroundColor: '#fff',
     borderRadius: 12,
     elevation: 6,

@@ -13,6 +13,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from utils import setup_logging, webdriver_manager_lock
 from motor_ia import MotorIA
+import asyncio
 from dotenv import load_dotenv
 
 logger = setup_logging()
@@ -112,12 +113,12 @@ def baixar_encartes(pasta_destino):
 # ==========================================
 # FUNÇÃO DE EXTRAÇÃO (PADRÃO DO PROJETO)
 # ==========================================
-def extrair_dados():
+async def extrair_dados():
     """
     Orquestra o download dos encartes e o processamento pela IA.
     Esta função segue o padrão do `main.py`, retornando uma lista de produtos.
     """
-    imagens, nome_mercado = baixar_encartes(pasta_destino="temp_imagens")
+    imagens, nome_mercado = await asyncio.to_thread(baixar_encartes, "temp_imagens")
     
     if not imagens:
         logger.warning(f"Nenhuma imagem de encarte encontrada para {nome_mercado}. O scraper será encerrado.")
@@ -133,7 +134,7 @@ def extrair_dados():
     
     lista_chaves = [k.strip() for k in chaves_api_str.split(',') if k.strip()]
     motor_ia = MotorIA(lista_chaves=lista_chaves)
-    produtos_extraidos = motor_ia.processar_imagens_em_lote(imagens, nome_mercado)
+    produtos_extraidos = await motor_ia.processar_imagens_em_lote_async(imagens, nome_mercado)
     
     # A lógica de cache agora é gerenciada inteiramente pelo MotorIA, que cria arquivos .json
     # em temp_json_cache para cada imagem processada, evitando reprocessamento desnecessário.

@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from sincronizar_typesense import sincronizar_com_typesense
 
 load_dotenv()
 
@@ -309,6 +310,12 @@ def main():
     
     conn_pg.close()
     conn_sl.close()
+    
+    # --- ATUALIZA O TYPESENSE AUTOMATICAMENTE ---
+    try:
+        sincronizar_com_typesense()
+    except Exception as e:
+        print(f"⚠️ Erro ao sincronizar com Typesense: {e}")
 
 if __name__ == "__main__":
     main()

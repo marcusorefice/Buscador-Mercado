@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { View, StyleSheet, ScrollView, Modal, Image, TouchableOpacity } from 'react-native';
 import { Text, IconButton, Divider, Button, Chip, Checkbox } from 'react-native-paper';
 import { useShoppingListStore } from './useShoppingListStore';
@@ -7,10 +7,11 @@ import { Product } from '../types';
 interface Props {
   visible: boolean;
   onDismiss: () => void;
+  allProducts?: Product[];
   onProductPress?: (product: Product) => void;
 }
 
-export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props) => {
+export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProductPress }: Props) => {
   const { list, toggleProduct, clearList, updateQuantity, setPinnedMarket, toggleItemCheck } = useShoppingListStore();
   const [expandedMarkets, setExpandedMarkets] = useState<Record<string, boolean>>({});
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
@@ -26,6 +27,7 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
 
   // Função interna para pegar o melhor preço da oferta
   const getBestPrice = (oferta: any) => {
+    if (!oferta) return 0;
     const pv = oferta.Preco_Varejo || 0;
     const pa = oferta.Preco_Atacado || 0;
     if (pa > 0 && pv > 0) return Math.min(pa, pv);
@@ -44,6 +46,51 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
       }
     }
     return { market: bestOffer.Mercado, price: bestPrice };
+  };
+
+  // --- INTELIGÊNCIA: Busca um substituto direto no MESMO mercado ---
+  const getSubstitute = useCallback((missingProduct: typeof list[0], market: string): Product | null => {
+    if (!allProducts || allProducts.length === 0) return null;
+    
+    // Pega todos os produtos que não são esse e que têm oferta neste mercado
+    const availableInMarket = allProducts.filter(p => 
+      p.EAN !== missingProduct.EAN && 
+      p.Ofertas?.some(o => o.Mercado === market)
+    );
+
+    let bestSub: Product | null = null;
+    let maxScore = -1;
+    const mainTag = missingProduct.Tags && missingProduct.Tags.length > 0 ? missingProduct.Tags[0] : '';
+
+    availableInMarket.forEach(p => {
+      let score = 0;
+      if (p.Categoria_Ouro === missingProduct.Categoria_Ouro) score += 10;
+      
+      const missingTags = missingProduct.Tags || [];
+      const pTags = p.Tags || [];
+      const overlap = missingTags.filter(t => pTags.includes(t)).length;
+      score += overlap * 3;
+
+      // Bônus para mesma marca (ex: trocando fralda tamanho M pra tamanho G da mesma marca)
+      if (p.Marca === missingProduct.Marca && p.Marca !== 'OUTROS' && p.Marca !== 'PRÓPRIA') score += 5;
+      if (mainTag && pTags.includes(mainTag)) score += 8;
+
+      if (score > maxScore && score >= 15) { // Nota de corte aumentada para evitar sugestões zumbis
+        maxScore = score;
+        bestSub = p;
+      }
+    });
+    return bestSub;
+  }, [allProducts]);
+
+  const handleSwap = (missingProd: typeof list[0], newProd: Product) => {
+    const qty = missingProd.quantity || 1;
+    toggleProduct(missingProd); // Remove o que não tem
+    const exists = list.find(p => p.EAN === newProd.EAN);
+    if (!exists) {
+      toggleProduct(newProd); // Adiciona a sugestão
+      setTimeout(() => updateQuantity(newProd, qty), 50); // Garante a mesma quantidade
+    }
   };
 
   // Carrinho Absoluto Mais Barato (Ignora customizações, sempre o menor preço)
@@ -232,8 +279,10 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
                   {marketRanking.find(r => r.market === shoppingMode.market)?.missingItems && marketRanking.find(r => r.market === shoppingMode.market)!.missingItems.length > 0 && (
                      <View style={{ marginTop: 20 }}>
                        <Text style={[styles.sectionTitle, { color: '#d32f2f' }]}>❌ Itens Indisponíveis</Text>
-                       {marketRanking.find(r => r.market === shoppingMode.market)?.missingItems.map((prod, idx) => (
-                          <View key={`missing-${idx}`} style={[styles.listItemContainer, { opacity: 0.5 }]}>
+                       {marketRanking.find(r => r.market === shoppingMode.market)?.missingItems.map((prod, idx) => {
+                          const substitute = getSubstitute(prod, shoppingMode.market!);
+                          return (
+                          <View key={`missing-${idx}`} style={[styles.listItemContainer, { opacity: substitute ? 1 : 0.5 }]}>
                             <View style={styles.listItemTopRow}>
                           <TouchableOpacity 
                             style={{ flexDirection: 'row', flex: 1, alignItems: 'center', marginLeft: 36 }}
@@ -247,8 +296,24 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
                             </View>
                           </TouchableOpacity>
                             </View>
+                            
+                            {substitute && (
+                              <View style={styles.substituteContainer}>
+                                <Text style={styles.substituteTitle}>🔄 Sugestão de Troca neste mercado:</Text>
+                                <TouchableOpacity style={styles.substituteCard} onPress={() => onProductPress && substitute && onProductPress(substitute)}>
+                                  <Image source={substitute?.Imagem && substitute?.Imagem.startsWith('http') ? { uri: substitute?.Imagem } : require('../assets/placeholder.png')} style={styles.substituteImage} resizeMode="contain" />
+                                  <View style={{ flex: 1, marginLeft: 8 }}>
+                                    <Text style={styles.substituteName} numberOfLines={1}>{substitute?.Produto_Ouro}</Text>
+                                    <Text style={styles.substitutePrice}>R$ {getBestPrice(substitute?.Ofertas?.find(o => o.Mercado === shoppingMode?.market)).toFixed(2).replace('.', ',')}</Text>
+                                  </View>
+                                  <Button mode="contained-tonal" buttonColor="#e3f2fd" textColor="#0066cc" compact onPress={() => substitute && handleSwap(prod, substitute)}>
+                                    Trocar
+                                  </Button>
+                                </TouchableOpacity>
+                              </View>
+                            )}
                           </View>
-                       ))}
+                       )})}
                      </View>
                   )}
                 </View>
@@ -413,6 +478,7 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
                             <Text style={[styles.expandedSectionTitle, { color: '#d32f2f', marginTop: 10 }]}>❌ Faltando:</Text>
                             {rank.missingItems.map((prod, idx) => {
                               const alt = getBestAlternative(prod);
+                              const substitute = getSubstitute(prod, rank.market);
                               return (
                                 <View key={`missing-${idx}`} style={styles.expandedMissingContainer}>
                               <TouchableOpacity onPress={() => onProductPress && onProductPress(prod)} activeOpacity={0.7}>
@@ -423,6 +489,21 @@ export const ShoppingListModal = ({ visible, onDismiss, onProductPress }: Props)
                               </TouchableOpacity>
                                   {alt && (
                                     <Text style={styles.missingAlternativeText}>💡 Tem no {alt.market} por R$ {alt.price.toFixed(2).replace('.', ',')}</Text>
+                                  )}
+                                  {substitute && (
+                                    <View style={styles.substituteContainer}>
+                                      <Text style={styles.substituteTitle}>🔄 Sugestão de Troca:</Text>
+                                      <TouchableOpacity style={styles.substituteCard} onPress={() => onProductPress && substitute && onProductPress(substitute)}>
+                                        <Image source={substitute?.Imagem && substitute?.Imagem.startsWith('http') ? { uri: substitute?.Imagem } : require('../assets/placeholder.png')} style={styles.substituteImage} resizeMode="contain" />
+                                        <View style={{ flex: 1, marginLeft: 8 }}>
+                                          <Text style={styles.substituteName} numberOfLines={1}>{substitute?.Produto_Ouro}</Text>
+                                          <Text style={styles.substitutePrice}>R$ {getBestPrice(substitute?.Ofertas?.find(o => o.Mercado === rank.market)).toFixed(2).replace('.', ',')}</Text>
+                                        </View>
+                                        <Button mode="contained-tonal" buttonColor="#e3f2fd" textColor="#0066cc" compact onPress={() => substitute && handleSwap(prod, substitute)}>
+                                          Trocar
+                                        </Button>
+                                      </TouchableOpacity>
+                                    </View>
                                   )}
                                 </View>
                               );
@@ -580,4 +661,10 @@ const styles = StyleSheet.create({
   marketChipText: { fontSize: 11, color: '#444' },
   quantityControls: { flexDirection: 'row', alignItems: 'center' },
   quantityText: { fontSize: 16, fontWeight: 'bold', marginHorizontal: 4, minWidth: 20, textAlign: 'center' },
+  substituteContainer: { marginTop: 8, marginBottom: 4, paddingLeft: 12, borderLeftWidth: 3, borderLeftColor: '#0066cc', marginLeft: 36 },
+  substituteTitle: { fontSize: 11, color: '#0066cc', fontWeight: 'bold', marginBottom: 6 },
+  substituteCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0f8ff', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#e3f2fd' },
+  substituteImage: { width: 36, height: 36, borderRadius: 4, backgroundColor: '#fff' },
+  substituteName: { fontSize: 12, color: '#333', fontWeight: '600' },
+  substitutePrice: { fontSize: 13, color: '#E5293E', fontWeight: 'bold' },
 });

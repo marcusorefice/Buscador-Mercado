@@ -9,6 +9,7 @@ import scrapers.dom_olivio_full as dom_olivio_full
 import scrapers.oba_full as oba_full
 import scrapers.paodeacucar_full as paodeacucar_full
 import scrapers.svicente_full as svicente_full
+import scrapers.assai as assai
 from utils import setup_logging, write_json_file, read_json_file
 
 logger = setup_logging()

@@ -86,7 +86,7 @@ async def extrair_dados():
     O cache de processamento da IA é gerenciado pelo MotorIA.
     """
     # A função de scraping (com requests) é bloqueante, então a executamos em uma thread.
-    imagens, nome_mercado = await asyncio.to_thread(baixar_encartes, pasta_destino="temp_imagens")
+    imagens, nome_mercado = await asyncio.to_thread(baixar_encartes, "temp_imagens")
     
     if not imagens:
         logger.warning(f"Nenhuma imagem de encarte encontrada para {nome_mercado}. O scraper será encerrado.")

@@ -14,6 +14,7 @@ from pdf2image import convert_from_path
 from utils import setup_logging, webdriver_manager_lock
 from motor_ia import MotorIA
 from dotenv import load_dotenv
+import asyncio
 import logging
 
 # Desativar avisos de conexão insegura para o download
@@ -125,13 +126,13 @@ def baixar_encartes(pasta_destino):
 # ==========================================
 # FUNÇÃO DE EXTRAÇÃO (PADRÃO DO PROJETO)
 # ==========================================
-def extrair_dados():
+async def extrair_dados():
     """
     Orquestra o download dos encartes e o processamento pela IA.
     Esta função segue o padrão do `main.py`, retornando uma lista de produtos.
     O cache de processamento da IA é gerenciado pelo MotorIA.
     """
-    imagens, nome_mercado = baixar_encartes(pasta_destino="temp_imagens")
+    imagens, nome_mercado = await asyncio.to_thread(baixar_encartes, "temp_imagens")
     
     if not imagens:
         logger.warning(f"Nenhuma imagem de encarte encontrada para {nome_mercado}. O scraper será encerrado.")

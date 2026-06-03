@@ -73,7 +73,8 @@ async def buscar_ean_open_food_facts(session: AsyncSession, nome_produto: str, m
                         "ean": str(ean),
                         "nome_encontrado": produto_off.get("product_name", ""),
                         "marca_encontrada": produto_off.get("brands", ""),
-                        "fonte": "Open Food Facts"
+                        "fonte": "Open Food Facts",
+                        "Link_Imagem": produto_off.get("image_url", "")
                     }
     except Exception as e:
         logger.debug(f"Erro ao buscar '{termo_busca}' no Open Food Facts: {e}")
@@ -266,35 +267,35 @@ async def tentar_recuperar_ean(nome_produto: str, marca: str = "") -> dict:
     
     try:
         async with AsyncSession(impersonate="chrome120") as session:
-            # 1. Tenta Open Food Facts (Melhor para dados estruturados e comparação)
+            # 1. Busca Interna Estruturada: Open Food Facts
             resultado_off = await buscar_ean_open_food_facts(session, nome_produto, marca)
             if resultado_off:
                 return resultado_off
                 
-            # 2. Tenta Cosmos WEB (Scraping direto, super assertivo e ilimitado)
-            resultado_cosmos_web = await buscar_ean_cosmos_web(session, termo_simples)
-            if resultado_cosmos_web:
-                return resultado_cosmos_web
-                
-            # 3. Fallback: Google Custom Search API (Com termo simplificado)
-            resultado_google = await buscar_ean_google_api(session, termo_simples, "")
-            if resultado_google:
-                return resultado_google
-                
-            # 4. Fallback: DuckDuckGo
-            resultado_ddg = await buscar_ean_duckduckgo(session, termo_simples, "")
-            if resultado_ddg:
-                return resultado_ddg
-                
-            # 5. Fallback: Yahoo Search
+            # 2. Busca Web Primária: Yahoo Search
             resultado_yahoo = await buscar_ean_yahoo(session, termo_simples, "")
             if resultado_yahoo:
                 return resultado_yahoo
                 
-            # 6. Fallback: Bing Search
+            # 3. Busca Web Secundária: DuckDuckGo
+            resultado_ddg = await buscar_ean_duckduckgo(session, termo_simples, "")
+            if resultado_ddg:
+                return resultado_ddg
+                
+            # 4. Busca Web Extra: Bing Search
             resultado_bing = await buscar_ean_bing(session, termo_simples, "")
             if resultado_bing:
                 return resultado_bing
+                
+            # 5. Fallback de Precisão: Cosmos WEB
+            resultado_cosmos_web = await buscar_ean_cosmos_web(session, termo_simples)
+            if resultado_cosmos_web:
+                return resultado_cosmos_web
+                
+            # 6. Último Recurso Web: Google Custom Search API
+            resultado_google = await buscar_ean_google_api(session, termo_simples, "")
+            if resultado_google:
+                return resultado_google
     except Exception as e:
         logger.debug(f"Erro na criação da sessão de busca: {e}")
             
