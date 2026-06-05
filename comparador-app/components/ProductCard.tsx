@@ -65,8 +65,12 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
   // Extrai a informação de peso/volume da melhor oferta
   let weightInfo = '';
   if (bestOffer && bestOffer.Qtd_Valor && bestOffer.Medida) {
-    // Só monta a badge se não for um item genérico "1 UN"
-    if (bestOffer.Qtd_Valor !== "1" || bestOffer.Medida !== "UN") {
+    // Se o produto é pesável e nós forçamos o preço para KG, forçamos a badge para 1 KG também
+    if (bestOffer.Unidade === 'KG' || (bestOffer.Medida === 'KG' && bestOffer.Qtd_Valor === '1')) {
+      weightInfo = '1 KG';
+    } 
+    // Caso contrário, só monta a badge se não for um item genérico "1 UN"
+    else if (bestOffer.Qtd_Valor !== "1" || bestOffer.Medida !== "UN") {
       weightInfo = `${bestOffer.Qtd_Valor}${bestOffer.Medida}`;
     }
   }
@@ -81,8 +85,29 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
 
   const originalPrice = (product as any).Maior_Preco || maxOfferPrice;
   const currentPrice = product.Menor_Preco || 0;
-  const hasDiscount = originalPrice > currentPrice;
-  const discountPercent = React.useMemo(() => hasDiscount ? Math.round(((originalPrice - currentPrice) / originalPrice) * 100) : 0, [hasDiscount, originalPrice, currentPrice]);
+
+  // --- LÓGICA DE CONVERSÃO PARA KG (PESÁVEIS) ---
+  let displayOriginalPrice = originalPrice;
+  let displayCurrentPrice = currentPrice;
+  let priceSuffix = ' un';
+
+  if (bestOffer?.Unidade === 'KG') {
+    const qtd = parseFloat(bestOffer.Qtd_Valor || '1');
+    const factor = bestOffer.Medida === 'G' ? (qtd / 1000) : (bestOffer.Medida === 'KG' ? qtd : 1);
+    
+    if (factor > 0) {
+      displayCurrentPrice = currentPrice / factor;
+      displayOriginalPrice = originalPrice / factor;
+    }
+    priceSuffix = ' / kg';
+  } else if (bestOffer?.Medida === 'KG' && bestOffer?.Qtd_Valor === '1') {
+    priceSuffix = ' / kg';
+  } else if (bestOffer?.Unidade && bestOffer.Unidade !== 'UN') {
+    priceSuffix = ` / ${bestOffer.Unidade.toLowerCase()}`;
+  }
+
+  const hasDiscount = displayOriginalPrice > displayCurrentPrice;
+  const discountPercent = React.useMemo(() => hasDiscount ? Math.round(((displayOriginalPrice - displayCurrentPrice) / displayOriginalPrice) * 100) : 0, [hasDiscount, displayOriginalPrice, displayCurrentPrice]);
 
   // Conectando com o Zustand para saber se este produto específico está na lista
   const cartItem = useShoppingListStore(state => state.list.find(p => p.EAN === product.EAN && p.Produto_Ouro === product.Produto_Ouro));
@@ -156,21 +181,15 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
               <Text style={styles.priceLabel}>A partir de:</Text>
               {hasDiscount && (
                 <View style={styles.originalPriceRow}>
-                  <Text style={styles.originalPrice}>R$ {formatPrice(originalPrice)}</Text>
+                  <Text style={styles.originalPrice}>R$ {formatPrice(displayOriginalPrice)}</Text>
                   <View style={styles.discountTag}>
                     <Text style={styles.discountTagText}>-{discountPercent}%</Text>
                   </View>
                 </View>
               )}
               <Text style={styles.currentPrice}>
-                <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(product.Menor_Preco)}
-                {bestOffer?.Unidade && bestOffer.Unidade !== 'UN' ? (
-                  <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / {bestOffer.Unidade.toLowerCase()}</Text>
-                ) : bestOffer?.Medida === 'KG' && bestOffer?.Qtd_Valor === '1' ? (
-                  <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / kg</Text>
-                ) : (
-                  <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> un</Text>
-                )}
+                <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(displayCurrentPrice)}
+                <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}>{priceSuffix}</Text>
               </Text>
             </View>
           </View>

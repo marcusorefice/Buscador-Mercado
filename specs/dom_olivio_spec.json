@@ -1,5 +1,5 @@
 {
-  "market_name": "Dom Olívio",
+  "market_name": "Dom Olivio",
   "base_url": "https://www.domolivio.com.br/",
   "api_endpoint": "/api/graphql",
   "data_origin": "API (GRAPHQL)",
@@ -9,7 +9,7 @@
     "cep_jundiai": "13211-745",
     "channel": "1",
     "price_channel": "2",
-    "region_id": null
+    "region_id": "v2.C263836B4901B1A5F7E3F7DDE018919B"
   },
   "pagination": {
     "max_pages": 25

@@ -25,10 +25,10 @@
     "card_price": "price.cartonistaPrice"
   },
   "special_rules": [
-    "Executa uma chamada 'GetProductsQuery' para listar os IDs e uma segunda 'ClientProductQuery' para extrair o preço real.",
-    "A 'Condição' é priorizada na ordem: CLUBE +AMIGO > CARTONISTA > LEVE MAIS > 1un.",
-    "O 'price_final' deve sempre refletir o menor valor disponível entre Clube, Cartão ou Oferta Geral.",
-    "Utiliza tratamento de erros para ignorar produtos com estoque zerado (availability: 'outOfStock').",
+    "Executa uma chamada 'GetProductsQuery' para listar vitrine e uma segunda 'ClientProductQuery' para extrair o preço real e o EAN completo.",
+    "Se a segunda chamada retornar Erro 500, o scraper faz fallback silencioso para o preço da vitrine.",
+    "Produtos com preço fracionado (ex: unitMultiplier 0.5 para 500g) sofrem divisão automática para refletir o preço de 1KG.",
+    "A 'Condição' foi padronizada: se houver desconto atrelado ao produto, a etiqueta é sempre 'CLUBE +AMIGO (CPF)'.",
     "Aplica a função 'extrair_medidas_inteligente' para separar peso/volume do nome bruto do produto."
   ],
   "technical_dependencies": {

@@ -195,5 +195,29 @@ def get_produtos(
     # Limita o retorno para não travar o app
     return result[:200]
 
+@app.get("/produtos/{ean}/historico")
+def obter_historico(ean: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Puxa o menor preço registrado na data entre as opções de atacado e varejo
+    cursor.execute("""
+        SELECT mercado, 
+               CASE 
+                   WHEN preco_atacado > 0 AND preco_varejo > 0 THEN LEAST(preco_atacado, preco_varejo)
+                   WHEN preco_atacado > 0 THEN preco_atacado
+                   ELSE preco_varejo 
+               END as preco, 
+               data_hora 
+        FROM historico_precos 
+        WHERE ean = %s 
+        ORDER BY data_hora DESC
+    """, (ean,))
+    
+    historico = cursor.fetchall()
+    conn.close()
+    
+    return historico
+
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

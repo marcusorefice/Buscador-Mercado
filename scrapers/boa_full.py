@@ -134,12 +134,13 @@ async def motor_extracao_boa_full():
                     "input": {
                         "activeSalesChannel": SALES_CHANNEL_SHELF, 
                         "postalCode": CEP_JUNDIAI, 
-                        "page": 1, "sort": "score_desc", "term": termo_busca, 
-                        "selectedFacets": [{"key": "fuzzy", "value": "0"}, {"key": "operator", "value": "and"}, {"key": "region-id", "value": REGION_ID}],
+                        "page": 0, "sort": "score_desc", "term": termo_busca, 
+                        "selectedFacets": [{"key": "fuzzy", "value": "0"}, {"key": "operator", "value": "and"}],
                         "hasChangeOrder": False, 
                         "hasClubWithRegion": True, 
                         "cmsPostalCode": CEP_JUNDIAI, 
-                        "clubSc": int(SALES_CHANNEL_PRICE)
+                        "clubSc": int(SALES_CHANNEL_PRICE),
+                        "regionId": REGION_ID
                     }
                 }
                 params_shelf = {
@@ -148,9 +149,11 @@ async def motor_extracao_boa_full():
                     "variables": json.dumps(variables_shelf, separators=(',', ':'))
                 }
                 res_facets = await session.get(f"{URL_BASE}?" + urllib.parse.urlencode(params_shelf), timeout=20)
+                print(f"Term: {termo_busca}, Status: {res_facets.status_code}")
                 if res_facets.status_code == 200:
                     data_facets = res_facets.json()
                     facets_array = data_facets.get('data', {}).get('getProducts', {}).get('data', {}).get('facets', [])
+                    print(f"Facets length: {len(facets_array)}")
                     for f in facets_array:
                         key_str = str(f.get('key', '')).lower()
                         if key_str in ['category-1', 'category-2', 'category-3', 'department', 'c']:
@@ -165,14 +168,14 @@ async def motor_extracao_boa_full():
                 logger.info(f"   Mapeados {len(departamentos_ativos)} blocos de categorias (Níveis 1, 2 e 3) para varredura massiva.")
             else:
                 logger.warning("   Nenhum departamento retornado nas Facets. Usando Fallback.")
-                departamentos_ativos = [("category-1", d) for d in DEPARTAMENTOS_FALLBACK]
+                departamentos_ativos = [("c", d) for d in DEPARTAMENTOS_FALLBACK]
         except Exception as e:
             logger.warning(f"   Falha ao obter Facets Dinâmicas: {e}. Usando Fallback.")
-            departamentos_ativos = [("category-1", d) for d in DEPARTAMENTOS_FALLBACK]
+            departamentos_ativos = [("c", d) for d in DEPARTAMENTOS_FALLBACK]
 
         async def process_category(chave_dept, dept_slug):
             produtos_categoria = []
-            pagina = 1
+            pagina = 0
             
             while True:
                 async with sem:
@@ -187,13 +190,13 @@ async def motor_extracao_boa_full():
                                 "selectedFacets": [
                                     {"key": chave_dept, "value": dept_slug},
                                     {"key": "fuzzy", "value": "0"},
-                                    {"key": "operator", "value": "and"},
-                                    {"key": "region-id", "value": REGION_ID}
+                                    {"key": "operator", "value": "and"}
                                 ],
                                 "hasChangeOrder": False, 
                                 "hasClubWithRegion": True, 
                                 "cmsPostalCode": CEP_JUNDIAI, 
-                                "clubSc": int(SALES_CHANNEL_PRICE)
+                                "clubSc": int(SALES_CHANNEL_PRICE),
+                                "regionId": REGION_ID
                             }
                         }
                         params_shelf = {
@@ -229,42 +232,41 @@ async def motor_extracao_boa_full():
                         for edge, (v_varejo, v_atacado, ean_detalhado) in zip(edges, precos_finais):
                             try:
                                 p = edge['node']
-                                ean = ean_detalhado if ean_detalhado not in ['N/A', ''] else str(p.get('ean', 'N/A')).strip()
+                                ean = ean_detalhado if ean_detalhado not in ['N/A', '', 'None'] else str(p.get('gtin', '')).strip()
+                                if not ean or ean in ['0', 'None', 'N/A']:
+                                    ean = str(p.get('ean', 'N/A')).strip()
+                                if not ean or ean == 'None':
+                                    ean = 'N/A'
+                                
                                 nome_cru = p['name'].upper().strip()
                                 
+                                custom_offers = p.get('customOffers') or {}
                                 offers_data = p.get('offers') or {}
-                                p_v = v_varejo if v_varejo > 0 else float(offers_data.get('highPrice') or 0.0)
-                                p_a = v_atacado if v_atacado > 0 else float(offers_data.get('lowPrice') or p_v or 0.0)
+                                
+                                p_v = float(custom_offers.get('listPriceCustom') or offers_data.get('highPrice') or 0.0)
+                                if p_v <= 0: 
+                                    p_v = v_varejo
+                                    
+                                p_a = v_atacado if v_atacado > 0 else float(custom_offers.get('spotPriceCustom') or offers_data.get('lowPrice') or p_v or 0.0)
 
                                 unit_multiplier = float(p.get('unitMultiplier') or 1.0)
                                 if unit_multiplier > 0 and unit_multiplier < 1.0:
-                                    if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
-                                        p_v = p_v * unit_multiplier
+                                    if p_v == v_varejo and p_v >= (p_a / unit_multiplier) * 0.9:
+                                        pass
                                     else:
-                                        p_v = p_v * unit_multiplier
-                                        p_a = p_a * unit_multiplier
+                                        p_v = p_v / unit_multiplier
+                                    
+                                    p_a = p_a / unit_multiplier
 
                                 if p_v <= 0 and p_a <= 0: continue
                                 if p_v <= 0: p_v = p_a
                                 if p_a > 0 and p_v < p_a: p_v = p_a
 
                                 condicao = "1 UN"
-                                selos = [d.get('name', '').upper() for d in p.get('clusterHighlights', []) if isinstance(d, dict)]
+                                tem_desconto_custom = custom_offers.get('hasDiscount')
                                 
-                                ofertas_array = p.get('offers', {}).get('offers', [])
-                                if isinstance(ofertas_array, list):
-                                    for oferta in ofertas_array:
-                                        teasers = oferta.get('teasers', [])
-                                        if isinstance(teasers, list):
-                                            selos.extend([t.get('name', '').upper() for t in teasers if isinstance(t, dict)])
-
-                                selo_cartao = any('CARTONISTA' in s or ('CARTÃO' in s and 'BOA' in s) or ('CARTAO' in s and 'BOA' in s) for s in selos)
-                                
-                                if p_a < p_v:
-                                    if selo_cartao:
-                                        condicao = "EXCLUSIVO CARTÃO BOA"
-                                    else:
-                                        condicao = "CLUBE +AMIGO (CPF)"
+                                if p_a < p_v or tem_desconto_custom:
+                                    condicao = "CLUBE +AMIGO (CPF)"
 
                                 cat_tree = p.get('categoryTree', [])
                                 categorias_extraidas = [get_last_path_part(c).upper() for c in cat_tree]
@@ -277,12 +279,13 @@ async def motor_extracao_boa_full():
                                 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
+                                unidade_venda = "UN"
                                 measurement_unit = str(p.get('measurementUnit', '')).lower()
                                 
-                                if measurement_unit == 'kg' or nome_cru.upper().endswith(' KG'):
+                                if measurement_unit == 'kg':
                                     unidade_venda = "KG"
-                                else:
-                                    unidade_venda = "UN"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
                                         
                                 if nome_cru.endswith(" KG"):
                                     unidade_venda = "KG"

@@ -24,6 +24,8 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const [detailedProduct, setDetailedProduct] = React.useState<Product | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [selectedOfferIndex, setSelectedOfferIndex] = React.useState<number>(0);
+  const [history, setHistory] = React.useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = React.useState(false);
 
   React.useEffect(() => {
     setImageError(false);
@@ -53,11 +55,58 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
           }
         };
         fetchDetails();
+
+        // Busca o Histórico de Preços se houver um EAN válido
+        if (product.EAN && product.EAN !== 'N/A') {
+          const fetchHistory = async () => {
+            setLoadingHistory(true);
+            try {
+              const res = await axios.get(`${apiUrl}/produtos/${product.EAN}/historico`, {
+                headers: { 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' }
+              });
+              
+              // Converte as datas de texto para tempo real e ordena: Mais recentes no topo
+              const sortedHistory = res.data.sort((a: any, b: any) => {
+                const parseToTimestamp = (dateStr: string) => {
+                  if (!dateStr) return 0;
+                  const [datePart, timePart = '00:00:00'] = dateStr.split(' ');
+                  if (datePart.includes('/')) {
+                    const [day, month, year] = datePart.split('/');
+                    return new Date(`${year}-${month}-${day}T${timePart}`).getTime();
+                  }
+                  return new Date(`${datePart}T${timePart}`).getTime();
+                };
+                return parseToTimestamp(b.data_hora) - parseToTimestamp(a.data_hora);
+              });
+
+              setHistory(sortedHistory);
+            } catch (error) {
+              console.error("Falha ao buscar histórico do produto:", error);
+              setHistory([]);
+            } finally {
+              setLoadingHistory(false);
+            }
+          };
+          fetchHistory();
+        } else {
+          setHistory([]);
+        }
       }, 100);
 
       return () => clearTimeout(timer);
     }
   }, [visible, product, apiUrl]);
+
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    const [datePart] = dateStr.split(' ');
+    // Se vier no formato YYYY-MM-DD do banco, converte para BR
+    if (datePart.includes('-')) {
+      const [year, month, day] = datePart.split('-');
+      return `${day}/${month}/${year}`;
+    }
+    return datePart;
+  };
 
   const productToRender = detailedProduct || product;
 
@@ -78,8 +127,23 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
     ? activeOffer.Preco_Atacado 
     : originalPrice;
 
-  const displayCurrentPrice = currentPrice > 0 ? currentPrice : (productToRender.Menor_Preco || 0);
-  const displayOriginalPrice = originalPrice > 0 ? originalPrice : displayCurrentPrice;
+  let displayCurrentPrice = currentPrice > 0 ? currentPrice : (productToRender.Menor_Preco || 0);
+  let displayOriginalPrice = originalPrice > 0 ? originalPrice : displayCurrentPrice;
+  let priceSuffix = ' un';
+
+  if (activeOffer?.Unidade === 'KG') {
+    const qtd = parseFloat(activeOffer.Qtd_Valor || '1');
+    const factor = activeOffer.Medida === 'G' ? (qtd / 1000) : (activeOffer.Medida === 'KG' ? qtd : 1);
+    if (factor > 0) {
+      displayCurrentPrice = displayCurrentPrice / factor;
+      displayOriginalPrice = displayOriginalPrice / factor;
+    }
+    priceSuffix = ' / kg';
+  } else if (activeOffer?.Medida === 'KG' && activeOffer?.Qtd_Valor === '1') {
+    priceSuffix = ' / kg';
+  } else if (activeOffer?.Unidade && activeOffer.Unidade !== 'UN') {
+    priceSuffix = ` / ${activeOffer.Unidade.toLowerCase()}`;
+  }
 
   const hasDiscount = displayOriginalPrice > displayCurrentPrice && displayOriginalPrice > 0 && displayCurrentPrice > 0;
   const discountPercent = hasDiscount ? Math.round(((displayOriginalPrice - displayCurrentPrice) / displayOriginalPrice) * 100) : 0;
@@ -158,13 +222,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
               <View style={styles.mainOfferRow}>
                 <Text style={styles.mainPriceText}>
                   <Text style={styles.mainCurrencySymbol}>R$ </Text>{formatPrice(displayCurrentPrice)}
-                  {activeOffer?.Unidade && activeOffer.Unidade !== 'UN' ? (
-                    <Text style={{ fontSize: 16, color: '#888', fontWeight: 'normal' }}> / {activeOffer.Unidade.toLowerCase()}</Text>
-                  ) : activeOffer?.Medida === 'KG' && activeOffer?.Qtd_Valor === '1' ? (
-                    <Text style={{ fontSize: 16, color: '#888', fontWeight: 'normal' }}> / kg</Text>
-                  ) : (
-                    <Text style={{ fontSize: 16, color: '#888', fontWeight: 'normal' }}> un</Text>
-                  )}
+                  <Text style={{ fontSize: 16, color: '#888', fontWeight: 'normal' }}>{priceSuffix}</Text>
                 </Text>
                 {activeOffer && (
                   <View style={styles.bestOfferBadgeContainer}>
@@ -219,6 +277,25 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
 
             {productToRender.Ofertas.map((oferta, index) => {
               const isSelected = index === selectedOfferIndex;
+              
+              let offerAtacado = oferta.Preco_Atacado;
+              let offerVarejo = oferta.Preco_Varejo;
+              let offerSuffix = ' un';
+              
+              if (oferta.Unidade === 'KG') {
+                const qtd = parseFloat(oferta.Qtd_Valor || '1');
+                const factor = oferta.Medida === 'G' ? (qtd / 1000) : (oferta.Medida === 'KG' ? qtd : 1);
+                if (factor > 0) {
+                  offerAtacado = offerAtacado / factor;
+                  offerVarejo = offerVarejo / factor;
+                }
+                offerSuffix = ' / kg';
+              } else if (oferta.Medida === 'KG' && oferta.Qtd_Valor === '1') {
+                offerSuffix = ' / kg';
+              } else if (oferta.Unidade && oferta.Unidade !== 'UN') {
+                offerSuffix = ` / ${oferta.Unidade.toLowerCase()}`;
+              }
+
               const content = (
                 <View style={[styles.offerRow, isSelected && styles.offerRowSelected]}>
                   <View style={styles.marketInfo}>
@@ -236,14 +313,8 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                     {oferta.Preco_Atacado > 0 && oferta.Preco_Atacado < (oferta.Preco_Varejo || 999999) ? (
                       <>
                         <Text style={styles.priceText}>
-                          <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Atacado)}
-                          {oferta.Unidade && oferta.Unidade !== 'UN' ? (
-                            <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / {oferta.Unidade.toLowerCase()}</Text>
-                          ) : oferta.Medida === 'KG' && oferta.Qtd_Valor === '1' ? (
-                            <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / kg</Text>
-                          ) : (
-                            <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> un</Text>
-                          )}
+                          <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(offerAtacado)}
+                          <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}>{offerSuffix}</Text>
                         </Text>
                         {oferta.Preco_Varejo > 0 && (
                           <Text style={styles.retailText}>R$ {formatPrice(oferta.Preco_Varejo)}</Text>
@@ -251,14 +322,8 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                       </>
                     ) : (
                       <Text style={styles.priceText}>
-                        <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(oferta.Preco_Varejo)}
-                        {oferta.Unidade && oferta.Unidade !== 'UN' ? (
-                          <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / {oferta.Unidade.toLowerCase()}</Text>
-                        ) : oferta.Medida === 'KG' && oferta.Qtd_Valor === '1' ? (
-                          <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> / kg</Text>
-                        ) : (
-                          <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}> un</Text>
-                        )}
+                        <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(offerVarejo)}
+                        <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}>{offerSuffix}</Text>
                       </Text>
                     )}
                   </View>
@@ -275,6 +340,35 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                 </TouchableOpacity>
               );
             })}
+            
+            <Divider style={styles.divider} />
+
+            <View style={styles.offersHeaderRow}>
+              <Text style={styles.offersHeader}>📉 Histórico de Preços</Text>
+              {loadingHistory && <ActivityIndicator size="small" color="#E5293E" />}
+            </View>
+
+            {!loadingHistory && history.length === 0 ? (
+              <Text style={styles.emptyHistory}>Nenhum histórico registrado para este produto.</Text>
+            ) : (
+              <View style={styles.historyContainer}>
+                {history.map((item, index) => (
+                  <View key={index} style={styles.historyRow}>
+                    <View style={styles.historyMarketInfo}>
+                      <Image source={getMarketLogo(item.mercado)} style={styles.historyMarketLogo} resizeMode="contain" />
+                      <View>
+                        <Text style={styles.historyMarketName}>{item.mercado}</Text>
+                        <Text style={styles.historyDate}>{formatDate(item.data_hora)}</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.historyPrice}>
+                      R$ {Number(item.preco).toFixed(2).replace('.', ',')}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
+
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -534,5 +628,50 @@ const styles = StyleSheet.create({
     color: '#666',
     textDecorationLine: 'line-through',
     marginTop: 2,
+  },
+  historyContainer: {
+    backgroundColor: '#f9f9f9',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  historyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  historyMarketInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  historyMarketLogo: {
+    width: 32,
+    height: 24,
+    marginRight: 12,
+  },
+  historyMarketName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#444',
+  },
+  historyDate: {
+    fontSize: 12,
+    color: '#888',
+  },
+  historyPrice: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#E5293E',
+  },
+  emptyHistory: {
+    color: '#888',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 10,
   },
 });

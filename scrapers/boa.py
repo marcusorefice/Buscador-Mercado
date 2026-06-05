@@ -56,7 +56,7 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retrie
         variables = {
             "locator": [
                 {"key": "id", "value": str(product_id)},
-                {"key": "channel", "value": json.dumps({"salesChannel": SALES_CHANNEL_PRICE, "regionId": REGION_ID}, separators=(',',':'))},
+                {"key": "channel", "value": json.dumps({"salesChannel": SALES_CHANNEL_PRICE, "regionId": ""}, separators=(',',':'))},
                 {"key": "locale", "value": "pt-BR"}
             ]
         }
@@ -70,7 +70,9 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retrie
         for tentativa in range(retries):
             try:
                 res = await session.get(url, timeout=10)
-                res.raise_for_status() # Lança exceção para status 4xx/5xx
+                if res.status_code >= 500:
+                    return 0.0, 0.0, 'N/A'
+                res.raise_for_status() # Lança exceção para status 4xx
                 data = res.json()
                 if not isinstance(data, dict):
                     logger.warning(f"Resposta inesperada (não é um dict) para o produto ID {product_id}.")
@@ -112,8 +114,7 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
         return []
     
     try:
-        # Busca preços detalhados para todos os itens da página
-        tarefas_precos = [_buscar_preco_calculado(session, e['node']['id']) for e in edges]
+        tarefas_precos = [_buscar_preco_calculado(session, e['node']['id']) for e in edges if e.get('node')]
         precos_finais = await asyncio.gather(*tarefas_precos)
 
         lista_final = []
@@ -128,72 +129,63 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
         for edge, (v_varejo, v_atacado, ean_detalhado) in zip(edges, precos_finais):
             try:
                 p = edge['node']
-                # Prioriza o EAN/GTIN da chamada detalhada, pois é mais confiável.
-                ean = ean_detalhado if ean_detalhado not in ['N/A', ''] else str(p.get('ean', 'N/A')).strip()
+                
+                ean = ean_detalhado if ean_detalhado not in ['N/A', '', 'None'] else str(p.get('gtin', '')).strip()
+                if not ean or ean in ['0', 'None', 'N/A']:
+                    ean = str(p.get('ean', 'N/A')).strip()
+                if not ean or ean == 'None':
+                    ean = 'N/A'
+                    
                 nome_cru = p['name'].upper().strip()
                 
-                # Definição de Preços (Fallback para a vitrine se o detalhado falhar)
+                custom_offers = p.get('customOffers') or {}
                 offers_data = p.get('offers') or {}
-                p_v = v_varejo if v_varejo > 0 else float(offers_data.get('highPrice') or 0.0)
-                p_a = v_atacado if v_atacado > 0 else float(offers_data.get('lowPrice') or p_v or 0.0)
+                
+                # Pegamos o p_v preferencialmente da vitrine (customOffers/offers) pois lá ele sempre respeita a fração (ex: 500g).
+                # O v_varejo retornado da API detalhada costuma vir como 1KG, o que causava a duplicação na hora de dividir.
+                p_v = float(custom_offers.get('listPriceCustom') or offers_data.get('highPrice') or 0.0)
+                if p_v <= 0: 
+                    p_v = v_varejo
+                    
+                p_a = v_atacado if v_atacado > 0 else float(custom_offers.get('spotPriceCustom') or offers_data.get('lowPrice') or p_v or 0.0)
 
-                # Correção VTEX: Produtos a granel (ex: Alho kg, Kiwi kg) têm o preço retornado para 100g
-                # O campo unitMultiplier indica essa fração (ex: 0.1). 
-                # Heurística: às vezes o preço de varejo já vem por 1KG (ex: 39,90) e o de atacado por 100g (ex: 2,69).
+                # Produtos a granel (ex: Alho kg, Kiwi kg) têm o preço retornado para a fração (ex: 100g ou 500g)
+                # O campo unitMultiplier indica essa fração. 
+                # Precisamos dividir o preço retornado pela fração para encontrar o preço por KG.
                 unit_multiplier = float(p.get('unitMultiplier') or 1.0)
                 if unit_multiplier > 0 and unit_multiplier < 1.0:
-                    if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
-                        p_v = p_v * unit_multiplier
+                    if p_v == v_varejo and p_v >= (p_a / unit_multiplier) * 0.9:
+                        pass # v_varejo já é 1KG
                     else:
-                        p_v = p_v * unit_multiplier
-                        p_a = p_a * unit_multiplier
+                        p_v = p_v / unit_multiplier
+                        
+                    p_a = p_a / unit_multiplier
 
                 if p_v <= 0 and p_a <= 0: continue
                 if p_v <= 0: p_v = p_a
                 if p_a > 0 and p_v < p_a: p_v = p_a # Garante que varejo não seja menor que atacado
 
-                # Lógica de Condição Especial (Jundiaí)
                 condicao = "1 UN"
-                selos = [d.get('name', '').upper() for d in p.get('clusterHighlights', []) if isinstance(d, dict)]
+                tem_desconto_custom = custom_offers.get('hasDiscount')
                 
-                # Também busca nas promoções da VTEX (teasers)
-                ofertas_array = p.get('offers', {}).get('offers', [])
-                if isinstance(ofertas_array, list):
-                    for oferta in ofertas_array:
-                        teasers = oferta.get('teasers', [])
-                        if isinstance(teasers, list):
-                            selos.extend([t.get('name', '').upper() for t in teasers if isinstance(t, dict)])
-
-                # O "Cartão +Amigo" é na verdade o clube (CPF). Só marcamos como 
-                # EXCLUSIVO CARTÃO BOA se o selo for de "CARTONISTA" ou disser explicitamente "CARTÃO BOA".
-                selo_cartao = any('CARTONISTA' in s or ('CARTÃO' in s and 'BOA' in s) or ('CARTAO' in s and 'BOA' in s) for s in selos)
-                
-                if p_a < p_v:
-                    if selo_cartao:
-                        condicao = "EXCLUSIVO CARTÃO BOA"
-                    else:
-                        condicao = "CLUBE +AMIGO (CPF)"
+                if p_a < p_v or tem_desconto_custom:
+                    condicao = "CLUBE +AMIGO (CPF)"
 
                 # --- TRATAMENTO DE CATEGORIAS (HIERARQUIA) --- #
-                # O 'categoryTree' para o Boa é uma lista de strings de caminho (ex: '/BEBIDAS/').
                 cat_tree = p.get('categoryTree', [])
                 categorias_extraidas = [get_last_path_part(c).upper() for c in cat_tree]
 
-                # LÓGICA DE CATEGORIA: Hierarquia direta a pedido do usuário (Nível 1 -> Categoria, Nível 2 -> Sub, etc.)
                 cat_site_cru = categorias_extraidas[0] if categorias_extraidas and categorias_extraidas[0] else "OUTROS"
                 subcategoria_cru = formatar_nome_categoria(categorias_extraidas[1]) if len(categorias_extraidas) > 1 else "N/A"
                 tipo_prod_cru = formatar_nome_categoria(categorias_extraidas[2]) if len(categorias_extraidas) > 2 else "N/A"
                 
                 if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                 
-                # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
-                # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
                 categoria = cat_site_cru
                 subcategoria = subcategoria_cru
                 tipo_produto = tipo_prod_cru
 
                 # --- LÓGICA DE MEDIDAS (Baseada no FastStore/VTEX) ---
-                # Utilizando apenas a extração inteligente baseada no nome para evitar bugs de "incremento de carrinho" da VTEX
                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
                 unidade_venda = "UN"
@@ -252,12 +244,8 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_clust
     """Extrai vitrine e preços de uma página específica"""
     async with PAGE_SEMAPHORE:
         try:
-            facets = [{"key": "productclusterids", "value": CLUSTER_ID}] if use_cluster else []
-            facets.extend([
-                {"key": "fuzzy", "value": "0"},
-                {"key": "operator", "value": "and"},
-                {"key": "region-id", "value": REGION_ID}
-            ])
+            facets = [{"key": "productClusterIds", "value": CLUSTER_ID}] if use_cluster else []
+            
             sort_order = "score_desc" if use_cluster else "discount_desc"
 
             variables_shelf = {
@@ -271,7 +259,8 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_clust
                     "hasChangeOrder": False, 
                     "hasClubWithRegion": True, 
                     "cmsPostalCode": CEP_JUNDIAI, 
-                    "clubSc": int(SALES_CHANNEL_PRICE)
+                    "clubSc": int(SALES_CHANNEL_PRICE),
+                    "regionId": REGION_ID
                 }
             }
             params_shelf = {
@@ -311,10 +300,10 @@ async def motor_extracao_boa():
     logger.info(f"🚀 Iniciando extração DUPLA para {NOME_MERCADO} Jundiaí (Cluster + Maiores Descontos)...")
     async with AsyncSession(impersonate=IMPERSONATE) as session:
         # Busca 1: Cluster oficial (Garante as ofertas principais)
-        tarefas_cluster = [_extrair_pagina_completa(session, p, use_cluster=True) for p in range(1, MAX_PAGES + 1)]
+        tarefas_cluster = [_extrair_pagina_completa(session, p, use_cluster=True) for p in range(0, MAX_PAGES)]
         
         # Busca 2: Varredura de maiores descontos no site todo (Pega os itens ocultos da VTEX)
-        tarefas_desconto = [_extrair_pagina_completa(session, p, use_cluster=False) for p in range(1, MAX_PAGES + 5)]
+        tarefas_desconto = [_extrair_pagina_completa(session, p, use_cluster=False) for p in range(0, MAX_PAGES + 4)]
         
         resultados = await asyncio.gather(*(tarefas_cluster + tarefas_desconto))
         

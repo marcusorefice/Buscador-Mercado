@@ -24,7 +24,7 @@ logger = setup_logging()
 SPEC_FILE = os.path.join(os.path.dirname(__file__), '..', 'specs', 'dom_olivio_spec.json')
 CONFIG = read_json_file(SPEC_FILE)
 
-NOME_MERCADO = CONFIG.get("market_name", "Dom Olívio")
+NOME_MERCADO = CONFIG.get("market_name", "Dom Olivio")
 BASE_URL_CONFIG = CONFIG.get("base_url", "https://www.domolivio.com.br/").rstrip('/')
 API_ENDPOINT = CONFIG.get("api_endpoint", "/api/graphql")
 URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
@@ -130,14 +130,11 @@ async def motor_extracao_dom_olivio_full():
             ]
             for termo_busca in termos_estrategicos:
                 selected_facets_shelf = [{"key": "fuzzy", "value": "0"}, {"key": "operator", "value": "and"}]
-                if REGION_ID:
-                    selected_facets_shelf.append({"key": "region-id", "value": REGION_ID})
-                    
                 variables_shelf = {
                     "input": {
                         "activeSalesChannel": SALES_CHANNEL_SHELF, 
                         "postalCode": CEP_JUNDIAI, 
-                        "page": 1, "sort": "score_desc", "term": termo_busca, 
+                        "page": 0, "sort": "score_desc", "term": termo_busca, 
                         "selectedFacets": selected_facets_shelf,
                         "hasChangeOrder": False, 
                         "hasClubWithRegion": True, 
@@ -145,6 +142,8 @@ async def motor_extracao_dom_olivio_full():
                         "clubSc": int(SALES_CHANNEL_PRICE)
                     }
                 }
+                if REGION_ID:
+                    variables_shelf["input"]["regionId"] = REGION_ID
                 params_shelf = {
                     "operationName": "GetProductsQuery",
                     "operationHash": GET_PRODUCTS_HASH,
@@ -168,14 +167,14 @@ async def motor_extracao_dom_olivio_full():
                 logger.info(f"   Mapeados {len(departamentos_ativos)} blocos de categorias (Níveis 1, 2 e 3) para varredura massiva.")
             else:
                 logger.warning("   Nenhum departamento retornado nas Facets. Usando Fallback.")
-                departamentos_ativos = [("category-1", d) for d in DEPARTAMENTOS_FALLBACK]
+                departamentos_ativos = [("c", d) for d in DEPARTAMENTOS_FALLBACK]
         except Exception as e:
             logger.warning(f"   Falha ao obter Facets Dinâmicas: {e}. Usando Fallback.")
-            departamentos_ativos = [("category-1", d) for d in DEPARTAMENTOS_FALLBACK]
+            departamentos_ativos = [("c", d) for d in DEPARTAMENTOS_FALLBACK]
 
         async def process_category(chave_dept, dept_slug):
             produtos_categoria = []
-            pagina = 1
+            pagina = 0
             
             while True:
                 async with sem:
@@ -185,9 +184,6 @@ async def motor_extracao_dom_olivio_full():
                             {"key": "fuzzy", "value": "0"},
                             {"key": "operator", "value": "and"}
                         ]
-                        if REGION_ID:
-                            selected_facets_cat.append({"key": "region-id", "value": REGION_ID})
-                            
                         variables_shelf = {
                             "input": {
                                 "activeSalesChannel": SALES_CHANNEL_SHELF, 
@@ -202,6 +198,8 @@ async def motor_extracao_dom_olivio_full():
                                 "clubSc": int(SALES_CHANNEL_PRICE)
                             }
                         }
+                        if REGION_ID:
+                            variables_shelf["input"]["regionId"] = REGION_ID
                         params_shelf = {
                             "operationName": "GetProductsQuery",
                             "operationHash": GET_PRODUCTS_HASH,
@@ -235,30 +233,41 @@ async def motor_extracao_dom_olivio_full():
                         for edge, (v_varejo, v_atacado, ean_detalhado) in zip(edges, precos_finais):
                             try:
                                 p = edge['node']
-                                ean = ean_detalhado if ean_detalhado not in ['N/A', '', 'None'] else str(p.get('ean', 'N/A')).strip()
-                                if ean == 'None': ean = 'N/A'
+                                ean = ean_detalhado if ean_detalhado not in ['N/A', '', 'None'] else str(p.get('gtin', '')).strip()
+                                if not ean or ean in ['0', 'None', 'N/A']:
+                                    ean = str(p.get('ean', 'N/A')).strip()
+                                if not ean or ean == 'None':
+                                    ean = 'N/A'
                                 
                                 nome_cru = p['name'].upper().strip()
                                 
+                                custom_offers = p.get('customOffers') or {}
                                 offers_data = p.get('offers') or {}
-                                p_v = v_varejo if v_varejo > 0 else float(offers_data.get('highPrice') or 0.0)
-                                p_a = v_atacado if v_atacado > 0 else float(offers_data.get('lowPrice') or p_v or 0.0)
+                                
+                                p_v = float(custom_offers.get('listPriceCustom') or offers_data.get('highPrice') or 0.0)
+                                if p_v <= 0: 
+                                    p_v = v_varejo
+                                    
+                                p_a = v_atacado if v_atacado > 0 else float(custom_offers.get('spotPriceCustom') or offers_data.get('lowPrice') or p_v or 0.0)
 
                                 unit_multiplier = float(p.get('unitMultiplier') or 1.0)
                                 if unit_multiplier > 0 and unit_multiplier < 1.0:
-                                    if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
-                                        p_v = p_v * unit_multiplier
+                                    if p_v == v_varejo and p_v >= (p_a / unit_multiplier) * 0.9:
+                                        pass
                                     else:
-                                        p_v = p_v * unit_multiplier
-                                        p_a = p_a * unit_multiplier
+                                        p_v = p_v / unit_multiplier
+                                    
+                                    p_a = p_a / unit_multiplier
 
                                 if p_v <= 0 and p_a <= 0: continue
                                 if p_v <= 0: p_v = p_a
                                 if p_a > 0 and p_v < p_a: p_v = p_a
 
                                 condicao = "1 UN"
-                                if p_a < p_v:
-                                    condicao = "EXCLUSIVO CLUBE DOM (CPF)"
+                                tem_desconto_custom = custom_offers.get('hasDiscount')
+                                
+                                if p_a < p_v or tem_desconto_custom:
+                                    condicao = "CLUBE +AMIGO (CPF)"
 
                                 cat_tree = p.get('categoryTree', [])
                                 categorias_extraidas = []
@@ -276,6 +285,21 @@ async def motor_extracao_dom_olivio_full():
                                 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
 
+                                unidade_venda = "UN"
+                                measurement_unit = str(p.get('measurementUnit', '')).lower()
+                                
+                                if measurement_unit == 'kg':
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                if nome_cru.endswith(" KG"):
+                                    unidade_venda = "KG"
+                                    if qv == "1" and med == "UN":
+                                        qv, med = "1", "KG"
+                                        
+                                nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+
                                 img = p.get('image', [{}])[0].get('url', 'SEM IMAGEM')
                                 if img.startswith("//"): img = "https:" + img
                                 
@@ -289,8 +313,6 @@ async def motor_extracao_dom_olivio_full():
                                         link_pdp = f"https://www.domolivio.com.br/{link_pdp_rel}/p"
                                 else:
                                     link_pdp = ""
-                                
-                                unidade_venda = "KG" if med == "KG" else "UN"
 
                                 produtos_categoria.append({
                                     "Mercado": NOME_MERCADO,
