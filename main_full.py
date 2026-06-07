@@ -96,9 +96,9 @@ async def main():
         # (atacadao_full, "Atacadão (Full)"),
         # (carrefour_full, "Carrefour (Full)"),
         # (boa_full, "Boa Supermercadose (Full)"),
-        # (covabra_full, "Covabra (Full)"), verificar pq n está pegando itens com o agent
-        (dom_olivio_full, "Dom Olívio (Full)"),
-        # (oba_full, "Oba Hortifruti (Full)"), verificar pq n está pegando itens com o agent
+        # (covabra_full, "Covabra (Full)"),
+        # (dom_olivio_full, "Dom Olívio (Full)"),
+        (oba_full, "Oba Hortifruti (Full)"), verificar pq n está pegando itens com o agent
         # (paodeacucar_full, "Pão de Açúcar (Full)"), verificar pq n está pegando itens com o agent
         # (svicente_full, "São Vicente (Full)") #verificar pq pegou somente 1304 produtos
     ]
