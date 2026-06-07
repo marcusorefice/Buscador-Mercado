@@ -23,7 +23,7 @@ URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
 TAMANHO_PAGINA = CONFIG.get("pagination", {}).get("page_size", 200)
 PMID = CONFIG.get("regionalization", {}).get("pmid", "FPP_030|FPV_030|M_030")
 
-CONCURRENCY = 5
+CONCURRENCY = 15
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
 USER_AGENT = CONFIG.get("technical_dependencies", {}).get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 

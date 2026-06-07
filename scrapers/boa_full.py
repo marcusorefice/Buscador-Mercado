@@ -338,11 +338,11 @@ async def motor_extracao_boa_full():
 
         tarefas = [process_category(chave, dept) for chave, dept in departamentos_ativos]
         
-        chunk_size = 5
-        for i in range(0, len(tarefas), chunk_size):
-            chunk = tarefas[i:i+chunk_size]
-            resultados_chunk = await asyncio.gather(*chunk)
-            for res in resultados_chunk:
+        # O semáforo 'sem' já controla a concorrência, não precisamos de chunking artificial.
+        # Isso permite que categorias rápidas terminem e liberem espaço instantaneamente para as próximas.
+        resultados = await asyncio.gather(*tarefas)
+        for res in resultados:
+            if res:
                 lista_final.extend(res)
 
     lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())

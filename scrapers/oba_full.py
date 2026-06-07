@@ -4,6 +4,7 @@ from datetime import datetime
 from curl_cffi.requests import AsyncSession
 from utils import (
     padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file,
+    re,
     CATEGORIAS_IGNORADAS, formatar_nome_categoria
 )
 
@@ -21,7 +22,7 @@ PAGE_SIZE = CONFIG.get("pagination", {}).get("page_size", 50)
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-CONCURRENCY = 5
+CONCURRENCY = 15
 
 def extract_category_ids(category_tree, path=""):
     ids = []
@@ -150,9 +151,9 @@ async def motor_extracao_oba_full():
             return produtos_categoria
 
         tarefas = [process_category(cat_id, cat_name) for cat_id, cat_name in categorias_folhas]
-        for i in range(0, len(tarefas), 5):
-            resultados_chunk = await asyncio.gather(*tarefas[i:i+5])
-            for res in resultados_chunk: lista_final.extend(res)
+        resultados = await asyncio.gather(*tarefas)
+        for res in resultados: 
+            if res: lista_final.extend(res)
 
     lista_unica = list({f"{v['Produto']}_{v['Marca']}": v for v in lista_final}.values())
     logger.info(f"✅ {len(lista_unica)} produtos totais capturados no {NOME_MERCADO} Full Catalog.")

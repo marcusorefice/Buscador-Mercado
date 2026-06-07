@@ -5,6 +5,7 @@ from curl_cffi.requests import AsyncSession
 import logging
 import os
 import httpx
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -128,13 +129,15 @@ async def buscar_ean_duckduckgo(session: AsyncSession, nome_produto: str, marca:
     Busca o EAN usando a versão HTML (Lite) do DuckDuckGo. Grátis e sem limites de API.
     """
     termo_busca = f'{nome_produto} {marca} EAN'.strip()
-    url = "https://html.duckduckgo.com/html/"
+    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(termo_busca)}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://duckduckgo.com/",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     }
     try:
-        response = await session.post(url, data={"q": termo_busca}, headers=headers, timeout=10)
+        response = await session.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             matches = re.findall(r'\b(\d{8}|\d{12,14})\b', response.text)
             for ean_candidato in matches:
@@ -142,8 +145,10 @@ async def buscar_ean_duckduckgo(session: AsyncSession, nome_produto: str, marca:
                     return {
                         "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "DuckDuckGo HTML"
                     }
+        else:
+            logger.warning(f"⚠️ DuckDuckGo bloqueou a requisição (Status: {response.status_code}) para '{termo_busca}'")
     except Exception as e:
-        pass
+        logger.debug(f"Erro no DuckDuckGo: {e}")
     return None
 
 async def buscar_ean_yahoo(session: AsyncSession, nome_produto: str, marca: str = ""):
@@ -166,8 +171,10 @@ async def buscar_ean_yahoo(session: AsyncSession, nome_produto: str, marca: str 
                     return {
                         "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Yahoo Search"
                     }
-    except Exception:
-        pass
+        else:
+            logger.warning(f"⚠️ Yahoo bloqueou a requisição (Status: {response.status_code}) para '{termo_busca}'")
+    except Exception as e:
+        logger.debug(f"Erro no Yahoo: {e}")
     return None
 
 async def buscar_ean_bing(session: AsyncSession, nome_produto: str, marca: str = ""):
@@ -190,8 +197,10 @@ async def buscar_ean_bing(session: AsyncSession, nome_produto: str, marca: str =
                     return {
                         "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Bing Search"
                     }
-    except Exception:
-        pass
+        else:
+            logger.warning(f"⚠️ Bing bloqueou a requisição (Status: {response.status_code}) para '{termo_busca}'")
+    except Exception as e:
+        logger.debug(f"Erro no Bing: {e}")
     return None
 
 async def buscar_ean_cosmos_api(nome_produto: str, marca: str = ""):
@@ -265,27 +274,26 @@ async def tentar_recuperar_ean(nome_produto: str, marca: str = "") -> dict:
     """
     termo_simples = simplificar_termo(nome_produto, marca)
     
+    navegadores = ["chrome100", "chrome110", "chrome120", "edge99", "edge101", "safari15_3", "safari15_5", "safari17_0"]
+    browser_escolhido = random.choice(navegadores)
+    
     try:
-        async with AsyncSession(impersonate="chrome120") as session:
+        async with AsyncSession(impersonate=browser_escolhido) as session:
             # 1. Busca Interna Estruturada: Open Food Facts
             resultado_off = await buscar_ean_open_food_facts(session, nome_produto, marca)
             if resultado_off:
                 return resultado_off
                 
-            # 2. Busca Web Primária: Yahoo Search
-            resultado_yahoo = await buscar_ean_yahoo(session, termo_simples, "")
-            if resultado_yahoo:
-                return resultado_yahoo
-                
-            # 3. Busca Web Secundária: DuckDuckGo
-            resultado_ddg = await buscar_ean_duckduckgo(session, termo_simples, "")
-            if resultado_ddg:
-                return resultado_ddg
-                
-            # 4. Busca Web Extra: Bing Search
-            resultado_bing = await buscar_ean_bing(session, termo_simples, "")
-            if resultado_bing:
-                return resultado_bing
+            # 2, 3 e 4. Busca Web (Sorteio de ordem para dividir a carga do seu IP)
+            buscadores_web = [buscar_ean_yahoo, buscar_ean_duckduckgo, buscar_ean_bing]
+            random.shuffle(buscadores_web)
+            
+            for i, buscador in enumerate(buscadores_web):
+                if i > 0:
+                    await asyncio.sleep(random.uniform(1.0, 2.0)) # Pausa entre as tentativas
+                resultado_web = await buscador(session, termo_simples, "")
+                if resultado_web:
+                    return resultado_web
                 
             # 5. Fallback de Precisão: Cosmos WEB
             resultado_cosmos_web = await buscar_ean_cosmos_web(session, termo_simples)

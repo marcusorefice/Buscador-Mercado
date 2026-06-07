@@ -21,6 +21,7 @@ ARQUIVO_PENDENTES = os.path.join(DATA_DIR, "pendentes_ia.json")
 ARQUIVO_BIBLIOTECA = os.path.join(DATA_DIR, "biblioteca_produtos.json")
 ARQUIVO_PROCESSADOS = os.path.join(DATA_DIR, "itens_prontos_para_comparar.json")
 ARQUIVO_QUARENTENA = os.path.join(DATA_DIR, "quarentena_anomalias.json")
+ARQUIVO_CACHE_WEB = os.path.join(DATA_DIR, "cache_buscas_web.json")
 
 def ean_eh_valido(ean_str):
     ean_str = str(ean_str).strip()
@@ -214,6 +215,14 @@ async def main():
         except Exception as e:
             logger.error(f"❌ Erro ao ler biblioteca: {e}")
 
+    cache_buscas_web = {}
+    if os.path.exists(ARQUIVO_CACHE_WEB):
+        try:
+            with open(ARQUIVO_CACHE_WEB, "r", encoding="utf-8") as f:
+                cache_buscas_web = json.load(f)
+        except Exception as e:
+            logger.error(f"❌ Erro ao ler cache_buscas_web: {e}")
+
     itens_por_ean = {}
     itens_sem_ean = []
     itens_quarentena = []
@@ -238,6 +247,8 @@ async def main():
                 q_dict[k] = q
             with open(ARQUIVO_QUARENTENA, "w", encoding="utf-8") as f:
                 json.dump(list(q_dict.values()), f, ensure_ascii=False, indent=4)
+            with open(ARQUIVO_CACHE_WEB, "w", encoding="utf-8") as f:
+                json.dump(cache_buscas_web, f, ensure_ascii=False, indent=4)
         except Exception as e:
             logger.error(f"   ❌ Erro ao salvar estado intermediário: {e}")
 
@@ -316,63 +327,94 @@ async def main():
 
         sem_recuperacao = asyncio.Semaphore(2)
         progresso_ean = {"atual": 0}
+        buscas_em_andamento = {}
         
         async def recuperar_ean(item):
+            nome = str(item.get("Produto", item.get("nome_comum", ""))).strip()
+            marca_bruta = str(item.get("Marca", item.get("marca", ""))).strip()
+            marca_busca = marca_bruta if marca_bruta.upper() not in ["OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "NONE", "GERAL"] else ""
+            chave_busca = f"{nome.upper()}|{marca_bruta.upper()}"
+            
+            # Lookup Local Imediato (Sem bloquear Semáforo de Web)
+            if chave_busca in local_lookup:
+                progresso_ean["atual"] += 1
+                b_ean, b_item = local_lookup[chave_busca]
+                item["EAN"] = b_ean
+                cat_atual = item.get("Categoria", "GERAL")
+                if not cat_atual or cat_atual in ("GERAL", "OUTROS", "N/A", "None", ""):
+                    item["Categoria"] = b_item.get("Categoria", "OUTROS")
+                    item["subcategoria"] = b_item.get("subcategoria", "N/A")
+                    item["tipo_produto"] = b_item.get("tipo_produto", "N/A")
+                if not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM":
+                    item["Link_Imagem"] = b_item.get("imagem", "")
+                logger.info(f"   ✅ [{progresso_ean['atual']}/{total_sem_ean}] EAN Local (Exato): '{nome}' -> {item['EAN']}")
+                return item
+                
+            # Lookup de Cache Imediato
+            if chave_busca in cache_buscas_web:
+                progresso_ean["atual"] += 1
+                resultado_cache = cache_buscas_web[chave_busca]
+                item["EAN"] = str(resultado_cache["ean"])
+                item["Fonte_EAN"] = resultado_cache.get("fonte", "Web") + " (Cache)"
+                if resultado_cache.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
+                    item["Link_Imagem"] = resultado_cache.get("Link_Imagem", "")
+                logger.info(f"   ⚡ [{progresso_ean['atual']}/{total_sem_ean}] EAN Web (Cache): '{nome}' -> {item['EAN']}")
+                return item
+
+            # Desduplicação Inteligente Lider vs Seguidor
+            if chave_busca not in buscas_em_andamento:
+                buscas_em_andamento[chave_busca] = asyncio.Event()
+                sou_lider = True
+            else:
+                sou_lider = False
+
+            if not sou_lider:
+                await buscas_em_andamento[chave_busca].wait()
+                progresso_ean["atual"] += 1
+                if chave_busca in cache_buscas_web:
+                    resultado_cache = cache_buscas_web[chave_busca]
+                    item["EAN"] = str(resultado_cache["ean"])
+                    item["Fonte_EAN"] = resultado_cache.get("fonte", "Web") + " (Cache Espera)"
+                    if resultado_cache.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
+                        item["Link_Imagem"] = resultado_cache.get("Link_Imagem", "")
+                    logger.info(f"   ⚡ [{progresso_ean['atual']}/{total_sem_ean}] EAN Web (Cache Espera): '{nome}' -> {item['EAN']}")
+                    return item
+                else:
+                    nome_limpo = re.sub(r'[^a-zA-Z0-9]', '', str(nome).upper())
+                    marca_limpa = re.sub(r'[^a-zA-Z0-9]', '', str(marca_bruta).upper())
+                    id_interno = f"INT_{marca_limpa}_{nome_limpo}"[:50]
+                    item["EAN"] = id_interno
+                    item["Fonte_EAN"] = "Gerado_Internamente"
+                    logger.info(f"   ⚙️ [{progresso_ean['atual']}/{total_sem_ean}] EAN Interno gerado (Após Espera): '{nome}' -> {item['EAN']}")
+                    return item
+
             async with sem_recuperacao:
                 progresso_ean["atual"] += 1
                 atual = progresso_ean["atual"]
                 prefixo_progresso = f"[{atual}/{total_sem_ean}]"
                 
                 import random
-                await asyncio.sleep(random.uniform(1.0, 2.5))
-                nome = str(item.get("Produto", item.get("nome_comum", ""))).strip()
-                marca_bruta = str(item.get("Marca", item.get("marca", ""))).strip()
-                marca_busca = marca_bruta if marca_bruta.upper() not in ["OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "NONE", "GERAL"] else ""
-                chave_busca = f"{nome.upper()}|{marca_bruta.upper()}"
-                
-                if chave_busca in local_lookup:
-                    b_ean, b_item = local_lookup[chave_busca]
-                    item["EAN"] = b_ean
-                    cat_atual = item.get("Categoria", "GERAL")
-                    if not cat_atual or cat_atual in ("GERAL", "OUTROS", "N/A", "None", ""):
-                        item["Categoria"] = b_item.get("Categoria", "OUTROS")
-                        item["subcategoria"] = b_item.get("subcategoria", "N/A")
-                        item["tipo_produto"] = b_item.get("tipo_produto", "N/A")
-                    if not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM":
-                        item["Link_Imagem"] = b_item.get("imagem", "")
-                    logger.info(f"   ✅ {prefixo_progresso} EAN Local (Exato): '{nome}' -> {item['EAN']}")
-                    return item
-                    
-                # --- DESATIVADO TEMPORARIAMENTE: Fuzzy Match ---
-                # for b_ean, b_item in biblioteca.items():
-                #     nome_ouro = str(b_item.get("nome_comum", "")).upper()
-                #     if not checar_conflito_anomalia(nome_ouro, nome):
-                #         item["EAN"] = b_ean
-                #         cat_atual = item.get("Categoria", "GERAL")
-                #         if not cat_atual or cat_atual in ("GERAL", "OUTROS", "N/A", "None", ""):
-                #             item["Categoria"] = b_item.get("Categoria", "OUTROS")
-                #             item["subcategoria"] = b_item.get("subcategoria", "N/A")
-                #             item["tipo_produto"] = b_item.get("tipo_produto", "N/A")
-                #         if not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM":
-                #             item["Link_Imagem"] = b_item.get("imagem", "")
-                #         logger.info(f"   🎯 {prefixo_progresso} EAN Local (Fuzzy Match IA): '{nome}' cruzou com '{nome_ouro}' -> {item['EAN']}")
-                #         return item
-                
+                await asyncio.sleep(random.uniform(1.5, 4.0))
+
                 resultado = await tentar_recuperar_ean(nome, marca_busca)
                 if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
+                    cache_buscas_web[chave_busca] = resultado
                     item["EAN"] = str(resultado["ean"])
                     item["Fonte_EAN"] = resultado.get("fonte", "Web")
                     if resultado.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
                         item["Link_Imagem"] = resultado.get("Link_Imagem", "")
                     logger.info(f"   🌐 {prefixo_progresso} EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
-                    return item
-                    
-                nome_limpo = re.sub(r'[^a-zA-Z0-9]', '', str(nome).upper())
-                marca_limpa = re.sub(r'[^a-zA-Z0-9]', '', str(marca_bruta).upper())
-                id_interno = f"INT_{marca_limpa}_{nome_limpo}"[:50]
-                item["EAN"] = id_interno
-                item["Fonte_EAN"] = "Gerado_Internamente"
-                logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
+                else:
+                    nome_limpo = re.sub(r'[^a-zA-Z0-9]', '', str(nome).upper())
+                    marca_limpa = re.sub(r'[^a-zA-Z0-9]', '', str(marca_bruta).upper())
+                    id_interno = f"INT_{marca_limpa}_{nome_limpo}"[:50]
+                    item["EAN"] = id_interno
+                    item["Fonte_EAN"] = "Gerado_Internamente"
+                    logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
+                    logger.warning("   ⏳ Esfriando IP por 5 segundos após bloqueio total...")
+                    await asyncio.sleep(5.0)
+                
+                buscas_em_andamento[chave_busca].set()
                 return item
 
         TAMANHO_LOTE_REC = 50

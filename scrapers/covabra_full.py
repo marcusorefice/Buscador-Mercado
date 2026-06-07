@@ -21,7 +21,7 @@ PAGE_SIZE = CONFIG.get("pagination", {}).get("page_size", 50)
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome110")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-CONCURRENCY = 5
+CONCURRENCY = 20
 
 def extract_category_paths(category_tree, current_path=""):
     """Extrai caminhos completos de categorias folhas recursivamente"""

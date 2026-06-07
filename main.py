@@ -120,14 +120,14 @@ async def main():
     # ETAPA 1: MERCADOS COM DADOS ESTRUTURADOS (API / JSON)
     # ---------------------------------------------------------
     scrapers_api = [
-    #     (atacadao, "Atacadão"),
-    #     (carrefour, "Carrefour"),
-        (boa, "Boa Supermercados"),
-    #     (paodeacucar, "Pão de Açúcar"),
-    #     (covabra, "Covabra"),
-    #     (oba, "Oba Hortifruti"),
+        # (atacadao, "Atacadão"),
+        # (carrefour, "Carrefour"),
+        # (boa, "Boa Supermercados"),
+        # (paodeacucar, "Pão de Açúcar"),
+        # (covabra, "Covabra"),
+        # (oba, "Oba Hortifruti"),
         (dom_olivio, "Dom Olívio"),
-    #     (svicente, "S. Vicente"),
+        # (svicente, "S. Vicente"),
     ]
 
     logger.info("\n=== ETAPA 1: COLETANDO DADOS ESTRUTURADOS (API) ===")

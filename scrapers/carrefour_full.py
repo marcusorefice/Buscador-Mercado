@@ -346,17 +346,14 @@ async def extrair_dados():
 
         logger.info(f"   🚀 Disparando tarefas simultâneas para {len(categorias)} categorias...")
 
-        chunk_size = 8
-        for i in range(0, len(categorias), chunk_size):
-            chunk = categorias[i:i+chunk_size]
-            tarefas = [
-                varrer_categoria(session, cat, sem, agora, indice_reverso)
-                for cat in chunk
-            ]
-            resultados_chunk = await asyncio.gather(*tarefas)
-            for r in resultados_chunk:
-                if r:
-                    lista_final.extend(r)
+        tarefas = [
+            varrer_categoria(session, cat, sem, agora, indice_reverso)
+            for cat in categorias
+        ]
+        resultados = await asyncio.gather(*tarefas)
+        for r in resultados:
+            if r:
+                lista_final.extend(r)
 
         # Dedup por nome+marca+medida (preserva variações de tamanho)
         lista_unica = list({

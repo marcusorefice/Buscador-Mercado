@@ -26,7 +26,7 @@ TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 RATE_LIMIT_DELAY = TECHNICAL_DEPS.get("rate_limit_delay", 0.3)
-CONCURRENCY = 3
+CONCURRENCY = 15
 
 # O Pão de Açúcar usa Linx/GPA API, que precisa de departamento para listar tudo.
 # Vamos buscar os departamentos via API ou fixar os principais se a API falhar.
@@ -164,9 +164,9 @@ async def motor_extracao_paodeacucar_full():
             return produtos_departamento
 
         tarefas = [process_department(dept) for dept in DEPARTAMENTOS_PAO]
-        for i in range(0, len(tarefas), 5):
-            resultados_chunk = await asyncio.gather(*tarefas[i:i+5])
-            for res in resultados_chunk: lista_final.extend(res)
+        resultados = await asyncio.gather(*tarefas)
+        for res in resultados: 
+            if res: lista_final.extend(res)
 
     lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
     logger.info(f"✅ {len(lista_unica)} produtos totais capturados no {NOME_MERCADO} Full Catalog.")
