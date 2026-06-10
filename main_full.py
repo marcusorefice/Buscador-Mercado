@@ -10,7 +10,7 @@ import scrapers.oba_full as oba_full
 import scrapers.paodeacucar_full as paodeacucar_full
 import scrapers.svicente_full as svicente_full
 import scrapers.assai as assai
-from utils import setup_logging, write_json_file, read_json_file
+from utils import setup_logging, write_json_file, read_json_file, exibir_resumo_coleta
 
 logger = setup_logging()
 DATA_DIR = "data"
@@ -18,19 +18,23 @@ ARQUIVO_CHECKPOINT = os.path.join(DATA_DIR, "checkpoint_full.json")
 ARQUIVO_FILA_IA = os.path.join(DATA_DIR, "pendentes_ia.json")
 
 async def processar_mercado_full(modulo, nome_mercado):
+    import time
     try:
         logger.info(f"🛒 Iniciando COLETA COMPLETA de: {nome_mercado}")
+        start_time = time.time()
         produtos_brutos = await modulo.extrair_dados()
+        end_time = time.time()
+        duration = end_time - start_time
         
         if not produtos_brutos:
-            logger.warning(f"⚠️ {nome_mercado}: Nenhum produto capturado.")
-            return nome_mercado, []
+            logger.warning(f"⚠️ {nome_mercado}: Nenhum produto capturado. Tempo: {duration:.2f}s")
+            return nome_mercado, [], duration
         
-        logger.info(f"✅ {nome_mercado}: {len(produtos_brutos)} itens totais do catálogo coletados.")
-        return nome_mercado, produtos_brutos
+        logger.info(f"✅ {nome_mercado}: {len(produtos_brutos)} itens totais do catálogo coletados em {duration:.2f}s.")
+        return nome_mercado, produtos_brutos, duration
     except Exception as e:
         logger.error(f"❌ Erro no scraper full {nome_mercado}: {e}")
-        return nome_mercado, []
+        return nome_mercado, [], 0.0
 
 async def processar_mercado_concorrente(modulo, nome_mercado_label, mercados_concluidos, resumo_geral, lock, sem, progresso_mercados):
     async with sem:
@@ -42,7 +46,7 @@ async def processar_mercado_concorrente(modulo, nome_mercado_label, mercados_con
                 progresso_mercados["atual"] += 1
             return
             
-        _, produtos_brutos = await processar_mercado_full(modulo, nome_mercado_label)
+        _, produtos_brutos, duration = await processar_mercado_full(modulo, nome_mercado_label)
         
         async with lock:
             progresso_mercados["atual"] += 1
@@ -60,7 +64,7 @@ async def processar_mercado_concorrente(modulo, nome_mercado_label, mercados_con
                 mc_atualizado = set(checkpoint.get("mercados_concluidos", []))
                 totais_atualizado = checkpoint.get("totais", {})
 
-                totais_atualizado[nome_mercado_label] = len(produtos_brutos)
+                totais_atualizado[nome_mercado_label] = {"qtd": len(produtos_brutos), "tempo": duration}
                 mc_atualizado.add(mercado_base)
                 
                 checkpoint["mercados_concluidos"] = list(mc_atualizado)
@@ -68,7 +72,7 @@ async def processar_mercado_concorrente(modulo, nome_mercado_label, mercados_con
                 write_json_file(ARQUIVO_CHECKPOINT, checkpoint)
                 
                 # Atualiza as variáveis em memória para o log final
-                resumo_geral[nome_mercado_label] = len(produtos_brutos)
+                resumo_geral[nome_mercado_label] = {"qtd": len(produtos_brutos), "tempo": duration}
                 mercados_concluidos.add(mercado_base)
                 
                 # 4. Joga os dados desse mercado direto na fila do passo 4 (IA / DB)!
@@ -76,7 +80,7 @@ async def processar_mercado_concorrente(modulo, nome_mercado_label, mercados_con
                 fila_ia.extend(produtos_brutos)
                 write_json_file(ARQUIVO_FILA_IA, fila_ia)
                 
-            logger.info(f"💾 Progresso salvo! [{idx_atual}/{total_m}] {len(produtos_brutos)} itens do {mercado_base} enviados para o 'pendentes_ia.json'.")
+            logger.info(f"💾 Progresso salvo! [{idx_atual}/{total_m}] {len(produtos_brutos)} itens do {mercado_base} enviados para o 'pendentes_ia.json'. Tempo: {duration:.2f}s")
 
 async def main():
     logger.info(f"🚀 INICIANDO SCRAPERS FULL CATALOG - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
@@ -93,14 +97,14 @@ async def main():
         logger.info(f"🔄 Retomando extração. Mercados já seguros no disco: {', '.join(mercados_concluidos)}")
 
     scrapers_full = [
-        # (atacadao_full, "Atacadão (Full)"),
-        # (carrefour_full, "Carrefour (Full)"),
-        # (boa_full, "Boa Supermercadose (Full)"),
-        # (covabra_full, "Covabra (Full)"),
-        # (dom_olivio_full, "Dom Olívio (Full)"),
-        (oba_full, "Oba Hortifruti (Full)"), verificar pq n está pegando itens com o agent
-        # (paodeacucar_full, "Pão de Açúcar (Full)"), verificar pq n está pegando itens com o agent
-        # (svicente_full, "São Vicente (Full)") #verificar pq pegou somente 1304 produtos
+        (atacadao_full, "Atacadão (Full)"),
+        (carrefour_full, "Carrefour (Full)"),
+        (boa_full, "Boa Supermercadose (Full)"),
+        (covabra_full, "Covabra (Full)"),
+        (dom_olivio_full, "Dom Olívio (Full)"),
+        (oba_full, "Oba Hortifruti (Full)"),
+        (paodeacucar_full, "Pão de Açúcar (Full)"),
+        (svicente_full, "São Vicente (Full)") #verificar pq pegou somente 1304 produtos
     ]
 
     lock = asyncio.Lock()
@@ -121,9 +125,7 @@ async def main():
     logger.info("👉 PRÓXIMO PASSO: Execute 'python 4_resolver_pendentes.py' e depois o passo 5 para enviar ao Banco de Dados!")
     logger.info("="*50 + "\n")
 
-    logger.info("📊 RESUMO FINAL DA COLETA DE CATÁLOGO:")
-    for m, q in resumo_geral.items():
-        logger.info(f"  - {m}: {q} produtos coletados")
+    exibir_resumo_coleta(resumo_geral, logger)
 
 if __name__ == "__main__":
     if os.name == 'nt':

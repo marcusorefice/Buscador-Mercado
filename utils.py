@@ -286,3 +286,44 @@ async def comparar_dados_produto_off(ean: str):
     from curl_cffi.requests import AsyncSession
     async with AsyncSession(impersonate="chrome120") as session:
          return await buscar_dados_por_ean_off(session, str(ean))
+
+def exibir_resumo_coleta(resumo_geral, logger_instance):
+    """
+    Exibe o relatório final de coleta formatando o tempo em minutos e segundos.
+    Espera um dicionário resumo_geral onde as chaves são os nomes dos mercados
+    e os valores são dicionários {"qtd": X, "tempo": Y_segundos}.
+    """
+    logger_instance.info("📊 RESUMO FINAL DA COLETA:")
+    total_time_seconds = 0
+    total_items = 0
+    
+    for mercado, info in resumo_geral.items():
+        if isinstance(info, dict):
+            qtd = info.get("qtd", 0)
+            tempo_s = info.get("tempo", 0.0)
+        else:
+            qtd = info
+            tempo_s = 0.0
+            
+        total_time_seconds += tempo_s
+        total_items += qtd
+        
+        minutos = int(tempo_s // 60)
+        segundos = int(tempo_s % 60)
+        
+        if minutos > 0:
+            tempo_formatado = f"{minutos}m {segundos}s"
+        else:
+            tempo_formatado = f"{segundos}s"
+            
+        logger_instance.info(f"  - {mercado}: {qtd} produtos coletados em {tempo_formatado}")
+        
+    minutos_totais = int(total_time_seconds // 60)
+    segundos_totais = int(total_time_seconds % 60)
+    
+    if minutos_totais > 0:
+        tempo_total_formatado = f"{minutos_totais}m {segundos_totais}s"
+    else:
+        tempo_total_formatado = f"{segundos_totais}s"
+        
+    logger_instance.info(f"  > TOTAL GERAL: {total_items} produtos em ~{tempo_total_formatado} (tempo corrido pode ser menor devido ao paralelismo)")

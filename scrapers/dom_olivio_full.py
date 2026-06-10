@@ -4,6 +4,7 @@ import json
 import urllib.parse
 import warnings
 import re
+import base64
 from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
@@ -39,19 +40,34 @@ API_HASHES = CONFIG.get("api_hashes", {})
 GET_PRODUCTS_HASH = API_HASHES.get("get_products", "ae50c5a735b1464f0ba48be4f2b32f7289ce6284")
 CLIENT_PRODUCT_HASH = API_HASHES.get("client_product", "47aa22eb750cb2c529e5eeafb921bfeadb67db71")
 
-API_SEMAPHORE = asyncio.Semaphore(10)
+API_SEMAPHORE = asyncio.Semaphore(40)
 
 TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
 IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
-CONCURRENCY = 5
+CONCURRENCY = 10
 
 DEPARTAMENTOS_FALLBACK = [
-    "alimentos", "bebidas", "carnes-e-aves", "frios-e-laticinios", 
+    "bebidas", "carnes-e-aves", "frios-e-laticinios", 
     "hortifruti", "limpeza", "higiene-e-beleza", "padaria", 
     "congelados", "pet-shop", "saudaveis", "bebes"
 ]
 
-async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retries=3, delay=1.0) -> tuple[float, float, str]:
+def _gerar_headers_vtex(region_id):
+    segment_data = {
+        "campaigns": None, "channel": "1", "priceTables": None, "regionId": region_id,
+        "utm_campaign": None, "utm_source": None, "utmi_campaign": None,
+        "currencyCode": "BRL", "currencySymbol": "R$", "countryCode": "BRA",
+        "cultureInfo": "pt-BR", "admin_cultureInfo": "pt-BR", "channelPrivacy": "public"
+    }
+    segment_b64 = base64.b64encode(json.dumps(segment_data).encode('utf-8')).decode('utf-8')
+    return {
+        "accept": "*/*",
+        "accept-language": "pt-BR,pt;q=0.9",
+        "cookie": f"vtex_segment={segment_b64};",
+        "referer": "https://www.domolivio.com.br/"
+    }
+
+async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retries=2, delay=0.5) -> tuple[float, float, str]:
     """Consulta o preço real e o EAN/GTIN com um sistema de retentativas para erros de servidor."""
     async with API_SEMAPHORE:
         variables = {
@@ -70,7 +86,8 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retrie
         
         for tentativa in range(retries):
             try:
-                res = await session.get(url, timeout=10)
+                # ⏱️ Reduzido de 10s para 5s para não prender o scraper se a rede oscilar
+                res = await session.get(url, timeout=5)
                 res.raise_for_status()
                 data = res.json()
                 if not isinstance(data, dict):
@@ -104,6 +121,27 @@ async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retrie
 
         return 0.0, 0.0, 'N/A'
 
+async def fetch_ean_from_pdp(session: AsyncSession, url_pdp: str, sem_pdp: asyncio.Semaphore) -> str:
+    if not url_pdp: return "N/A"
+    async with sem_pdp:
+        try:
+            res = await session.get(url_pdp, timeout=15)
+            if res.status_code == 200:
+                todos_eans = re.findall(r'\b(789\d{10}|790\d{10})\b', res.text)
+                if todos_eans: return todos_eans[0]
+        except Exception: pass
+    return "N/A"
+
+async def enrich_eans_from_pdps(session: AsyncSession, lista_produtos: list):
+    sem_pdp = asyncio.Semaphore(15)
+    produtos_sem_ean = [p for p in lista_produtos if str(p.get('EAN', '')).startswith('INT_') or p.get('EAN') == 'N/A']
+    if not produtos_sem_ean: return
+    logger.info(f"   🔍 Buscando EAN em {len(produtos_sem_ean)} páginas de produtos (Arrastão HTML)...")
+    tasks = [fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp) for p in produtos_sem_ean]
+    resultados = await asyncio.gather(*tasks)
+    for p, ean in zip(produtos_sem_ean, resultados):
+        if ean != 'N/A': p['EAN'] = ean
+
 async def motor_extracao_dom_olivio_full():
     logger.info(f"🚀 Iniciando extração FULL CATALOG para {NOME_MERCADO}...")
     lista_final = []
@@ -111,7 +149,8 @@ async def motor_extracao_dom_olivio_full():
 
     sem = asyncio.Semaphore(CONCURRENCY)
 
-    async with AsyncSession(impersonate=IMPERSONATE) as session:
+    headers = _gerar_headers_vtex(REGION_ID)
+    async with AsyncSession(impersonate=IMPERSONATE, headers=headers) as session:
         # 1. Obter os sub-departamentos via Facets GraphQL (Varredura Profunda)
         logger.info("   Mapeando sub-departamentos via Facets GraphQL (Varredura Profunda)...")
         departamentos_ativos = []
@@ -128,30 +167,40 @@ async def motor_extracao_dom_olivio_full():
                 "shampoo", "sabonete", "creme", "desodorante", "fralda",
                 "racao", "petisco", ""
             ]
-            for termo_busca in termos_estrategicos:
-                selected_facets_shelf = [{"key": "fuzzy", "value": "0"}, {"key": "operator", "value": "and"}]
-                variables_shelf = {
-                    "input": {
-                        "activeSalesChannel": SALES_CHANNEL_SHELF, 
-                        "postalCode": CEP_JUNDIAI, 
-                        "page": 0, "sort": "score_desc", "term": termo_busca, 
-                        "selectedFacets": selected_facets_shelf,
-                        "hasChangeOrder": False, 
-                        "hasClubWithRegion": True, 
-                        "cmsPostalCode": CEP_JUNDIAI, 
-                        "clubSc": int(SALES_CHANNEL_PRICE)
+            async def buscar_facets(termo):
+                try:
+                    selected_facets_shelf = [{"key": "fuzzy", "value": "0"}, {"key": "operator", "value": "and"}]
+                    variables_shelf = {
+                        "input": {
+                            "activeSalesChannel": SALES_CHANNEL_SHELF, 
+                            "postalCode": CEP_JUNDIAI, 
+                            "page": 0, "sort": "score_desc", "term": termo, 
+                            "selectedFacets": selected_facets_shelf,
+                            "hasChangeOrder": False, 
+                            "hasClubWithRegion": True, 
+                            "cmsPostalCode": CEP_JUNDIAI, 
+                            "clubSc": int(SALES_CHANNEL_PRICE)
+                        }
                     }
-                }
-                if REGION_ID:
-                    variables_shelf["input"]["regionId"] = REGION_ID
-                params_shelf = {
-                    "operationName": "GetProductsQuery",
-                    "operationHash": GET_PRODUCTS_HASH,
-                    "variables": json.dumps(variables_shelf, separators=(',', ':'))
-                }
-                res_facets = await session.get(f"{URL_BASE}?" + urllib.parse.urlencode(params_shelf), timeout=20)
-                if res_facets.status_code == 200:
-                    data_facets = res_facets.json()
+                    if REGION_ID:
+                        variables_shelf["input"]["regionId"] = REGION_ID
+                    params_shelf = {
+                        "operationName": "GetProductsQuery",
+                        "operationHash": GET_PRODUCTS_HASH,
+                        "variables": json.dumps(variables_shelf, separators=(',', ':'))
+                    }
+                    res_facets = await session.get(f"{URL_BASE}?" + urllib.parse.urlencode(params_shelf), timeout=15)
+                    if res_facets.status_code == 200:
+                        return res_facets.json()
+                except:
+                    pass
+                return None
+
+            tarefas_buscas = [buscar_facets(t) for t in termos_estrategicos]
+            resultados_buscas = await asyncio.gather(*tarefas_buscas)
+
+            for data_facets in resultados_buscas:
+                if data_facets:
                     facets_array = data_facets.get('data', {}).get('getProducts', {}).get('data', {}).get('facets', [])
                     for f in facets_array:
                         key_str = str(f.get('key', '')).lower()
@@ -172,9 +221,13 @@ async def motor_extracao_dom_olivio_full():
             logger.warning(f"   Falha ao obter Facets Dinâmicas: {e}. Usando Fallback.")
             departamentos_ativos = [("c", d) for d in DEPARTAMENTOS_FALLBACK]
 
+        produtos_vistos = set()
+
         async def process_category(chave_dept, dept_slug):
             produtos_categoria = []
             pagina = 0
+            
+            logger.info(f"   📂 Iniciando varredura no departamento: {dept_slug.upper()}")
             
             while True:
                 async with sem:
@@ -222,7 +275,17 @@ async def motor_extracao_dom_olivio_full():
                         if not edges:
                             break
 
-                        tarefas_precos = [_buscar_preco_calculado(session, e['node']['id']) for e in edges]
+                        if pagina % 3 == 0:
+                            logger.info(f"   ⏳ [{dept_slug.upper()}] Lendo página {pagina} (Total parcial: {len(produtos_categoria)} itens)...")
+
+                        novos_edges = []
+                        for e in edges:
+                            pid = e['node']['id']
+                            if pid not in produtos_vistos:
+                                produtos_vistos.add(pid)
+                                novos_edges.append(e)
+
+                        tarefas_precos = [_buscar_preco_calculado(session, e['node']['id']) for e in novos_edges]
                         precos_finais = await asyncio.gather(*tarefas_precos)
 
                         def get_last_path_part(path_str: str) -> str:
@@ -230,14 +293,26 @@ async def motor_extracao_dom_olivio_full():
                             parts = [path_str.split('/')[-1]] if '/' not in path_str else [part for part in path_str.split('/') if part]
                             return parts[-1] if parts else ""
 
-                        for edge, (v_varejo, v_atacado, ean_detalhado) in zip(edges, precos_finais):
+                        for edge, (v_varejo, v_atacado, ean_detalhado) in zip(novos_edges, precos_finais):
                             try:
                                 p = edge['node']
-                                ean = ean_detalhado if ean_detalhado not in ['N/A', '', 'None'] else str(p.get('gtin', '')).strip()
-                                if not ean or ean in ['0', 'None', 'N/A']:
-                                    ean = str(p.get('ean', 'N/A')).strip()
-                                if not ean or ean == 'None':
-                                    ean = 'N/A'
+                                items = p.get('items', [])
+                                ean_from_items = ''
+                                if items and isinstance(items, list):
+                                    ean_from_items = str(items[0].get('ean', '')).strip()
+                                    if (not ean_from_items or ean_from_items == '0' or ean_from_items == 'None' or len(ean_from_items) < 8) and items[0].get('referenceId'):
+                                        for ref in items[0].get('referenceId', []):
+                                            if ref.get('Key') == 'RefId':
+                                                ean_from_items = str(ref.get('Value', '')).strip()
+                                
+                                if ean_from_items and ean_from_items not in ['0', 'None', 'N/A'] and len(ean_from_items) >= 8:
+                                    ean = ean_from_items
+                                else:
+                                    ean = ean_detalhado if ean_detalhado not in ['N/A', '', 'None'] and len(ean_detalhado) >= 8 else str(p.get('gtin', '')).strip()
+                                    if not ean or ean in ['0', 'None', 'N/A'] or len(ean) < 8:
+                                        ean = str(p.get('ean', 'N/A')).strip()
+                                    if not ean or ean == 'None':
+                                        ean = 'N/A'
                                 
                                 nome_cru = p['name'].upper().strip()
                                 
@@ -335,6 +410,10 @@ async def motor_extracao_dom_olivio_full():
                             break
                             
                         pagina += 1
+                        
+                        if pagina > 100:
+                            logger.warning(f"   ⚠️ Limite de segurança de 100 páginas atingido em '{dept_slug}'.")
+                            break
                     except Exception as e:
                         logger.error(f"Erro no departamento {dept_slug}: {e}")
                         break
@@ -351,7 +430,10 @@ async def motor_extracao_dom_olivio_full():
             for res in resultados_chunk:
                 lista_final.extend(res)
 
-    lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
+        lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
+        
+        await enrich_eans_from_pdps(session, lista_unica)
+
     logger.info(f"✅ Extração FULL concluída. {len(lista_unica)} produtos únicos capturados no {NOME_MERCADO}.")
     return lista_unica
 

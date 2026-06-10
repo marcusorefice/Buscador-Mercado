@@ -325,7 +325,7 @@ async def main():
             if b_nome:
                 local_lookup[f"{b_nome}|{b_marca}"] = (b_ean, b_item)
 
-        sem_recuperacao = asyncio.Semaphore(2)
+        sem_recuperacao = asyncio.Semaphore(4)
         progresso_ean = {"atual": 0}
         buscas_em_andamento = {}
         
@@ -360,7 +360,7 @@ async def main():
                     item["Link_Imagem"] = resultado_cache.get("Link_Imagem", "")
                 logger.info(f"   ⚡ [{progresso_ean['atual']}/{total_sem_ean}] EAN Web (Cache): '{nome}' -> {item['EAN']}")
                 return item
-
+                
             # Desduplicação Inteligente Lider vs Seguidor
             if chave_busca not in buscas_em_andamento:
                 buscas_em_andamento[chave_busca] = asyncio.Event()
@@ -394,7 +394,7 @@ async def main():
                 prefixo_progresso = f"[{atual}/{total_sem_ean}]"
                 
                 import random
-                await asyncio.sleep(random.uniform(1.5, 4.0))
+                await asyncio.sleep(random.uniform(0.5, 1.5))
 
                 resultado = await tentar_recuperar_ean(nome, marca_busca)
                 if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
@@ -411,13 +411,13 @@ async def main():
                     item["EAN"] = id_interno
                     item["Fonte_EAN"] = "Gerado_Internamente"
                     logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
-                    logger.warning("   ⏳ Esfriando IP por 5 segundos após bloqueio total...")
-                    await asyncio.sleep(5.0)
+                    logger.warning("   ⏳ Esfriando IP por 3.0s após falha na busca web...")
+                    await asyncio.sleep(3.0)
                 
                 buscas_em_andamento[chave_busca].set()
                 return item
 
-        TAMANHO_LOTE_REC = 50
+        TAMANHO_LOTE_REC = 200
         lotes_recuperacao = [itens_sem_ean[i:i + TAMANHO_LOTE_REC] for i in range(0, len(itens_sem_ean), TAMANHO_LOTE_REC)]
         itens_sem_ean_restantes = []
         
@@ -449,7 +449,7 @@ async def main():
     eans_com_falha = set()
 
     if eans_para_processar:
-        TAMANHO_LOTE = 50
+        TAMANHO_LOTE = 500
         logger.info(f"🚀 Processando {total_processar} novos EANs...")
         semaphore = asyncio.Semaphore(20)
         itens_processados_count = 0

@@ -20,8 +20,9 @@ NOME_MERCADO = CONFIG.get("market_name", "São Vicente")
 BASE_URL_CONFIG = CONFIG.get("base_url", "https://www.svicente.com.br/").rstrip('/')
 API_ENDPOINT = CONFIG.get("api_endpoint", "/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Search-UpdateGrid")
 URL_BASE = f"{BASE_URL_CONFIG}{API_ENDPOINT}"
-TAMANHO_PAGINA = CONFIG.get("pagination", {}).get("page_size", 200)
-PMID = CONFIG.get("regionalization", {}).get("pmid", "FPP_030|FPV_030|M_030")
+# Limite rígido da Demandware por grade. Respeitar isso evita saltos cegos na paginação
+TAMANHO_PAGINA_REAL = 48 
+IS_TEST_MODE = False # Define como True para baixar uma amostra menor
 
 CONCURRENCY = 15
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
@@ -45,6 +46,27 @@ def extrair_ean_pela_foto(url_imagem):
     if match and ean_eh_valido(match.group(1)):
         return match.group(1)
     return None
+
+async def fetch_ean_from_product_page(session, product_id, semaforo_pdp):
+    """Busca o EAN na página de detalhes como último recurso (Alta Precisão)."""
+    async with semaforo_pdp:
+        if not product_id:
+            return None
+        url = f"https://www.svicente.com.br/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Product-Show?pid={product_id}"
+        try:
+            resp = await session.get(url, timeout=15)
+            if resp.status_code == 200:
+                match = re.search(r'<td>C&oacute;digo</td>\s*<td>(\d{13,14})</td>', resp.text, re.IGNORECASE)
+                if match: return match.group(1)
+
+                match2 = re.search(r'(?:gtin\d*|ean|sku)["\s:]+["\s]*(\d{13})', resp.text, re.IGNORECASE)
+                if match2: return match2.group(1)
+
+                match_any = re.search(r'(789\d{10}|790\d{10})', resp.text)
+                if match_any: return match_any.group(1)
+        except Exception:
+            pass
+        return None
 
 async def get_category_links(session):
     try:
@@ -76,14 +98,18 @@ async def fetch_true_cgid(session, url_path, cat_name, semaforo):
         except Exception: pass
         return None, cat_name
 
-async def buscar_pagina_svicente(session, cgid, start):
-    params = {"cgid": cgid, "start": start, "sz": TAMANHO_PAGINA}
-    try:
-        response = await session.get(URL_BASE, params=params, headers=headers, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-    except Exception as e:
-        logger.error(f"  [São Vicente] Erro na página {start} (CGID: {cgid}): {e}")
+async def buscar_pagina_svicente(session, cgid, start, retries=3):
+    # SEM PMID! Isso garante que a API retorne o catálogo completo, não apenas o que está em promoção.
+    params = {"cgid": cgid, "start": start, "sz": TAMANHO_PAGINA_REAL}
+    for tentativa in range(retries):
+        try:
+            response = await session.get(URL_BASE, params=params, headers=headers, timeout=20)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            if tentativa == retries - 1:
+                logger.error(f"  [São Vicente] Erro na página {start} (CGID: {cgid}): {e}")
+            await asyncio.sleep(1)
     return None
 
 async def motor_extracao_svicente_full():
@@ -100,18 +126,45 @@ async def motor_extracao_svicente_full():
         resultados_cgid = await asyncio.gather(*tarefas_cgid)
         cgids_validos = [(cgid, name) for cgid, name in resultados_cgid if cgid and name not in CATEGORIAS_IGNORADAS]
 
+        if IS_TEST_MODE:
+            cgids_validos = cgids_validos[:2] # Processa apenas 2 categorias para teste
+            logger.info(f"⚠️ MODO DE TESTE ATIVADO: Processando apenas {len(cgids_validos)} categorias.")
+
         logger.info(f"   Iniciando varredura em {len(cgids_validos)} categorias...")
 
-        async def process_category(cgid, cat_nome):
-            produtos_categoria = []
-            start = 0
-            while True:
-                async with sem:
-                    data = await buscar_pagina_svicente(session, cgid, start)
-                    if not data or not data.get('productSearch'): break
+        async def process_category(session, cgid, cat_nome, semaforo_api):
+            async with semaforo_api:
+                data_inicial = await buscar_pagina_svicente(session, cgid, 0)
+                if not data_inicial or not data_inicial.get('productSearch'):
+                    return []
                     
-                    produtos_json = data.get('productsSearchResult', [])
-                    if not produtos_json: break
+                total_produtos = data_inicial.get('productSearch', {}).get('count', 0)
+                if total_produtos == 0: return []
+                
+                paginas_a_processar = [data_inicial]
+                
+                # Dispara o restante das páginas da categoria em paralelo!
+                if total_produtos > TAMANHO_PAGINA_REAL:
+                    max_produtos = total_produtos
+                    if IS_TEST_MODE:
+                        max_produtos = min(total_produtos, TAMANHO_PAGINA_REAL * 2) # Limita a 2 páginas por categoria no teste
+                        logger.info(f"⚠️ MODO DE TESTE: {cat_nome} limitado a {max_produtos} produtos (de {total_produtos}).")
+                    
+                    tarefas = [buscar_pagina_svicente(session, cgid, start) for start in range(TAMANHO_PAGINA_REAL, max_produtos, TAMANHO_PAGINA_REAL)]
+                    # Processa blocos de 5 páginas para não gerar engarrafamento
+                    for i in range(0, len(tarefas), 5):
+                        lote = tarefas[i:i+5]
+                        resultados_restantes = await asyncio.gather(*lote)
+                        paginas_a_processar.extend(resultados_restantes)
+                
+                produtos_categoria = []
+                produtos_para_processar = []
+                pdp_tasks = []
+                semaforo_pdp = asyncio.Semaphore(15)
+
+                for data_pagina in paginas_a_processar:
+                    if not data_pagina: continue
+                    produtos_json = data_pagina.get('productsSearchResult', [])
                     
                     for p in produtos_json:
                         nome_bruto = p.get('productName', p.get('name', '')).upper().strip()
@@ -130,72 +183,121 @@ async def motor_extracao_svicente_full():
                         if not ean or len(ean) < 12:
                             sku = str(p.get('id', '')).strip()
                             if len(sku) == 13 and sku.isdigit(): ean = sku
+                        if not ean or len(ean) < 12:
+                            custom_attrs = p.get('customAttributes', {})
+                            if isinstance(custom_attrs, dict):
+                                ean_from_attr = custom_attrs.get('ean', '') or custom_attrs.get('gtin', '')
+                                if ean_from_attr: ean = str(ean_from_attr).strip()
                         if (not ean or len(ean) < 12) and img_url:
                             ean_from_img = extrair_ean_pela_foto(img_url)
                             if ean_from_img: ean = ean_from_img
-                        if not ean or ean == 'None': ean = 'N/A'
+                            
+                        precisa_pdp = not ean or len(ean) < 12
+                        if precisa_pdp:
+                            pdp_tasks.append(fetch_ean_from_product_page(session, p.get('id'), semaforo_pdp))
+                            
+                        produtos_para_processar.append({
+                            "raw_data": p, "nome_bruto": nome_bruto, "img_url": img_url,
+                            "ean_preliminar": ean, "precisa_pdp": precisa_pdp
+                        })
 
-                        try:
-                            price_info = p.get('price', {})
-                            if not price_info: continue
-                            
-                            p_v = float(price_info.get('list', {}).get('value', 0.0) or price_info.get('sales', {}).get('value', 0.0))
-                            p_a = float(price_info.get('sales', {}).get('value', 0.0))
-                            
-                            if p_a <= 0: continue
-                            if p_v <= 0 or p_v < p_a: p_v = p_a
-
-                            nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
-                            
-                            measurement_unit = str(p.get('measurementUnit', '')).lower()
-                            if measurement_unit == 'kg' or nome_bruto.upper().endswith(' KG'):
-                                unid_venda = "KG"
-                            else:
-                                unid_venda = "UN"
-
-                            if unid_venda == "KG" and qv == "1" and med == "UN":
-                                qv, med = "1", "KG"
-                                
-                            nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
-                            
-                            marca = str(p.get('brand', 'OUTROS')).upper()
-                            
-                            link_pdp_rel = p.get('url', '')
-                            pid = p.get('id')
-                            if link_pdp_rel:
-                                if link_pdp_rel.startswith('http'):
-                                    link_pdp = link_pdp_rel
-                                else:
-                                    link_pdp = f"https://www.svicente.com.br{link_pdp_rel if link_pdp_rel.startswith('/') else '/' + link_pdp_rel}"
-                            elif pid:
-                                link_pdp = f"https://www.svicente.com.br/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Product-Show?pid={pid}"
-                            else:
-                                link_pdp = ""
-
-                            produtos_categoria.append({
-                                "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_nome,
-                                "Produto": nome_limpo, "Marca": marca,
-                                "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
-                                "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
-                                "Qtd_Valor": qv, "Medida": med, "Unidade": unid_venda, "Condição": "1 UN",
-                                "Data_Hora": agora, "Link_Imagem": img_url if img_url else "SEM IMAGEM",
-                                "Link_PDP": link_pdp
-                            })
-                        except: continue
+                resultados_pdp = []
+                if pdp_tasks:
+                    resultados_pdp = await asyncio.gather(*pdp_tasks)
                     
-                    if len(produtos_json) < TAMANHO_PAGINA: break
-                    start += TAMANHO_PAGINA
-            
-            logger.info(f"   - Categoria {cat_nome}: {len(produtos_categoria)} itens capturados.")
-            return produtos_categoria
+                pdp_index = 0
+                for item in produtos_para_processar:
+                    p = item["raw_data"]
+                    nome_bruto = item["nome_bruto"]
+                    img_url = item["img_url"]
+                    ean = item["ean_preliminar"]
+                    
+                    if item["precisa_pdp"]:
+                        ean_from_page = resultados_pdp[pdp_index]
+                        pdp_index += 1
+                        if ean_from_page: ean = ean_from_page
+                    
+                    if not ean or len(ean) < 12: ean = "N/A"
 
-        tarefas_cat = [process_category(cgid, cat_nome) for cgid, cat_nome in cgids_validos]
-        chunk_size = 3
-        for i in range(0, len(tarefas_cat), chunk_size):
-            chunk = tarefas_cat[i:i+chunk_size]
-            resultados_chunk = await asyncio.gather(*chunk)
-            for res in resultados_chunk:
-                lista_final.extend(res)
+                    try:
+                        price_data = p.get('price', {})
+                        p_venda = float(price_data.get('sales', {}).get('value', 0))
+                        p_tabela = float(price_data.get('list', {}).get('value', p_venda)) if price_data.get('list') else p_venda
+
+                        valor_varejo = p_tabela
+                        valor_atacado = p_venda
+                        condicao = "1 UN"
+
+                        flags = p.get('flagtypes', [])
+                        for f in flags:
+                            flag_type = f.get('flagType')
+                            if flag_type in ["facil-pra-voce", "facil-pra-pagar"]:
+                                raw_val = f.get('valueFlagType', "")
+                                nome_condicao = "CARTÃO FÁCIL" if flag_type == "facil-pra-pagar" else "CLUBE SV"
+                                if raw_val:
+                                    try:
+                                        p_clube = float(raw_val.replace('R$', '').replace('.', '').replace(',', '.').strip())
+                                        valor_varejo = p_venda
+                                        valor_atacado = p_clube
+                                        condicao = nome_condicao
+                                    except: condicao = nome_condicao
+                                else: condicao = nome_condicao
+
+                        if condicao == "1 UN":
+                            if promos := p.get('promotions', []):
+                                for pr in promos:
+                                    msg = pr.get('calloutMsg', '').replace('<br/>', ' ').strip().upper()
+                                    if any(x in msg for x in ["LEVE", "PAGUE", "A PARTIR"]):
+                                        condicao = msg
+                                        break
+
+                        # Segurança para não descartar indevidamente itens sem promoção
+                        if valor_atacado <= 0: continue
+                        if valor_varejo <= 0 or valor_varejo < valor_atacado: valor_varejo = valor_atacado
+
+                        marca = str(p.get('brand', 'OUTROS')).upper()
+                        
+                        link_pdp_rel = p.get('url', '')
+                        pid = p.get('id')
+                        if link_pdp_rel:
+                            if link_pdp_rel.startswith('http'): link_pdp = link_pdp_rel
+                            else: link_pdp = f"https://www.svicente.com.br{link_pdp_rel if link_pdp_rel.startswith('/') else '/' + link_pdp_rel}"
+                        elif pid:
+                            link_pdp = f"https://www.svicente.com.br/on/demandware.store/Sites-SaoVicente-Site/pt_BR/Product-Show?pid={pid}"
+                        else:
+                            link_pdp = ""
+
+                        nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                        measurement_unit = str(p.get('measurementUnit', '')).lower()
+                        if measurement_unit == 'kg' or nome_bruto.upper().endswith(' KG'):
+                            unid_venda = "KG"
+                        else:
+                            unid_venda = "UN"
+
+                        if unid_venda == "KG" and qv == "1" and med == "UN":
+                            qv, med = "1", "KG"
+                            
+                        nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+
+                        produtos_categoria.append({
+                            "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_nome,
+                            "Produto": nome_limpo, "Marca": marca,
+                            "Preço Varejo": f"R$ {valor_varejo:.2f}".replace('.', ','),
+                            "Preço Atacado": f"R$ {valor_atacado:.2f}".replace('.', ','),
+                            "Qtd_Valor": qv, "Medida": med, "Unidade": unid_venda, "Condição": condicao,
+                            "Data_Hora": agora, "Link_Imagem": img_url if img_url else "SEM IMAGEM",
+                            "Link_PDP": link_pdp
+                        })
+                    except: continue
+            
+                logger.info(f"   ✓ {cat_nome}: {len(produtos_categoria)} itens capturados.")
+                return produtos_categoria
+
+        tarefas_ofertas = [process_category(session, cgid, cat_nome, sem) for cgid, cat_nome in cgids_validos]
+        resultados_finais = await asyncio.gather(*tarefas_ofertas)
+        
+        for res in resultados_finais:
+            lista_final.extend(res)
 
     lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
     logger.info(f"✅ {len(lista_unica)} produtos capturados no {NOME_MERCADO} Full Catalog.")

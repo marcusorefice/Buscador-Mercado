@@ -85,8 +85,29 @@ async def motor_extracao_oba_full():
                                 if not items: continue
                                 sku = items[0]
                                 
-                                codigo_bruto = str(sku.get('gtin', '')).strip() or str(sku.get('ean', '')).strip()
-                                ean = codigo_bruto if codigo_bruto.isdigit() and len(codigo_bruto) in [12, 13] else "N/A"
+                                ean = "N/A"
+                                if sku.get('ean') and str(sku['ean']).isdigit():
+                                    val = str(sku['ean']).strip()
+                                    if len(val) >= 12:
+                                        ean = val
+                                if ean == "N/A" and sku.get('gtin') and str(sku['gtin']).isdigit():
+                                    val = str(sku['gtin']).strip()
+                                    if len(val) >= 12:
+                                        ean = val
+                                if ean == "N/A" and p.get('productReference') and str(p.get('productReference', '')).isdigit():
+                                    val = str(p['productReference']).strip()
+                                    if len(val) >= 12:
+                                        ean = val
+                                if ean == "N/A":
+                                    ref_ids = sku.get('referenceId', [])
+                                    if isinstance(ref_ids, list):
+                                        for ref in ref_ids:
+                                            if isinstance(ref, dict):
+                                                if ref.get('Key') == 'EAN' or str(ref.get('Value', '')).isdigit():
+                                                    val = str(ref.get('Value', '')).strip()
+                                                    if len(val) >= 12:
+                                                        ean = val
+                                                        break
 
                                 oferta = sku.get('sellers', [{}])[0].get('commertialOffer', {})
                                 p_venda = float(oferta.get('Price', 0.0))
@@ -155,7 +176,7 @@ async def motor_extracao_oba_full():
         for res in resultados: 
             if res: lista_final.extend(res)
 
-    lista_unica = list({f"{v['Produto']}_{v['Marca']}": v for v in lista_final}.values())
+    lista_unica = list({f"{v.get('Produto','')}_{v.get('Marca','')}_{v.get('Qtd_Valor','')}_{v.get('Medida','')}": v for v in lista_final}.values())
     logger.info(f"✅ {len(lista_unica)} produtos totais capturados no {NOME_MERCADO} Full Catalog.")
     return lista_unica
 

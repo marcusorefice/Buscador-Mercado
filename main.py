@@ -99,19 +99,23 @@ async def processar_mercado(modulo, nome_mercado):
     Retorna apenas os produtos brutos. Toda a lógica de IA, cruzamento de EAN 
     e salvamento em banco foi movida para as etapas seguintes do pipeline.
     """
+    import time
     try:
         logger.info(f"🛒 Coletando dados de: {nome_mercado}")
+        start_time = time.time()
         produtos_brutos = await modulo.extrair_dados()
+        end_time = time.time()
+        duration = end_time - start_time
         
         if not produtos_brutos:
-            logger.warning(f"⚠️ {nome_mercado}: Nenhuma oferta capturada.")
-            return nome_mercado, []
+            logger.warning(f"⚠️ {nome_mercado}: Nenhuma oferta capturada. Tempo: {duration:.2f}s")
+            return nome_mercado, [], duration
         
-        logger.info(f"✅ {nome_mercado}: {len(produtos_brutos)} itens coletados.")
-        return nome_mercado, produtos_brutos
+        logger.info(f"✅ {nome_mercado}: {len(produtos_brutos)} itens coletados em {duration:.2f} segundos.")
+        return nome_mercado, produtos_brutos, duration
     except Exception as e:
         logger.error(f"❌ Erro no scraper {nome_mercado}: {e}")
-        return nome_mercado, []
+        return nome_mercado, [], 0.0
 
 async def main():
     logger.info(f"🚀 INICIANDO SCRAPERS (FASE 1/3) - {datetime.now().strftime('%d/%m/%Y %H:%M')}")
@@ -139,10 +143,10 @@ async def main():
     todos_itens_crus = []
     resumo_geral = {}
 
-    for nome_mercado, produtos_brutos in resultados_api:
+    for nome_mercado, produtos_brutos, duration in resultados_api:
+        resumo_geral[nome_mercado] = {"qtd": len(produtos_brutos), "tempo": duration}
         if produtos_brutos:
             todos_itens_crus.extend(produtos_brutos)
-            resumo_geral[nome_mercado] = len(produtos_brutos)
 
     # ---------------------------------------------------------
     # ETAPA 2: MERCADOS COM DADOS NÃO ESTRUTURADOS (IMAGEM/IA)
@@ -160,10 +164,10 @@ async def main():
     tarefas_ia = [processar_mercado(modulo, nome_mercado) for modulo, nome_mercado in scrapers_ia]
     resultados_ia = await asyncio.gather(*tarefas_ia)
     
-    for nome_mercado, produtos_brutos in resultados_ia:
+    for nome_mercado, produtos_brutos, duration in resultados_ia:
+        resumo_geral[nome_mercado] = {"qtd": len(produtos_brutos), "tempo": duration}
         if produtos_brutos:
             todos_itens_crus.extend(produtos_brutos)
-            resumo_geral[nome_mercado] = len(produtos_brutos)
 
     # ---------------------------------------------------------
     # ETAPA 3: NORMALIZAÇÃO DE PREÇOS (HOTFIX PARA 100G vs KG)
@@ -182,9 +186,7 @@ async def main():
     else:
         logger.warning("Nenhum item foi coletado pelos scrapers nesta execução.")
 
-    logger.info("📊 RESUMO FINAL DA COLETA:")
-    for m, q in resumo_geral.items():
-        logger.info(f"  - {m}: {q} produtos coletados")
+    exibir_resumo_coleta(resumo_geral, logger)
 
 if __name__ == "__main__":
     if os.name == 'nt':

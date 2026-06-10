@@ -7,6 +7,7 @@ import json
 import urllib.parse
 import warnings
 import re
+import base64
 from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
@@ -50,6 +51,21 @@ CLIENT_PRODUCT_HASH = API_HASHES.get("client_product", "47aa22eb750cb2c529e5eeaf
 PAGE_SEMAPHORE = asyncio.Semaphore(2)
 API_SEMAPHORE = asyncio.Semaphore(3)
 IMPERSONATE = CONFIG.get("technical_dependencies", {}).get("impersonation", "chrome120")
+
+def _gerar_headers_vtex(region_id):
+    segment_data = {
+        "campaigns": None, "channel": "1", "priceTables": None, "regionId": region_id,
+        "utm_campaign": None, "utm_source": None, "utmi_campaign": None,
+        "currencyCode": "BRL", "currencySymbol": "R$", "countryCode": "BRA",
+        "cultureInfo": "pt-BR", "admin_cultureInfo": "pt-BR", "channelPrivacy": "public"
+    }
+    segment_b64 = base64.b64encode(json.dumps(segment_data).encode('utf-8')).decode('utf-8')
+    return {
+        "accept": "*/*",
+        "accept-language": "pt-BR,pt;q=0.9",
+        "cookie": f"vtex_segment={segment_b64};",
+        "referer": "https://www.domolivio.com.br/"
+    }
 
 async def _buscar_preco_calculado(session: AsyncSession, product_id: str, retries=3, delay=1.5) -> tuple[float, float, str]:
     """Consulta o preço real e o EAN/GTIN com um sistema de retentativas e recuo exponencial."""
@@ -290,7 +306,8 @@ async def _extrair_pagina_completa(session: AsyncSession, pagina: int, use_clust
 
 async def motor_extracao_dom_olivio():
     logger.info(f"🚀 Iniciando extração DUPLA para {NOME_MERCADO} (Cluster + Maiores Descontos)...")
-    async with AsyncSession(impersonate=IMPERSONATE) as session:
+    headers = _gerar_headers_vtex(REGION_ID)
+    async with AsyncSession(impersonate=IMPERSONATE, headers=headers) as session:
         # Executa as páginas do cluster primeiro
         logger.info(f"⏳ Coletando produtos por Cluster id: {CLUSTER_ID}...")
         tarefas_cluster = [_extrair_pagina_completa(session, p, use_cluster=True) for p in range(0, MAX_PAGES)]
