@@ -12,6 +12,7 @@ from classificador_ia import (
 )
 import classificador_ia
 from buscador_ean import tentar_recuperar_ean
+from utils import ean_eh_valido, gerar_id_interno, otimizar_nome_produto, aplicar_title_case
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -22,18 +23,6 @@ ARQUIVO_BIBLIOTECA = os.path.join(DATA_DIR, "biblioteca_produtos.json")
 ARQUIVO_PROCESSADOS = os.path.join(DATA_DIR, "itens_prontos_para_comparar.json")
 ARQUIVO_QUARENTENA = os.path.join(DATA_DIR, "quarentena_anomalias.json")
 ARQUIVO_CACHE_WEB = os.path.join(DATA_DIR, "cache_buscas_web.json")
-
-def ean_eh_valido(ean_str):
-    ean_str = str(ean_str).strip()
-    if ean_str.startswith('INT_'): return True
-    if not ean_str.isdigit(): return False
-    if len(ean_str) not in (8, 12, 13, 14): return False
-    if len(set(ean_str)) == 1: return False
-    if ean_str.startswith('0000000'): return False
-    
-    padded = ean_str.zfill(14)
-    total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
-    return str((10 - (total % 10)) % 10) == padded[13]
 
 def padronizar_multiplicacao(texto):
     # Garante caixa alta, remove espaços extras e mantém ponto decimal limpo
@@ -84,17 +73,54 @@ def normalizar_sinonimos(texto):
     return texto
 
 async def resolver_ean_novo(ean, itens_crus):
-    melhor_item = max(itens_crus, key=lambda x: len(str(x.get("Produto", x.get("nome_comum", ""))).strip()))
-    melhor_nome = str(melhor_item.get("Produto", melhor_item.get("nome_comum", ""))).strip() or "PRODUTO DESCONHECIDO"
+    from collections import Counter
     
+    # 1. Limpar e Normalizar Nomes
+    nomes_limpos = []
+    for item in itens_crus:
+        nome_bruto = str(item.get("Produto", item.get("nome_comum", ""))).strip()
+        nomes_limpos.append(otimizar_nome_produto(nome_bruto))
+        
+    # 2. Votação (A Moda - Nome mais frequente)
+    if nomes_limpos:
+        # Conta a frequência de cada nome (ignorando maiúsculas/minúsculas para a contagem)
+        contagem = Counter([n.upper() for n in nomes_limpos if n])
+        if contagem:
+            mais_comuns = contagem.most_common()
+            if len(mais_comuns) == 1 or mais_comuns[0][1] > 1:
+                # Se há um vencedor claro que se repete
+                melhor_nome_upper = mais_comuns[0][0]
+                # Pega a string original correspondente
+                melhor_nome = next(n for n in nomes_limpos if n.upper() == melhor_nome_upper)
+            else:
+                # Se todos os mercados mandaram nomes diferentes, escolhe o de tamanho mediano
+                tamanhos = [len(n) for n in nomes_limpos if n]
+                media = sum(tamanhos) / len(tamanhos)
+                melhor_nome = min([n for n in nomes_limpos if n], key=lambda x: abs(len(x) - media))
+        else:
+            melhor_nome = "PRODUTO DESCONHECIDO"
+    else:
+         melhor_nome = "PRODUTO DESCONHECIDO"
+         
+    # 3. Formatação Title Case (Tapa no Visual)
+    melhor_nome_formatado = aplicar_title_case(melhor_nome)
+    
+    # 4. Encontrar o item original que mais se aproxima do escolhido para herdar imagens
+    melhor_item = itens_crus[0]
+    for i, n in enumerate(nomes_limpos):
+        if n.upper() == melhor_nome.upper():
+            melhor_item = itens_crus[i]
+            break
+
     marcas = [str(item.get("Marca", item.get("marca", ""))).strip().upper() for item in itens_crus]
     marcas_validas = [m for m in marcas if m not in ("OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "", "NONE")]
     
     if marcas_validas:
-        from collections import Counter
         melhor_marca = Counter(marcas_validas).most_common(1)[0][0]
     else:
         melhor_marca = marcas[0] if marcas else "OUTROS"
+        
+    melhor_marca_formatada = aplicar_title_case(melhor_marca) if melhor_marca != "OUTROS" else "OUTROS"
         
     categoria = itens_crus[0].get("Categoria", "OUTROS")
     imagem_escolhida = melhor_item.get("Link_Imagem", melhor_item.get("imagem", ""))
@@ -111,7 +137,7 @@ async def resolver_ean_novo(ean, itens_crus):
                     break
     
     produto_ouro = {
-        "id": str(ean), "nome_comum": melhor_nome, "marca": melhor_marca, "ean": str(ean),
+        "id": str(ean), "nome_comum": melhor_nome_formatado, "marca": melhor_marca_formatada, "ean": str(ean),
         "Categoria": categoria, "subcategoria": "N/A", "tipo_produto": "N/A", "imagem": imagem_escolhida,
         "tags": [], "revisado_humano": False
     }
@@ -159,10 +185,10 @@ def checar_conflito_anomalia(nome_base, nome_novo):
         return False 
 
     # 1. Estado Físico
-    fisico_base = {w for w in ["FATIADO", "RALADO"] if w in nome_base_norm}
-    fisico_novo = {w for w in ["FATIADO", "RALADO"] if w in nome_novo_norm}
-    if fisico_base != fisico_novo and not peso_omitido:
-        if m_base["peso_num"] != m_novo["peso_num"]: return True
+    termos_fisicos = ["FATIADO", "FATIADA", "RALADO", "RALADA", "CORTADO", "CORTADA", "PICADO", "PICADA", "CUBOS", "BANDEJA", "DESCASCADO", "DESCASCADA", "PEDACOS"]
+    fisico_base = {w for w in termos_fisicos if w in nome_base_norm}
+    fisico_novo = {w for w in termos_fisicos if w in nome_novo_norm}
+    if fisico_base != fisico_novo: return True
 
     # 2. Validação Flexível de Atacado / Diferença de Volume (Diferença de UN ou Peso)
     if m_base["unidades"] and m_novo["unidades"] and m_base["unidades"] != m_novo["unidades"]:
@@ -284,30 +310,34 @@ async def main():
 
             if ean in biblioteca:
                 nome_ouro = str(biblioteca[ean].get("nome_comum", "")).upper()
-                # --- DESATIVADO TEMPORARIAMENTE: Defesa Automática ---
-                # if checar_conflito_anomalia(nome_ouro, nome_item):
-                #     conflito = True
-                #     nome_conflito = nome_ouro
+                if checar_conflito_anomalia(nome_ouro, nome_item):
+                    conflito = True
+                    nome_conflito = nome_ouro
             elif itens_filtrados_por_ean[ean]:
                 nome_primeiro = str(itens_filtrados_por_ean[ean][0].get("Produto", "")).upper()
-                # --- DESATIVADO TEMPORARIAMENTE: Defesa Automática ---
-                # if checar_conflito_anomalia(nome_primeiro, nome_item):
-                #     conflito = True
-                #     nome_conflito = nome_primeiro
+                if checar_conflito_anomalia(nome_primeiro, nome_item):
+                    conflito = True
+                    nome_conflito = nome_primeiro
 
             if conflito:
                 sufixos = []
                 if re.search(r'\bKG\b|/KG\b|\bQUILO\b', nome_item): sufixos.append("KG")
-                if "RALADO" in nome_item: sufixos.append("RALADO")
-                if "FATIADO" in nome_item: sufixos.append("FATIADO")
+                if "RALADO" in nome_item or "RALADA" in nome_item: sufixos.append("RALADO")
+                if "FATIADO" in nome_item or "FATIADA" in nome_item: sufixos.append("FATIADO")
+                if "CORTADO" in nome_item or "CORTADA" in nome_item: sufixos.append("CORTADA")
+                if "PICADO" in nome_item or "PICADA" in nome_item: sufixos.append("PICADA")
+                if "BANDEJA" in nome_item: sufixos.append("BANDEJA")
+                if "DESCASCADO" in nome_item or "DESCASCADA" in nome_item: sufixos.append("DESCASCADA")
+                if "CUBOS" in nome_item: sufixos.append("CUBOS")
                 if re.search(r'\b(DISPLAY|FARDO|FD|PACK)\b|\b(CX|PCT)\s+(C/|COM)\s*\d+', nome_item): sufixos.append("CX")
                 
                 suf_str = "_".join(sufixos) if sufixos else "VARIANTE"
-                novo_ean = f"INT_{ean}_{suf_str}"
+                novo_ean = f"{ean}_{suf_str}"
                 logger.warning(f"🛡️ Defesa Automática: Separando '{nome_item}' de '{nome_conflito}' (EAN: {ean} -> {novo_ean}) no mercado {mercado_item}")
                 
                 item["EAN"] = novo_ean
-                itens_quarentena.append(item)
+                if novo_ean not in itens_filtrados_por_ean: itens_filtrados_por_ean[novo_ean] = []
+                itens_filtrados_por_ean[novo_ean].append(item)
             else:
                 itens_filtrados_por_ean[ean].append(item)
 
@@ -380,9 +410,7 @@ async def main():
                     logger.info(f"   ⚡ [{progresso_ean['atual']}/{total_sem_ean}] EAN Web (Cache Espera): '{nome}' -> {item['EAN']}")
                     return item
                 else:
-                    nome_limpo = re.sub(r'[^a-zA-Z0-9]', '', str(nome).upper())
-                    marca_limpa = re.sub(r'[^a-zA-Z0-9]', '', str(marca_bruta).upper())
-                    id_interno = f"INT_{marca_limpa}_{nome_limpo}"[:50]
+                    id_interno = gerar_id_interno(nome, marca_bruta)
                     item["EAN"] = id_interno
                     item["Fonte_EAN"] = "Gerado_Internamente"
                     logger.info(f"   ⚙️ [{progresso_ean['atual']}/{total_sem_ean}] EAN Interno gerado (Após Espera): '{nome}' -> {item['EAN']}")
@@ -395,8 +423,24 @@ async def main():
                 
                 import random
                 await asyncio.sleep(random.uniform(0.5, 1.5))
+                
+                # --- Lógica Inteligente para Pular Busca Web ---
+                categoria = str(item.get("Categoria", "")).upper()
+                categorias_frescos = ["HORTIFR", "PADARIA", "PEIXARIA", "AÇOUGUE", "ACOUGUE", "FRIOS"]
+                
+                # Se tem marca reconhecida (Não é "Própria", "Outros", etc), tenta salvar o EAN na web!
+                marcas_genericas = ["OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "NONE", "GERAL", "", "FEIRA", "ACOUGUE", "PADARIA"]
+                tem_marca_famosa = marca_bruta.upper() not in marcas_genericas
+                
+                # Só pula a web se for fresco E não tiver marca famosa
+                is_fresco_sem_marca = any(cf in categoria for cf in categorias_frescos) and not tem_marca_famosa
+                
+                if is_fresco_sem_marca:
+                    resultado = None
+                    logger.info(f"   ⏭️ {prefixo_progresso} Busca web pulada para item fresco genérico ({categoria}).")
+                else:
+                    resultado = await tentar_recuperar_ean(nome, marca_busca)
 
-                resultado = await tentar_recuperar_ean(nome, marca_busca)
                 if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
                     cache_buscas_web[chave_busca] = resultado
                     item["EAN"] = str(resultado["ean"])
@@ -405,14 +449,13 @@ async def main():
                         item["Link_Imagem"] = resultado.get("Link_Imagem", "")
                     logger.info(f"   🌐 {prefixo_progresso} EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
                 else:
-                    nome_limpo = re.sub(r'[^a-zA-Z0-9]', '', str(nome).upper())
-                    marca_limpa = re.sub(r'[^a-zA-Z0-9]', '', str(marca_bruta).upper())
-                    id_interno = f"INT_{marca_limpa}_{nome_limpo}"[:50]
+                    id_interno = gerar_id_interno(nome, marca_bruta)
                     item["EAN"] = id_interno
                     item["Fonte_EAN"] = "Gerado_Internamente"
                     logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
-                    logger.warning("   ⏳ Esfriando IP por 3.0s após falha na busca web...")
-                    await asyncio.sleep(3.0)
+                    if not is_fresco:
+                        logger.warning("   ⏳ Esfriando IP por 3.0s após falha na busca web...")
+                        await asyncio.sleep(3.0)
                 
                 buscas_em_andamento[chave_busca].set()
                 return item

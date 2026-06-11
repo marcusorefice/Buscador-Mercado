@@ -22,19 +22,27 @@ def main():
         with open(ARQUIVO_PENDENTES, "r", encoding="utf-8") as f:
             pendentes = json.load(f)
 
+    itens_movidos = 0
+    nova_quarentena = []
+
     for item in quarentena:
-        item["EAN"] = "N/A"
-        if "Fonte_EAN" in item:
-            del item["Fonte_EAN"]
-        pendentes.append(item)
+        ean = str(item.get("EAN", ""))
+        if ean.startswith("INT_"):
+            item["EAN"] = "N/A"
+            if "Fonte_EAN" in item:
+                del item["Fonte_EAN"]
+            pendentes.append(item)
+            itens_movidos += 1
+        else:
+            nova_quarentena.append(item)
 
     with open(ARQUIVO_PENDENTES, "w", encoding="utf-8") as f:
         json.dump(pendentes, f, ensure_ascii=False, indent=4)
     with open(ARQUIVO_QUARENTENA, "w", encoding="utf-8") as f:
-        json.dump([], f, ensure_ascii=False, indent=4)
+        json.dump(nova_quarentena, f, ensure_ascii=False, indent=4)
 
-    print(f"✅ {len(quarentena)} itens movidos da quarentena para os pendentes!")
-    print("🚀 Agora você pode rodar 'python 4_resolver_pendentes.py' novamente.")
+    print(f"✅ {itens_movidos} itens com ID 'INT_' foram resetados e movidos para a fila de pendentes!")
+    print("🚀 Agora você pode rodar 'python 4_resolver_pendentes.py' para reprocessá-los com as novas regras.")
 
 if __name__ == "__main__":
     main()

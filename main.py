@@ -20,7 +20,7 @@ import scrapers.fort as fort
 import scrapers.roldao as roldao
 import scrapers.tauste as tauste
 
-from utils import read_json_file, write_json_file, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca, enriquecer_ean_produtos_async
+from utils import read_json_file, write_json_file, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca, enriquecer_ean_produtos_async, exibir_resumo_coleta
 from classificador_ia import classificar_taxonomia_com_ia_async, carregar_biblioteca, salvar_biblioteca, gerar_id_unico, resolver_conflitos_ia_async
 
 logger = setup_logging()
@@ -124,14 +124,14 @@ async def main():
     # ETAPA 1: MERCADOS COM DADOS ESTRUTURADOS (API / JSON)
     # ---------------------------------------------------------
     scrapers_api = [
-        # (atacadao, "Atacadão"),
-        # (carrefour, "Carrefour"),
-        # (boa, "Boa Supermercados"),
-        # (paodeacucar, "Pão de Açúcar"),
-        # (covabra, "Covabra"),
-        # (oba, "Oba Hortifruti"),
+        (atacadao, "Atacadão"),
+        (carrefour, "Carrefour"),
+        (boa, "Boa Supermercados"),
+        (paodeacucar, "Pão de Açúcar"),
+        (covabra, "Covabra"),
+        (oba, "Oba Hortifruti"),
         (dom_olivio, "Dom Olívio"),
-        # (svicente, "S. Vicente"),
+        (svicente, "S. Vicente"),
     ]
 
     logger.info("\n=== ETAPA 1: COLETANDO DADOS ESTRUTURADOS (API) ===")

@@ -78,16 +78,45 @@ def extrair_medidas_inteligente(nome_produto):
     return nome_produto, "1", "UN"
 
 def limpar_ruido_produto(nome):
-    return nome
+    import re
+    if not nome: return ""
+    nome = str(nome).upper()
+    # Remove lixo promocional e termos redundantes
+    ruidos = [
+        r'\bLEVE\s+\d+\s*PAGUE\s+\d+\b', r'\bLV\s*\d+\s*PG\s*\d+\b', 
+        r'\bOFERTA\b', r'\bIMPERD[ÍI]VEL\b', r'\bPROMO[CÇ][AÃ]O\b', 
+        r'\bEXCLUSIVO\b', r'\bNOVA EMBALAGEM\b', r'\bGR[ÁA]TIS\b', r'\bBRINDE\b',
+        r'-\s*$', r'^\s*-'
+    ]
+    for r in ruidos:
+        nome = re.sub(r, '', nome)
+    return re.sub(r'\s+', ' ', nome).strip()
 
 def otimizar_nome_produto(nome: str) -> str:
-    return nome
+    return limpar_ruido_produto(nome)
 
 def remover_frases_duplicadas(texto: str) -> str:
+    # Apenas retorna o texto, mas pode ser implementado no futuro se necessário
     return texto
 
 def aplicar_title_case(texto):
-    return texto
+    import re
+    if not texto: return ""
+    texto = str(texto).lower()
+    excecoes = {"de", "do", "da", "dos", "das", "e", "em", "com", "sem", "para", "a", "o", "as", "os"}
+    palavras = texto.split()
+    resultado = []
+    for i, p in enumerate(palavras):
+        # Manter unidades de medida combinadas com número em minúsculo (ex: 1kg, 500ml)
+        if re.match(r'^\d+([.,]\d+)?(kg|g|mg|ml|l|cm|mm|m)$', p):
+            resultado.append(p)
+        # Exceções (preposições) em minúsculo
+        elif p in excecoes and i > 0:
+            resultado.append(p)
+        else:
+            # Coloca a primeira letra em maiúsculo (ex: Maçã, Sabão)
+            resultado.append(p.capitalize())
+    return " ".join(resultado)
 
 def normalizar_marca(marca: str) -> str:
     return marca if marca else "N/A"
@@ -134,14 +163,91 @@ def extrair_tags_inteligentes(produto):
             
     return sorted(list(set(tags_limpas)))
 
+import re
+
+def ean_eh_valido(ean_str):
+    """
+    Função centralizada para validação rigorosa de EAN.
+    Bloqueia EANs falsos, códigos internos de supermercado e valida o dígito verificador.
+    """
+    if ean_str is None: return False
+    ean_str = str(ean_str).strip()
+    
+    if ean_str == "N/A" or not ean_str: return False
+    
+    # IDs internos gerados pelo nosso sistema são sempre válidos para o nosso banco
+    if ean_str.startswith('INT_'): return True
+    
+    # Se contém letras (exceto INT_) não é EAN válido
+    if not ean_str.isdigit(): return False
+    
+    # Tamanhos aceitos para GTIN/EAN: 8, 12, 13, 14
+    if len(ean_str) not in (8, 12, 13, 14): return False
+    
+    # Bloqueia lixo como '0000000000000' ou '1111111111111'
+    if len(set(ean_str)) == 1: return False
+    
+    # Bloqueia EANs de pesagem/balança (geralmente começam com 2, 02, 20-29 no Brasil)
+    # Esses não são universais e causam agrupamento errado de hortifruti/açougue.
+    if len(ean_str) >= 12:
+        prefixo = ean_str[:2]
+        if prefixo.startswith('2') or prefixo == '02' or (prefixo.isdigit() and 20 <= int(prefixo) <= 29):
+            return False
+            
+    # Validação do Dígito Verificador (Mod 10)
+    padded = ean_str.zfill(14)
+    total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
+    check_digit_calculado = str((10 - (total % 10)) % 10)
+    return check_digit_calculado == padded[13]
+
 def is_valid_check_digit(ean_str):
-    if not str(ean_str).isdigit() or len(str(ean_str)) != 13:
-        return False
-    digits = [int(x) for x in str(ean_str)]
-    check_digit = digits.pop()
-    digits.reverse()
-    total = sum(d * 3 if i % 2 == 0 else d for i, d in enumerate(digits))
-    return (10 - (total % 10)) % 10 == check_digit
+    """Alias para manter compatibilidade com código legado até ser totalmente refatorado."""
+    return ean_eh_valido(ean_str)
+
+def gerar_id_interno(nome_produto: str, marca: str) -> str:
+    """
+    Gera um ID interno (INT_...) seguro para produtos sem EAN.
+    Usa informações de peso, medida e apresentação extraídas do nome para evitar 
+    que produtos inteiros e fracionados sejam mesclados.
+    """
+    from utils import otimizar_nome_produto, normalizar_marca # evita erro circular se já estiver no topo
+    import re
+    
+    nome_base = str(nome_produto).lower()
+    marca_base = str(marca).lower()
+    
+    # Extrair medidas e apresentações importantes ANTES de limpar o nome
+    apresentacao = []
+    
+    # Busca por peso ou volume (ex: 500g, 1kg, 2l, 300ml)
+    medida_match = re.search(r'(\d+[,.]?\d*\s*(kg|g|mg|ml|l|litro|litros|gramas|kilo|kilos))\b', nome_base)
+    if medida_match:
+        apresentacao.append(medida_match.group(1).replace(" ", "").replace(",", "."))
+        
+    # Busca por formato de venda (bandeja, peca, pedaco, cortado, fatiado)
+    formatos = ["bandeja", "peca", "peça", "pedaco", "pedaço", "cortado", "fatiado", "inteira", "inteiro", "metade", "kg", "granel", "pacote", "pct"]
+    for formato in formatos:
+        if re.search(rf'\b{formato}\b', nome_base):
+            # Normalizar para evitar variação (ex: peça -> peca)
+            f_norm = formato.replace("ç", "c").replace("pedaço", "pedaco")
+            apresentacao.append(f_norm)
+            
+    # Gera uma base limpa (letras e numeros apenas)
+    nome_limpo = re.sub(r'[^a-z0-9]', '', nome_base)
+    marca_limpa = re.sub(r'[^a-z0-9]', '', marca_base)
+    
+    if not marca_limpa or marca_limpa == "na":
+        marca_limpa = "generico"
+        
+    # Monta o sufixo de apresentação
+    sufixo_apresentacao = "_".join(sorted(set(apresentacao)))
+    if sufixo_apresentacao:
+         id_final = f"INT_{marca_limpa}_{nome_limpo}_{sufixo_apresentacao}"
+    else:
+         id_final = f"INT_{marca_limpa}_{nome_limpo}"
+         
+    return id_final[:70].upper() # Limita tamanho e padroniza para maiúsculo
+
 
 def criar_entrada_biblioteca(p_info):
     """Cria uma entrada padronizada para a biblioteca de produtos."""

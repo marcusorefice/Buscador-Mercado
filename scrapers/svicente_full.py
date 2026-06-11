@@ -5,7 +5,7 @@ import re
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from datetime import datetime
-from utils import extrair_medidas_inteligente, setup_logging, read_json_file, CATEGORIAS_IGNORADAS
+from utils import extrair_medidas_inteligente, setup_logging, read_json_file, CATEGORIAS_IGNORADAS, ean_eh_valido
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -34,11 +34,6 @@ headers = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
-def ean_eh_valido(ean_str):
-    if not ean_str or not ean_str.isdigit(): return False
-    padded = ean_str.zfill(14)
-    total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
-    return str((10 - (total % 10)) % 10) == padded[13]
 
 def extrair_ean_pela_foto(url_imagem):
     if not url_imagem or not isinstance(url_imagem, str): return None

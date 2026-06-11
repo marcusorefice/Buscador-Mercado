@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from curl_cffi import requests
 from utils import (
+    ean_eh_valido,
     extrair_medidas_inteligente, setup_logging, 
     read_json_file, formatar_nome_categoria, normalizar_para_cache
 )
@@ -45,11 +46,6 @@ def reconstruir_json_remix(dados_flat, index=0):
         return res
     return node
 
-def ean_eh_valido(ean_str):
-    if not ean_str or not ean_str.isdigit(): return False
-    padded = ean_str.zfill(14)
-    total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
-    return str((10 - (total % 10)) % 10) == padded[13]
 
 def extrair_ean_pela_foto(url_imagem):
     """

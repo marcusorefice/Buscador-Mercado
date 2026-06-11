@@ -104,7 +104,7 @@ async def main():
         (dom_olivio_full, "Dom Olívio (Full)"),
         (oba_full, "Oba Hortifruti (Full)"),
         (paodeacucar_full, "Pão de Açúcar (Full)"),
-        (svicente_full, "São Vicente (Full)") #verificar pq pegou somente 1304 produtos
+        (svicente_full, "São Vicente (Full)")
     ]
 
     lock = asyncio.Lock()
