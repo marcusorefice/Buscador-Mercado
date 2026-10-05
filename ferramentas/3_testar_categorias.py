@@ -1,3 +1,8 @@
+import os, sys
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # raiz do projeto (D:\Mercado)
+sys.path.insert(0, RAIZ)
+os.chdir(RAIZ)  # caminhos como 'data/...' continuam funcionando de qualquer pasta
+
 import json
 import os
 import sys

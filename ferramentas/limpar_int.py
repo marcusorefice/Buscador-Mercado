@@ -1,3 +1,8 @@
+import os, sys
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # raiz do projeto (D:\Mercado)
+sys.path.insert(0, RAIZ)
+os.chdir(RAIZ)  # caminhos como 'data/...' continuam funcionando de qualquer pasta
+
 import psycopg2
 import sqlite3
 import os
@@ -6,6 +11,12 @@ from dotenv import load_dotenv
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 local_db_path = os.path.join("data", "monitoramento_Jundiai.db")
+
+# ATENÇÃO: desde o casamento de nomes, os INT_ são grupos legítimos de produtos sem EAN
+# (o mesmo produto em vários mercados). Este script apaga TODOS do banco; eles voltam no próximo passo 4 + 5.
+resposta = input("Isso apaga do banco todos os produtos sem EAN (INT_). Continuar? [s/N] ")
+if resposta.strip().lower() != "s":
+    raise SystemExit("Cancelado.")
 
 print("🧹 Iniciando a Limpeza de EANs 'INT_' do Banco de Dados...")
 

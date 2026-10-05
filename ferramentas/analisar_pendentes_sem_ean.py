@@ -1,8 +1,13 @@
+import os, sys
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # raiz do projeto (D:\Mercado)
+sys.path.insert(0, RAIZ)
+os.chdir(RAIZ)  # caminhos como 'data/...' continuam funcionando de qualquer pasta
+
 import json
 import os
 from collections import defaultdict
 
-ARQUIVO_PENDENTES = os.path.join(os.path.dirname(__file__), "data", "pendentes_ia.json")
+ARQUIVO_PENDENTES = os.path.join(RAIZ, "data", "pendentes_ia.json")
 
 def ean_eh_valido(ean_str):
     ean_str = str(ean_str).strip()

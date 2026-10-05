@@ -1,7 +1,12 @@
+import os, sys
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # raiz do projeto (D:\Mercado)
+sys.path.insert(0, RAIZ)
+os.chdir(RAIZ)  # caminhos como 'data/...' continuam funcionando de qualquer pasta
+
 import json
 import os
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = os.path.join(RAIZ, "data")
 ARQUIVO_PENDENTES = os.path.join(DATA_DIR, "pendentes_ia.json")
 ARQUIVO_QUARENTENA = os.path.join(DATA_DIR, "quarentena_anomalias.json")
 

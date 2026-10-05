@@ -37,3 +37,6 @@ teste.py
 # Binários e temporários da gravação atômica
 ngrok.exe
 *.tmp
+
+# Rascunhos e dumps de depuração (não versionados)
+rascunhos/
