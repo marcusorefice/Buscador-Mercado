@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import ean_eh_valido, setup_logging, read_json_file, normalizar_para_cache
+from utils import ean_eh_valido, setup_logging, read_json_file, normalizar_para_cache, CacheEanPdp
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -295,8 +295,22 @@ async def enrich_eans_from_pdps(session, lista_produtos):
     if not produtos_sem_ean:
         return
 
+    # O EAN de cada produto fica guardado entre coletas: só produtos novos precisam abrir a página
+    cache = CacheEanPdp(NOME_MERCADO)
+    do_cache = 0
+    a_buscar = []
+    for p in produtos_sem_ean:
+        guardado = cache.buscar(p.get('Link_PDP'))
+        if guardado is None:
+            a_buscar.append(p)
+        else:
+            do_cache += 1
+            if guardado != 'N/A':
+                p['EAN'] = guardado
+    produtos_sem_ean = a_buscar
+
     total_pdps = len(produtos_sem_ean)
-    logger.info(f"   🔍 Buscando EAN em {total_pdps} páginas de produtos (Turbo Mode)...")
+    logger.info(f"   🔍 EAN de {do_cache} produtos veio do cache; buscando {total_pdps} páginas de produtos (Turbo Mode)...")
 
     contador = 0
 
@@ -312,8 +326,10 @@ async def enrich_eans_from_pdps(session, lista_produtos):
     resultados = await asyncio.gather(*tasks)
 
     for p, ean in zip(produtos_sem_ean, resultados):
+        cache.guardar(p.get('Link_PDP'), ean)
         if ean != 'N/A':
             p['EAN'] = ean
+    cache.salvar()
 
 async def extrair_dados():
     cookies = await capturar_sessao()

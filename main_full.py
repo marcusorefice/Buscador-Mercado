@@ -110,12 +110,14 @@ async def main():
         (covabra_full, "Covabra (Full)"),
         (dom_olivio_full, "Dom Olívio (Full)"),
         (oba_full, "Oba Hortifruti (Full)"),
-        # (paodeacucar_full, "Pão de Açúcar (Full)"),
+        (paodeacucar_full, "Pão de Açúcar (Full)"),
         (svicente_full, "São Vicente (Full)")
     ]
 
     lock = asyncio.Lock()
-    sem = asyncio.Semaphore(4) # Executar até 4 mercados simultaneamente
+    # Todos os mercados ao mesmo tempo: cada um é um site diferente, então não disputam limite de acesso.
+    # O tempo total passa a ser o do mercado mais lento (antes o último só começava quando outro terminava).
+    sem = asyncio.Semaphore(len(scrapers_full))
     
     progresso_mercados = {"atual": 0, "total": len(scrapers_full)}
 

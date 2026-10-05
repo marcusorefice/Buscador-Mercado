@@ -8,7 +8,7 @@ import base64
 from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
-from utils import setup_logging, read_json_file
+from utils import setup_logging, read_json_file, CacheEanPdp
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -130,11 +130,22 @@ async def enrich_eans_from_pdps(session: AsyncSession, lista_produtos: list):
     sem_pdp = asyncio.Semaphore(15)
     produtos_sem_ean = [p for p in lista_produtos if str(p.get('EAN', '')).startswith('INT_') or p.get('EAN') == 'N/A']
     if not produtos_sem_ean: return
-    logger.info(f"   🔍 Buscando EAN em {len(produtos_sem_ean)} páginas de produtos (Arrastão HTML)...")
-    tasks = [fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp) for p in produtos_sem_ean]
+    # O EAN de cada produto fica guardado entre coletas: só produtos novos precisam abrir a página
+    cache = CacheEanPdp(NOME_MERCADO)
+    a_buscar = []
+    for p in produtos_sem_ean:
+        guardado = cache.buscar(p.get('Link_PDP'))
+        if guardado is None:
+            a_buscar.append(p)
+        elif guardado != 'N/A':
+            p['EAN'] = guardado
+    logger.info(f"   🔍 EAN de {len(produtos_sem_ean) - len(a_buscar)} produtos veio do cache; buscando {len(a_buscar)} páginas de produtos (Arrastão HTML)...")
+    tasks = [fetch_ean_from_pdp(session, p.get('Link_PDP'), sem_pdp) for p in a_buscar]
     resultados = await asyncio.gather(*tasks)
-    for p, ean in zip(produtos_sem_ean, resultados):
+    for p, ean in zip(a_buscar, resultados):
+        cache.guardar(p.get('Link_PDP'), ean)
         if ean != 'N/A': p['EAN'] = ean
+    cache.salvar()
 
 async def motor_extracao_dom_olivio_full():
     logger.info(f"🚀 Iniciando extração FULL CATALOG para {NOME_MERCADO}...")
@@ -424,14 +435,11 @@ async def motor_extracao_dom_olivio_full():
             logger.info(f"   - Departamento {dept_slug}: {len(produtos_categoria)} itens capturados.")
             return produtos_categoria
 
+        # Sem blocos de 5: o semáforo 'sem' já limita a concorrência, e um departamento grande
+        # (ex: mercearia) não deixa mais as outras vagas paradas esperando por ele
         tarefas = [process_category(chave, dept) for chave, dept in departamentos_ativos]
-        
-        chunk_size = 5
-        for i in range(0, len(tarefas), chunk_size):
-            chunk = tarefas[i:i+chunk_size]
-            resultados_chunk = await asyncio.gather(*chunk)
-            for res in resultados_chunk:
-                lista_final.extend(res)
+        for res in await asyncio.gather(*tarefas):
+            lista_final.extend(res)
 
         lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
         

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import threading
+import unicodedata
 
 # --- Global Lock for WebDriverManager ---
 webdriver_manager_lock = threading.Lock()
@@ -276,3 +277,41 @@ def exibir_resumo_coleta(resumo_geral, logger_instance):
         tempo_total_formatado = f"{segundos_totais}s"
         
     logger_instance.info(f"  > TOTAL GERAL: {total_items} produtos em ~{tempo_total_formatado} (tempo corrido pode ser menor devido ao paralelismo)")
+
+
+# --- Cache do EAN lido na página de cada produto (PDP) ---
+class CacheEanPdp:
+    """
+    O EAN de um produto não muda, então o que foi lido na página dele fica guardado entre coletas
+    (um arquivo por mercado, porque os mercados rodam em paralelo). Páginas sem EAN são tentadas
+    de novo depois de alguns dias.
+    """
+    DIAS_PARA_TENTAR_DE_NOVO = 7
+
+    def __init__(self, mercado):
+        from datetime import date
+        slug = re.sub(r"[^a-z0-9]+", "_", unicodedata.normalize("NFKD", mercado).encode("ascii", "ignore").decode().lower()).strip("_")
+        self.caminho = os.path.join("data", f"cache_ean_pdp_{slug}.json")
+        self.dados = read_json_file(self.caminho, {})
+        self.hoje = date.today()
+
+    def buscar(self, link):
+        """EAN guardado, 'N/A' se a página foi lida há pouco e não tinha EAN, ou None se precisa ler a página."""
+        from datetime import date
+        if not link or link not in self.dados:
+            return None
+        entrada = self.dados[link]
+        if entrada.get("ean") not in (None, "", "N/A"):
+            return entrada["ean"]
+        try:
+            idade = (self.hoje - date.fromisoformat(entrada.get("data", ""))).days
+        except ValueError:
+            return None
+        return "N/A" if idade < self.DIAS_PARA_TENTAR_DE_NOVO else None
+
+    def guardar(self, link, ean):
+        if link:
+            self.dados[link] = {"ean": ean or "N/A", "data": self.hoje.isoformat()}
+
+    def salvar(self):
+        write_json_file(self.caminho, self.dados)
