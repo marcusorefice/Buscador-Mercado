@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import asyncio
 import logging
 import re
@@ -12,7 +13,9 @@ from classificador_ia import (
 )
 import classificador_ia
 from buscador_ean import tentar_recuperar_ean
-from utils import ean_eh_valido, gerar_id_interno, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
+from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias
+import revisar_casamentos
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -24,53 +27,18 @@ ARQUIVO_PROCESSADOS = os.path.join(DATA_DIR, "itens_prontos_para_comparar.json")
 ARQUIVO_QUARENTENA = os.path.join(DATA_DIR, "quarentena_anomalias.json")
 ARQUIVO_CACHE_WEB = os.path.join(DATA_DIR, "cache_buscas_web.json")
 
-def padronizar_multiplicacao(texto):
-    # Garante caixa alta, remove espaços extras e mantém ponto decimal limpo
-    texto = str(texto).upper().replace("\xa0", " ").replace(",", ".")
-    
-    # 1. Promoções "LEVE X PAGUE Y" / "LV X PG Y"
-    padrao_promo = r"\b(LEVE|LV)\s*(\d+)\s*(PAGUE|PG)\s*(\d+)\b"
-    match_promo = re.search(padrao_promo, texto)
-    
-    # 2. Padrão Clássico (ex: 10X5.2, 3X90G, 300/190ML)
-    padrao_x = r"(\d+)\s*[X/]\s*(\d+\.?\d*)\s*(G|KG|ML|L|UN)?"
-    def replacer_x(match):
-        qtd = float(match.group(1))
-        peso_unitario = float(match.group(2))
-        unidade = match.group(3) if match.group(3) else "G"
-        if "/" in match.group(0):
-            return f"{int(qtd)}{unidade} {int(peso_unitario)}{unidade}"
-        peso_total = qtd * peso_unitario
-        return f"{int(peso_total) if peso_total.is_integer() else peso_total}{unidade} {int(qtd)}UN"
-    texto = re.sub(padrao_x, replacer_x, texto)
-    
-    # 3. Padrão Descritivo Comercial (ex: "10 UNIDADES 8G CADA", "10 UN 11G CADA")
-    padrao_cada = r"(\d+)\s*(?:UN|UNID|UNIDADES|SACHES|CAPSULA|CAPSULAS)?\s*(?:DE)?\s*(\d+\.?\d*)\s*(G|KG|ML|L)\s*CADA"
-    def replacer_cada(match):
-        qtd = float(match.group(1))
-        peso_unitario = float(match.group(2))
-        unidade = match.group(3)
-        peso_total = qtd * peso_unitario
-        return f"{int(peso_total) if peso_total.is_integer() else peso_total}{unidade} {int(qtd)}UN"
-    texto = re.sub(padrao_cada, replacer_cada, texto)
-    
-    return texto
+# Busca de EAN na web (APIs). Desligue com "python 4_resolver_pendentes.py --sem-web" ou BUSCA_WEB_EAN=0 no .env
+BUSCA_WEB = "--sem-web" not in sys.argv and os.getenv("BUSCA_WEB_EAN", "1") != "0"
 
-def normalizar_sinonimos(texto):
-    texto = str(texto).upper()
-    substituicoes = {
-        r"\bUNIDADES\b": "UN", r"\bUNIDADE\b": "UN", r"\bUNID\b": "UN", r"\bSACHÊS\b": "UN", r"\bSACHES\b": "UN",
-        r"\bCÁPSULA\b": "CAPSULA", r"\bCÁPSULAS\b": "CAPSULA", r"\bKIT\b": "PACK", r"\bMUÇARELA\b": "MUSSARELA",
-        r"\bMUCSSARELA\b": "MUSSARELA", r"\bMACARRÃO\b": "MASSA", r"\bMASSA ITALIANA\b": "MASSA", r"\bFETTUCINE\b": "FETTUCCINE",
-        r"\bLIMÃO\b": "LIMAO", r"\bMAÇÃ\b": "MACA", r"\bAÇÚCAR\b": "ACUCAR", r"\bCAFÉ\b": "CAFE", r"\bCAFÊ\b": "CAFE",
-        r"\bCAFA\b": "CAFE", r"\bCHÁ\b": "CHA", r"\bFRALDAS\b": "FRALDA", r"\bPCTS\b": "PCT", r"\bPACOTES\b": "PCT",
-        r"\bPACOTE\b": "PCT", r"\bCAIXAS\b": "CX", r"\bCAIXA\b": "CX", r"\bTETRA PAK\b": "CX", r"\bTETRAPAK\b": "CX",
-        r"\bLITRO\b": "L", r"\bLITROS\b": "L", r"\bBEBIDA EM CÁPSULAS\b": "CAFE EM CAPSULA",
-        r"\bCHOCOLATE QUENTE EM CÁPSULA\b": "CAFE EM CAPSULA", r"\bMOCHACCINO EM CÁPSULA\b": "CAFE EM CAPSULA"
-    }
-    for padrao, substituto in substituicoes.items():
-        texto = re.sub(padrao, substituto, texto)
-    return texto
+# padronizar_multiplicacao e normalizar_sinonimos agora ficam em casamento_produtos.py
+
+def id_produto_valido(ean):
+    """EAN válido, grupo interno (INT_) ou variante criada pela Defesa Automática (ex: 7894900010015_LATA)."""
+    ean = str(ean)
+    if ean_eh_valido(ean):
+        return True
+    base, _, sufixo = ean.partition("_")
+    return bool(sufixo) and ean_eh_valido(base)
 
 async def resolver_ean_novo(ean, itens_crus):
     from collections import Counter
@@ -252,9 +220,12 @@ async def main():
     # Biblioteca, quarentena e itens prontos são gravados de volta no final.
     # Se algum estiver corrompido, aborta: seguir com {} / [] apagaria os dados bons.
     try:
+        # Decisões S/N preenchidas na planilha de revisão entram antes de tudo
+        revisar_casamentos.importar_decisoes()
         biblioteca = ler_json_seguro(ARQUIVO_BIBLIOTECA, {})
         itens_quarentena = ler_json_seguro(ARQUIVO_QUARENTENA, [])
         itens_prontos_anteriores = ler_json_seguro(ARQUIVO_PROCESSADOS, [])
+        casamentos = revisar_casamentos.carregar_casamentos()
     except ArquivoCorrompidoError as e:
         logger.error(f"❌ {e}")
         logger.error("   Abortando para não sobrescrever dados. Restaure o arquivo (ou o .tmp ao lado dele) e rode de novo.")
@@ -265,6 +236,15 @@ async def main():
     except ArquivoCorrompidoError as e:
         logger.warning(f"⚠️ {e} — começando com cache de buscas vazio.")
         cache_buscas_web = {}
+
+    # --- CASAMENTO DE NOMES (local, sem IA/API) ---
+    logger.info("🧠 Montando o índice de casamento de nomes da biblioteca...")
+    casador = CasadorProdutos(biblioteca, casamentos)
+    # Mesmo produto com mais de um EAN: todos passam a usar o EAN principal (um card só no app)
+    equivalencias = montar_equivalencias(casador, casamentos)
+    logger.info(f"   {len(equivalencias)} EANs repetidos serão unificados no EAN principal.")
+    sugestoes_revisao = {}
+    contagem_casamento = {"confirmado": 0, "auto": 0, "revisao": 0, "interno": 0}
 
     itens_por_ean = {}
     itens_sem_ean = []
@@ -295,10 +275,15 @@ async def main():
     # --- MONTAGEM COMPACTA DE GRUPOS POR EAN ---
     for item in pendentes:
         ean = str(item.get("EAN", item.get("ean", "N/A"))).strip()
-        if ean in ("N/A", "", "None", "nan") or not ean_eh_valido(ean):
+        if ean in ("N/A", "", "None", "nan") or not id_produto_valido(ean):
             itens_sem_ean.append(item)
             continue
-            
+
+        if ean in equivalencias:
+            item["EAN_Original"] = ean
+            ean = equivalencias[ean]
+            item["EAN"] = ean
+
         if ean not in itens_por_ean:
             itens_por_ean[ean] = []
         itens_por_ean[ean].append(item)
@@ -376,6 +361,7 @@ async def main():
             if chave_busca in local_lookup:
                 progresso_ean["atual"] += 1
                 b_ean, b_item = local_lookup[chave_busca]
+                b_ean = equivalencias.get(b_ean, b_ean)
                 item["EAN"] = b_ean
                 cat_atual = item.get("Categoria", "GERAL")
                 if not cat_atual or cat_atual in ("GERAL", "OUTROS", "N/A", "None", ""):
@@ -387,17 +373,49 @@ async def main():
                 logger.info(f"   ✅ [{progresso_ean['atual']}/{total_sem_ean}] EAN Local (Exato): '{nome}' -> {item['EAN']}")
                 return item
                 
+            # Casamento de nomes com a biblioteca (marca + medida + palavras-chave)
+            casamento = casador.casar(nome, marca_bruta)
+            if casamento and casamento["tipo"] in ("confirmado", "auto"):
+                progresso_ean["atual"] += 1
+                contagem_casamento[casamento["tipo"]] += 1
+                b_ean = equivalencias.get(casamento["ean"], casamento["ean"])
+                b_item = biblioteca.get(b_ean, {})
+                item["EAN"] = b_ean
+                item["Fonte_EAN"] = f"Casamento {casamento['tipo']} ({casamento['score']})"
+                cat_atual = item.get("Categoria", "GERAL")
+                if not cat_atual or cat_atual in ("GERAL", "OUTROS", "N/A", "None", ""):
+                    item["Categoria"] = b_item.get("Categoria", "OUTROS")
+                if not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM":
+                    item["Link_Imagem"] = b_item.get("imagem", "")
+                logger.info(f"   🧩 [{progresso_ean['atual']}/{total_sem_ean}] Casamento {casamento['tipo']} ({casamento['score']}): '{nome}' -> {b_item.get('nome_comum', b_ean)}")
+                return item
+            if casamento and casamento["tipo"] == "revisao":
+                contagem_casamento["revisao"] += 1
+                sugestoes_revisao[casamento["chave"]] = {
+                    "Mercado": item.get("Mercado", ""), "Nome no mercado": nome, "Marca": marca_bruta,
+                    "EAN sugerido": casamento["ean"], "Nome na biblioteca": biblioteca.get(casamento["ean"], {}).get("nome_comum", ""),
+                    "Pontuação": casamento["score"], "chave": casamento["chave"],
+                }
+
             # Lookup de Cache Imediato
             if chave_busca in cache_buscas_web:
                 progresso_ean["atual"] += 1
                 resultado_cache = cache_buscas_web[chave_busca]
-                item["EAN"] = str(resultado_cache["ean"])
+                item["EAN"] = equivalencias.get(str(resultado_cache["ean"]), str(resultado_cache["ean"]))
                 item["Fonte_EAN"] = resultado_cache.get("fonte", "Web") + " (Cache)"
                 if resultado_cache.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
                     item["Link_Imagem"] = resultado_cache.get("Link_Imagem", "")
                 logger.info(f"   ⚡ [{progresso_ean['atual']}/{total_sem_ean}] EAN Web (Cache): '{nome}' -> {item['EAN']}")
                 return item
                 
+            if not BUSCA_WEB:
+                progresso_ean["atual"] += 1
+                item["EAN"] = casador.agrupar_interno(nome, marca_bruta)
+                item["Fonte_EAN"] = "Grupo_Interno"
+                contagem_casamento["interno"] += 1
+                logger.info(f"   ⚙️ [{progresso_ean['atual']}/{total_sem_ean}] Grupo interno: '{nome}' -> {item['EAN']}")
+                return item
+
             # Desduplicação Inteligente Lider vs Seguidor
             if chave_busca not in buscas_em_andamento:
                 buscas_em_andamento[chave_busca] = asyncio.Event()
@@ -410,17 +428,17 @@ async def main():
                 progresso_ean["atual"] += 1
                 if chave_busca in cache_buscas_web:
                     resultado_cache = cache_buscas_web[chave_busca]
-                    item["EAN"] = str(resultado_cache["ean"])
+                    item["EAN"] = equivalencias.get(str(resultado_cache["ean"]), str(resultado_cache["ean"]))
                     item["Fonte_EAN"] = resultado_cache.get("fonte", "Web") + " (Cache Espera)"
                     if resultado_cache.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
                         item["Link_Imagem"] = resultado_cache.get("Link_Imagem", "")
                     logger.info(f"   ⚡ [{progresso_ean['atual']}/{total_sem_ean}] EAN Web (Cache Espera): '{nome}' -> {item['EAN']}")
                     return item
                 else:
-                    id_interno = gerar_id_interno(nome, marca_bruta)
-                    item["EAN"] = id_interno
-                    item["Fonte_EAN"] = "Gerado_Internamente"
-                    logger.info(f"   ⚙️ [{progresso_ean['atual']}/{total_sem_ean}] EAN Interno gerado (Após Espera): '{nome}' -> {item['EAN']}")
+                    item["EAN"] = casador.agrupar_interno(nome, marca_bruta)
+                    item["Fonte_EAN"] = "Grupo_Interno"
+                    contagem_casamento["interno"] += 1
+                    logger.info(f"   ⚙️ [{progresso_ean['atual']}/{total_sem_ean}] Grupo interno (Após Espera): '{nome}' -> {item['EAN']}")
                     return item
 
             # O finally garante que os "seguidores" nunca fiquem esperando para sempre,
@@ -457,16 +475,16 @@ async def main():
 
                     if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
                         cache_buscas_web[chave_busca] = resultado
-                        item["EAN"] = str(resultado["ean"])
+                        item["EAN"] = equivalencias.get(str(resultado["ean"]), str(resultado["ean"]))
                         item["Fonte_EAN"] = resultado.get("fonte", "Web")
                         if resultado.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
                             item["Link_Imagem"] = resultado.get("Link_Imagem", "")
                         logger.info(f"   🌐 {prefixo_progresso} EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
                     else:
-                        id_interno = gerar_id_interno(nome, marca_bruta)
-                        item["EAN"] = id_interno
-                        item["Fonte_EAN"] = "Gerado_Internamente"
-                        logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
+                        item["EAN"] = casador.agrupar_interno(nome, marca_bruta)
+                        item["Fonte_EAN"] = "Grupo_Interno"
+                        contagem_casamento["interno"] += 1
+                        logger.info(f"   ⚙️ {prefixo_progresso} Grupo interno: '{nome}' -> {item['EAN']}")
                         if not is_fresco_sem_marca:
                             logger.warning("   ⏳ Esfriando IP por 3.0s após falha na busca web...")
                             await asyncio.sleep(3.0)
@@ -487,11 +505,7 @@ async def main():
                 item_recuperado = resultados_recuperacao[i]
                 if item_recuperado:
                     novo_ean = item_recuperado["EAN"]
-                    if novo_ean.startswith("INT_"):
-                        itens_quarentena.append(item_recuperado)
-                    else:
-                        if novo_ean not in itens_por_ean: itens_por_ean[novo_ean] = []
-                        itens_por_ean[novo_ean].append(item_recuperado)
+                    itens_por_ean.setdefault(novo_ean, []).append(item_recuperado)
                 else:
                     itens_sem_ean_restantes.append(item_original)
                     
@@ -525,6 +539,8 @@ async def main():
             
             for ean, prod_ouro in resultados:
                 if prod_ouro:
+                    if ean.startswith("INT_"):
+                        prod_ouro["origem"] = "interno"  # produto sem EAN, agrupado pelo nome
                     biblioteca[ean] = prod_ouro
                     novos_na_biblioteca += 1
                 else:
@@ -543,13 +559,10 @@ async def main():
         ean_str = str(item.get("EAN", item.get("ean", "N/A"))).strip()
         item_k = f"{ean_str}_{item.get('Produto', '')}_{item.get('Mercado', '')}"
         
-        if item_k in q_keys or ean_str.startswith("INT_"):
-            if item_k not in q_keys: 
-                itens_quarentena.append(item)
-                q_keys.add(item_k)
+        if item_k in q_keys:
             continue
 
-        if ean_str in ("N/A", "", "None", "nan") or not ean_eh_valido(ean_str) or ean_str in eans_com_falha:
+        if ean_str in ("N/A", "", "None", "nan") or not id_produto_valido(ean_str) or ean_str in eans_com_falha:
             itens_restantes.append(item)
         elif ean_str in biblioteca:
             b_item = biblioteca[ean_str]
@@ -567,6 +580,15 @@ async def main():
     salvar_json_atomico(ARQUIVO_PROCESSADOS, itens_prontos)
     salvar_json_atomico(ARQUIVO_QUARENTENA, itens_quarentena)
     salvar_json_atomico(ARQUIVO_PENDENTES, itens_restantes)
+
+    # Planilha com os casamentos duvidosos para você marcar S/N
+    n_revisao = revisar_casamentos.exportar_sugestoes(list(sugestoes_revisao.values()))
+    logger.info(
+        f"🧩 Casamento de nomes: {contagem_casamento['confirmado']} confirmados por você, {contagem_casamento['auto']} automáticos, "
+        f"{contagem_casamento['interno']} em grupos internos (sem EAN)."
+    )
+    if n_revisao:
+        logger.info(f"📝 {n_revisao} casamentos duvidosos em '{revisar_casamentos.ARQUIVO_REVISAO}'. Marque S/N e rode o passo 4 de novo.")
 
     logger.info(f"🧹 Concluído! {len(itens_prontos)} prontos, {len(itens_quarentena)} na quarentena e {len(itens_restantes)} pendentes.")
 
