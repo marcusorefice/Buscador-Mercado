@@ -7,7 +7,8 @@ import re
 
 from buscador_ean import tentar_recuperar_ean
 from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
-from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca
+from datetime import date
 import revisar_casamentos
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -22,6 +23,10 @@ ARQUIVO_CACHE_WEB = os.path.join(DATA_DIR, "cache_buscas_web.json")
 
 # Busca de EAN na web (APIs). Desligue com "python 4_resolver_pendentes.py --sem-web" ou BUSCA_WEB_EAN=0 no .env
 BUSCA_WEB = "--sem-web" not in sys.argv and os.getenv("BUSCA_WEB_EAN", "1") != "0"
+# Máximo de buscas na web por execução (o resto vira grupo INT_ e é tentado nas próximas coletas)
+BUSCA_WEB_MAX = int(os.getenv("BUSCA_WEB_MAX", "300"))
+# Busca que não achou nada só é repetida depois desse prazo
+DIAS_PARA_REPETIR_BUSCA = 30
 
 # padronizar_multiplicacao e normalizar_sinonimos agora ficam em casamento_produtos.py
 
@@ -362,6 +367,34 @@ async def main():
         sem_recuperacao = asyncio.Semaphore(4)
         progresso_ean = {"atual": 0}
         buscas_em_andamento = {}
+        buscas_web = {"feitas": 0, "puladas": 0}
+
+        def vale_buscar_na_web(item, chave_busca, marca_bruta):
+            """
+            A web quase nunca acha EAN de código interno de loja, então só tenta quando há chance:
+            produto com marca, que não é vendido por peso nem tem código de balança, que não falhou
+            nos últimos dias e enquanto não passou do limite desta execução.
+            """
+            if not BUSCA_WEB:
+                return False
+            if str(item.get("Unidade", "")).upper() == "KG":
+                return False
+            if re.fullmatch(r"0?2\d{11,12}", str(item.get("EAN", "")).strip()):
+                return False
+            if normalizar_marca(marca_bruta) is None:
+                return False
+            anterior = cache_buscas_web.get(chave_busca) or {}
+            if anterior.get("falhou_em"):
+                try:
+                    if (date.today() - date.fromisoformat(anterior["falhou_em"])).days < DIAS_PARA_REPETIR_BUSCA:
+                        return False
+                except ValueError:
+                    pass
+            if buscas_web["feitas"] >= BUSCA_WEB_MAX:
+                buscas_web["puladas"] += 1
+                return False
+            buscas_web["feitas"] += 1
+            return True
         
         async def recuperar_ean(item):
             nome = str(item.get("Produto", item.get("nome_comum", ""))).strip()
@@ -420,7 +453,8 @@ async def main():
                 logger.info(f"   ⚡ [{progresso_ean['atual']}/{total_sem_ean}] EAN Web (Cache): '{nome}' -> {item['EAN']}")
                 return item
                 
-            if not BUSCA_WEB:
+            # Itens iguais (mesma chave) esperam a busca que já está em andamento
+            if chave_busca not in buscas_em_andamento and not vale_buscar_na_web(item, chave_busca, marca_bruta):
                 progresso_ean["atual"] += 1
                 item["EAN"] = casador.agrupar_interno(nome, marca_bruta)
                 item["Fonte_EAN"] = "Grupo_Interno"
@@ -503,6 +537,8 @@ async def main():
                         contagem_casamento["interno"] += 1
                         logger.info(f"   ⚙️ {prefixo_progresso} Grupo interno: '{nome}' -> {item['EAN']}")
                         if not is_fresco_sem_marca:
+                            # Guarda a falha para não repetir a mesma busca nas próximas coletas
+                            cache_buscas_web[chave_busca] = {"ean": None, "falhou_em": date.today().isoformat()}
                             logger.warning("   ⏳ Esfriando IP por 3.0s após falha na busca web...")
                             await asyncio.sleep(3.0)
                 
@@ -530,6 +566,9 @@ async def main():
             salvar_estado_intermediario()
             
         itens_sem_ean = itens_sem_ean_restantes
+        if BUSCA_WEB:
+            logger.info(f"🌐 Busca na web: {buscas_web['feitas']} feitas (limite {BUSCA_WEB_MAX}); "
+                        f"{buscas_web['puladas']} ficaram para as próximas coletas.")
 
     # --- PROCESSAMENTO E SALVAMENTO EM LOTES ---
     eans_para_processar = [(ean, lista) for ean, lista in itens_por_ean.items() if ean not in biblioteca]
