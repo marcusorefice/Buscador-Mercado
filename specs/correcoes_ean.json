@@ -1,0 +1,8 @@
+[
+    {
+        "ean_errado": "7891991015462",
+        "nome_contem": "LATA",
+        "ean_correto": "7891991016223",
+        "motivo": "Alguns mercados (ex: Carrefour) usam o EAN da Stella Artois garrafa para a lata 350ml"
+    }
+]

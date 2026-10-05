@@ -1,23 +1,59 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import base64
+import threading
 import uvicorn
+import httpx
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
 from typing import List, Optional
-from pydantic import BaseModel
-from contextlib import asynccontextmanager
+from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager, contextmanager
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # URL do Banco de Dados Supabase (PostgreSQL)
 DB_URL = os.getenv("DATABASE_URL")
+# Webhook do Discord para sugestões/bugs (fica só no servidor, nunca no app)
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+
+LIMITE_PRODUTOS = 200
+
+_pool: Optional[ThreadedConnectionPool] = None
+_pool_lock = threading.Lock()
+
+def _get_pool() -> ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ThreadedConnectionPool(1, 10, DB_URL, cursor_factory=RealDictCursor)
+    return _pool
+
+@contextmanager
+def get_db_cursor():
+    """Pega uma conexão do pool e devolve sempre, mesmo se der erro."""
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        with conn.cursor() as cursor:
+            yield cursor
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Iniciando a nova API Agrupada do Comparador de Preços...")
     yield
+    if _pool is not None:
+        _pool.closeall()
     print("Encerrando a API...")
 
 app = FastAPI(title="Comparador de Preços API - V2", lifespan=lifespan)
@@ -25,7 +61,6 @@ app = FastAPI(title="Comparador de Preços API - V2", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -56,85 +91,46 @@ class ProdutoAgrupadoResponse(BaseModel):
     Menor_Preco: float
     Ofertas: List[OfertaResponse]
 
-def get_db_connection():
-    conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-    return conn
-
 @app.get("/debug")
 def debug_connection():
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) as qtd FROM ofertas_atuais")
-        qtd = cursor.fetchone()["qtd"]
-        conn.close()
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) as qtd FROM ofertas_atuais")
+            qtd = cursor.fetchone()["qtd"]
         return {"status": "SUCESSO", "ofertas_na_nuvem": qtd, "url_configurada": bool(DB_URL)}
     except Exception as e:
-        return {"status": "ERRO", "detalhe": str(e), "url_configurada": bool(DB_URL)}
+        print(f"Erro no /debug: {e}")
+        return {"status": "ERRO", "url_configurada": bool(DB_URL)}
 
-@app.get("/produtos", response_model=List[ProdutoAgrupadoResponse])
-def get_produtos(
-    q: str = Query(None, description="Busca por nome do produto ou marca"),
-    sort_by: str = Query("discount", description="Ordenação: discount ou price"),
-    market: str = Query(None, description="Filtrar por mercado específico")
-):
-    # Busca cruzando a Biblioteca Ouro com as Ofertas Atuais dos mercados
-    query = '''
-        SELECT p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
-               o.mercado, o.nome_original, o.preco_varejo, o.preco_atacado, 
-               o.qtd_valor, o.medida, o.unidade, o.condicao, o.data_atualizacao, o.link_pdp
-        FROM produtos p
-        JOIN ofertas_atuais o ON p.ean = o.ean
-    '''
+# Preço efetivo de uma oferta: o menor valor > 0 entre varejo e atacado
+SQL_PRECO_EFETIVO = '''
+    CASE
+        WHEN o.preco_atacado > 0 AND o.preco_varejo > 0 THEN LEAST(o.preco_atacado, o.preco_varejo)
+        WHEN o.preco_atacado > 0 THEN o.preco_atacado
+        ELSE o.preco_varejo
+    END
+'''
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    params = []
-    where_clauses = []
-
-    if q:
-        # Se a busca for um número longo, trata como busca exata por EAN (usado pelo modal de detalhes)
-        if q.isdigit() and len(q) >= 8:
-            # Permite buscar pelo EAN original OU pelas variações internas de colisão (ex: INT_1234_KG)
-            where_clauses.append('(p.ean = %s OR p.ean LIKE %s)')
-            params.extend([q, f"INT_{q}_%"])
-        else:
-            # Permite múltiplas palavras-chave
-            termos = q.split()
-            for termo in termos:
-                where_clauses.append('(p.nome_comum ILIKE %s OR o.nome_original ILIKE %s OR p.marca ILIKE %s OR p.tags ILIKE %s)')
-                params.extend([f"%{termo}%", f"%{termo}%", f"%{termo}%", f"%{termo}%"])
-
-    if market and market.lower() != "todos os mercados":
-        where_clauses.append('o.mercado = %s')
-        params.append(market)
-
-    if where_clauses:
-        query += ' WHERE ' + ' AND '.join(where_clauses)
-
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    conn.close()
-
-    # Agrupa os resultados pelo EAN
+def _montar_produtos(rows):
+    """Agrupa as linhas (produto x oferta) por EAN, mantendo a ordem em que os EANs chegaram."""
     agrupados = {}
     for row in rows:
         ean = row["ean"]
         if ean not in agrupados:
             raw_tags = row["tags"]
-            tags_list = [t.strip() for t in raw_tags.split(',')] if raw_tags else []
-            
             agrupados[ean] = {
                 "EAN": ean,
                 "Produto_Ouro": row["nome_comum"] or "Produto Sem Nome",
                 "Categoria_Ouro": row["categoria"] or "OUTROS",
                 "Marca": row["marca"] or "",
                 "Imagem": row["imagem"] or "",
-                "Tags": tags_list,
-                "Ofertas": []
+                "Tags": [t.strip() for t in raw_tags.split(',')] if raw_tags else [],
+                "Ofertas": [],
+                "_precos": [],
             }
-            
-        oferta = {
+        preco_efetivo = float(row["preco_efetivo"]) if row["preco_efetivo"] and row["preco_efetivo"] > 0 else None
+        agrupados[ean]["_precos"].append(preco_efetivo)
+        agrupados[ean]["Ofertas"].append({
             "Mercado": row["mercado"] or "Desconhecido",
             "Preco_Varejo": float(row["preco_varejo"]) if row["preco_varejo"] else 0.0,
             "Preco_Atacado": float(row["preco_atacado"]) if row["preco_atacado"] else 0.0,
@@ -144,80 +140,182 @@ def get_produtos(
             "Unidade": row["unidade"] or "UN",
             "Condicao": row["condicao"] or "",
             "Data_Atualizacao": row["data_atualizacao"] or "",
-            "Link_PDP": row["link_pdp"] or ""
-        }
-        agrupados[ean]["Ofertas"].append(oferta)
+            "Link_PDP": row["link_pdp"] or "",
+        })
 
     result = []
     for data in agrupados.values():
-        if not data["Ofertas"]:
-            continue
-            
-        # Determina o menor preço de cada oferta (considerando varejo ou atacado se existir e for maior que 0)
-        for o in data["Ofertas"]:
-            p_varejo = o["Preco_Varejo"]
-            p_atacado = o["Preco_Atacado"]
-            # O preço efetivo mínimo dessa oferta é o menor valor > 0 entre varejo e atacado.
-            precos_oferta = [p for p in (p_varejo, p_atacado) if p > 0]
-            o["preco_efetivo"] = min(precos_oferta) if precos_oferta else 999999.0
-
-        # Encontra o menor preço absoluto disponível hoje para esse EAN (entre todas as ofertas)
-        menor_preco = min([o["preco_efetivo"] for o in data["Ofertas"]])
-        data["Menor_Preco"] = menor_preco if menor_preco != 999999.0 else 0.0
-        
-        # Ordena a lista de ofertas do mais barato para o mais caro baseado no preço efetivo mínimo
-        data["Ofertas"] = sorted(data["Ofertas"], key=lambda x: x["preco_efetivo"])
-        
-        # Removemos o campo auxiliar 'preco_efetivo' antes de retornar
-        for o in data["Ofertas"]:
-            del o["preco_efetivo"]
-            
+        precos = data.pop("_precos")
+        # Ordena as ofertas do mais barato para o mais caro (ofertas sem preço vão para o fim)
+        pares = sorted(zip(precos, data["Ofertas"]), key=lambda x: x[0] if x[0] is not None else float("inf"))
+        data["Ofertas"] = [o for _, o in pares]
+        validos = [p for p in precos if p is not None]
+        data["Menor_Preco"] = min(validos) if validos else 0.0
         result.append(ProdutoAgrupadoResponse(**data))
-        
-    # Calcula o desconto (diferença percentual) para ordenar os produtos
-    def calcular_desconto(produto):
-        precos_varejo = [o.Preco_Varejo for o in produto.Ofertas if o.Preco_Varejo > 0]
-        if not precos_varejo:
-            return 0.0
-        maior_preco = max(precos_varejo)
-        menor_preco = produto.Menor_Preco
-        if maior_preco <= 0 or menor_preco >= maior_preco:
-            return 0.0
-        return (maior_preco - menor_preco) / maior_preco
+    return result
 
+@app.get("/produtos", response_model=List[ProdutoAgrupadoResponse])
+def get_produtos(
+    q: str = Query(None, description="Busca por nome do produto ou marca"),
+    sort_by: str = Query("discount", description="Ordenação: discount ou price"),
+    market: str = Query(None, description="Filtrar por mercado específico")
+):
+    params = []
+    where_clauses = []
+
+    if q:
+        # Se a busca for um número longo, trata como busca exata por EAN (usado pelo scanner e pelo modal de detalhes)
+        if q.isdigit() and len(q) >= 8:
+            # Também acha as variantes separadas pelo passo 4 (ex: 7891991015462_LATA)
+            where_clauses.append(r"(p.ean = %s OR p.ean LIKE %s)")
+            params.extend([q, q + r"\_%"])
+        else:
+            # Permite múltiplas palavras-chave
+            for termo in q.split():
+                where_clauses.append('(p.nome_comum ILIKE %s OR o.nome_original ILIKE %s OR p.marca ILIKE %s OR p.tags ILIKE %s)')
+                params.extend([f"%{termo}%"] * 4)
+
+    if market and market.lower() != "todos os mercados":
+        where_clauses.append('o.mercado = %s')
+        params.append(market)
+
+    where_sql = (' WHERE ' + ' AND '.join(where_clauses)) if where_clauses else ''
+
+    # "discount" = economia real: diferença entre o mercado mais caro e o mais barato para o MESMO produto.
+    # Quando só há um mercado (ex: filtro por mercado), usa o "de/por" da própria oferta.
     if sort_by == "price":
-        # Ordena por Menor Preço Absoluto
-        result = sorted(result, key=lambda x: x.Menor_Preco)
+        order_sql = "menor_preco ASC NULLS LAST, ean"
     else:
-        # Ordena por Maior Desconto (Padrão)
-        result = sorted(result, key=lambda x: calcular_desconto(x), reverse=True)
-    
-    # Limita o retorno para não travar o app
-    return result[:200]
+        order_sql = '''
+            CASE
+                WHEN qtd_ofertas > 1 AND maior_preco > 0 THEN (maior_preco - menor_preco) / maior_preco
+                WHEN maior_varejo > 0 AND menor_preco IS NOT NULL THEN GREATEST(maior_varejo - menor_preco, 0) / maior_varejo
+                ELSE 0
+            END DESC, menor_preco ASC NULLS LAST, ean
+        '''
+
+    # 1º calcula o ranking e corta em 200 DENTRO do banco; 2º busca as ofertas só desses produtos.
+    query_ranking = f'''
+        WITH filtradas AS (
+            SELECT o.ean, o.mercado, o.preco_varejo, NULLIF({SQL_PRECO_EFETIVO}, 0) AS preco_efetivo
+            FROM produtos p
+            JOIN ofertas_atuais o ON p.ean = o.ean
+            {where_sql}
+        ),
+        agregadas AS (
+            SELECT ean,
+                   MIN(preco_efetivo) AS menor_preco,
+                   MAX(preco_efetivo) AS maior_preco,
+                   MAX(preco_varejo) AS maior_varejo,
+                   COUNT(*) AS qtd_ofertas
+            FROM filtradas
+            GROUP BY ean
+        )
+        SELECT ean FROM agregadas
+        ORDER BY {order_sql}
+        LIMIT {LIMITE_PRODUTOS}
+    '''
+
+    with get_db_cursor() as cursor:
+        cursor.execute(query_ranking, params)
+        eans_ordenados = [r["ean"] for r in cursor.fetchall()]
+        if not eans_ordenados:
+            return []
+
+        # Busca as ofertas só dos produtos do ranking, respeitando o mesmo filtro de mercado
+        filtro_mercado = ''
+        params_ofertas = [eans_ordenados]
+        if market and market.lower() != "todos os mercados":
+            filtro_mercado = ' AND o.mercado = %s'
+            params_ofertas.append(market)
+        cursor.execute(f'''
+            SELECT p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
+                   o.mercado, o.nome_original, o.preco_varejo, o.preco_atacado,
+                   o.qtd_valor, o.medida, o.unidade, o.condicao, o.data_atualizacao, o.link_pdp,
+                   {SQL_PRECO_EFETIVO} AS preco_efetivo
+            FROM produtos p
+            JOIN ofertas_atuais o ON p.ean = o.ean
+            WHERE p.ean = ANY(%s){filtro_mercado}
+        ''', params_ofertas)
+        rows = cursor.fetchall()
+
+    posicao = {ean: i for i, ean in enumerate(eans_ordenados)}
+    rows.sort(key=lambda r: posicao[r["ean"]])
+    return _montar_produtos(rows)
+
+@app.get("/produtos/lote", response_model=List[ProdutoAgrupadoResponse])
+def get_produtos_lote(eans: str = Query(..., description="EANs separados por vírgula (máx. 200)")):
+    """Usado pela lista de compras para atualizar os preços dos itens salvos no celular."""
+    lista = [e.strip() for e in eans.split(',') if e.strip()][:LIMITE_PRODUTOS]
+    if not lista:
+        return []
+    with get_db_cursor() as cursor:
+        cursor.execute(f'''
+            SELECT p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
+                   o.mercado, o.nome_original, o.preco_varejo, o.preco_atacado,
+                   o.qtd_valor, o.medida, o.unidade, o.condicao, o.data_atualizacao, o.link_pdp,
+                   {SQL_PRECO_EFETIVO} AS preco_efetivo
+            FROM produtos p
+            JOIN ofertas_atuais o ON p.ean = o.ean
+            WHERE p.ean = ANY(%s)
+        ''', (lista,))
+        rows = cursor.fetchall()
+    return _montar_produtos(rows)
 
 @app.get("/produtos/{ean}/historico")
 def obter_historico(ean: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Puxa o menor preço registrado na data entre as opções de atacado e varejo
-    cursor.execute("""
-        SELECT mercado, 
-               CASE 
-                   WHEN preco_atacado > 0 AND preco_varejo > 0 THEN LEAST(preco_atacado, preco_varejo)
-                   WHEN preco_atacado > 0 THEN preco_atacado
-                   ELSE preco_varejo 
-               END as preco, 
-               data_hora 
-        FROM historico_precos 
-        WHERE ean = %s 
-        ORDER BY data_hora DESC
-    """, (ean,))
-    
-    historico = cursor.fetchall()
-    conn.close()
-    
-    return historico
+    # data_hora é gravado em ISO (AAAA-MM-DD HH:MM:SS), então ordenar o texto ordena por data
+    with get_db_cursor() as cursor:
+        cursor.execute("""
+            SELECT mercado,
+                   CASE
+                       WHEN preco_atacado > 0 AND preco_varejo > 0 THEN LEAST(preco_atacado, preco_varejo)
+                       WHEN preco_atacado > 0 THEN preco_atacado
+                       ELSE preco_varejo
+                   END as preco,
+                   data_hora
+            FROM historico_precos
+            WHERE ean = %s
+            ORDER BY data_hora DESC
+            LIMIT 50
+        """, (ean,))
+        return cursor.fetchall()
+
+class SugestaoRequest(BaseModel):
+    texto: str = Field(..., min_length=1, max_length=2000)
+    imagem_base64: Optional[str] = None
+    imagem_nome: Optional[str] = "print.jpg"
+
+MAX_IMAGEM_BYTES = 8 * 1024 * 1024  # limite de anexo do Discord
+
+@app.post("/sugestoes")
+def enviar_sugestao(sugestao: SugestaoRequest):
+    """Repassa a sugestão do app para o Discord. A URL do webhook nunca sai do servidor."""
+    if not DISCORD_WEBHOOK_URL:
+        raise HTTPException(status_code=503, detail="Envio de sugestões não configurado.")
+
+    data = {"content": f"💡 **Nova Sugestão / Bug:**\n{sugestao.texto}"}
+    files = None
+    if sugestao.imagem_base64:
+        try:
+            imagem = base64.b64decode(sugestao.imagem_base64, validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Imagem inválida.")
+        if len(imagem) > MAX_IMAGEM_BYTES:
+            raise HTTPException(status_code=413, detail="Imagem muito grande.")
+        nome = os.path.basename(sugestao.imagem_nome or "print.jpg")
+        ext = nome.rsplit('.', 1)[-1].lower() if '.' in nome else 'jpeg'
+        files = {"file": (nome, imagem, f"image/{'jpeg' if ext == 'jpg' else ext}")}
+
+    try:
+        resp = httpx.post(DISCORD_WEBHOOK_URL, data=data, files=files, timeout=20)
+    except httpx.HTTPError as e:
+        print(f"Erro ao enviar sugestão ao Discord: {e}")
+        raise HTTPException(status_code=502, detail="Falha ao enviar a sugestão.")
+    if resp.status_code >= 300:
+        print(f"Discord respondeu {resp.status_code}: {resp.text[:200]}")
+        raise HTTPException(status_code=502, detail="Falha ao enviar a sugestão.")
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
