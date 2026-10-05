@@ -3,7 +3,7 @@ import { View, StyleSheet, ScrollView, Modal, Image, TouchableOpacity } from 're
 import { Text, IconButton, Divider, Button, Chip, Checkbox } from 'react-native-paper';
 import { useShoppingListStore } from './useShoppingListStore';
 import { Product } from '../types';
-import { getPrecoEfetivo, getAvisoCondicao } from '../precos';
+import { getPrecoEfetivo, getAvisoCondicao, melhorCombinacao } from '../precos';
 
 interface Props {
   visible: boolean;
@@ -32,7 +32,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
   }, [visible, apiUrl, refreshOffers]);
   const [expandedMarkets, setExpandedMarkets] = useState<Record<string, boolean>>({});
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
-  const [shoppingMode, setShoppingMode] = useState<{ type: 'cheapest' | 'custom' | 'single', market?: string, title: string } | null>(null);
+  const [shoppingMode, setShoppingMode] = useState<{ type: 'cheapest' | 'custom' | 'single' | 'dupla', market?: string, title: string } | null>(null);
 
   const toggleExpandedMarket = (marketName: string) => {
     setExpandedMarkets(prev => ({ ...prev, [marketName]: !prev[marketName] }));
@@ -159,6 +159,10 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
     return { total, markets, missingCount, hasCustomPins };
   }, [list]);
 
+  // Melhor rota usando no máximo 2 mercados (só vale mostrar se o "mais barato" exigir 3 ou mais)
+  const duplaCart = useMemo(() => melhorCombinacao(list, 2), [list]);
+  const mostrarDupla = !!duplaCart && Object.keys(cheapestCart.markets).length > 2 && duplaCart.mercados.length > 0;
+
   // MÁGICA: Cálculo do carrinho e Ranking por mercado
   const marketRanking = useMemo(() => {
     if (list.length === 0) return [];
@@ -277,8 +281,12 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
             </View>
           ) : shoppingMode ? (
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-              {(shoppingMode.type === 'cheapest' || shoppingMode.type === 'custom') && (
-                Object.entries(shoppingMode.type === 'cheapest' ? cheapestCart.markets : customCart.markets).map(([mkt, items]) => (
+              {(shoppingMode.type === 'cheapest' || shoppingMode.type === 'custom' || shoppingMode.type === 'dupla') && (
+                Object.entries(
+                  shoppingMode.type === 'cheapest' ? cheapestCart.markets
+                    : shoppingMode.type === 'dupla' ? (duplaCart?.porMercado || {})
+                    : customCart.markets
+                ).map(([mkt, items]) => (
                   <View key={mkt} style={{ marginBottom: 20 }}>
                     <View style={{ backgroundColor: '#f0f0f0', padding: 8, borderRadius: 8, marginBottom: 8 }}>
                       <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#555' }}>🛒 {mkt}</Text>
@@ -370,6 +378,54 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                           <Text style={styles.optimizedMarketTitle}>🛒 {mkt}</Text>
                           {items.map((item, idx) => (
                               <TouchableOpacity key={`cheap-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
+                                <View style={styles.expandedItemRow}>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
+                                </View>
+                              </TouchableOpacity>
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {mostrarDupla && duplaCart && (
+                <View style={[styles.marketCard, styles.duplaCard]}>
+                  <TouchableOpacity onPress={() => toggleExpandedMarket('dupla')} activeOpacity={0.7}>
+                    <View style={styles.marketHeader}>
+                      <View style={styles.marketNameRow}>
+                        <Text style={styles.duplaName}>🚗 Melhor em até 2 mercados</Text>
+                        <IconButton icon={expandedMarkets['dupla'] ? "chevron-up" : "chevron-down"} size={18} style={styles.expandIcon} iconColor="#2e7d32" />
+                      </View>
+                      <Text style={styles.duplaTotal}>R$ {duplaCart.total.toFixed(2).replace('.', ',')}</Text>
+                    </View>
+                    <Text style={styles.marketDetails}>
+                      {duplaCart.mercados.join(' + ')}
+                      {duplaCart.total > cheapestCart.total + 0.005
+                        ? ` · só R$ ${(duplaCart.total - cheapestCart.total).toFixed(2).replace('.', ',')} a mais que ir em ${Object.keys(cheapestCart.markets).length} mercados`
+                        : ''}
+                      {duplaCart.faltando > 0 && ` (Faltam ${duplaCart.faltando})`}
+                    </Text>
+                  </TouchableOpacity>
+                  {expandedMarkets['dupla'] && (
+                    <View style={styles.expandedContent}>
+                      <Divider style={styles.expandedDivider} />
+                      <Button
+                        mode="contained"
+                        buttonColor="#2e7d32"
+                        icon="cart-outline"
+                        style={{ marginBottom: 16 }}
+                        onPress={() => setShoppingMode({ type: 'dupla', title: 'Até 2 Mercados' })}
+                      >
+                        Iniciar Compras
+                      </Button>
+                      {Object.entries(duplaCart.porMercado).map(([mkt, items]) => (
+                        <View key={mkt} style={{ marginBottom: 12 }}>
+                          <Text style={[styles.optimizedMarketTitle, { color: '#2e7d32', backgroundColor: '#e8f5e9' }]}>🛒 {mkt}</Text>
+                          {items.map((item, idx) => (
+                              <TouchableOpacity key={`dupla-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
                                   <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
                                   <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
@@ -640,6 +696,7 @@ const styles = StyleSheet.create({
   bestMarketCard: { backgroundColor: '#fff0f2', borderColor: '#E5293E', borderWidth: 2 },
   optimizedCard: { backgroundColor: '#fffdf5', borderColor: '#ffd700', borderWidth: 2 },
   customCard: { backgroundColor: '#f0f8ff', borderColor: '#0066cc', borderWidth: 2 },
+  duplaCard: { backgroundColor: '#f1f8e9', borderColor: '#2e7d32', borderWidth: 2 },
   marketHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   marketNameRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   expandIcon: { margin: 0, padding: 0, width: 24, height: 24, marginLeft: 4 },
@@ -647,10 +704,12 @@ const styles = StyleSheet.create({
   bestMarketName: { color: '#E5293E', fontSize: 18 },
   optimizedName: { color: '#b8860b', fontSize: 16, fontWeight: 'bold' },
   customName: { color: '#0066cc', fontSize: 16, fontWeight: 'bold' },
+  duplaName: { color: '#2e7d32', fontSize: 16, fontWeight: 'bold' },
   marketTotal: { fontSize: 16, fontWeight: 'bold', color: '#333' },
   bestMarketTotal: { color: '#E5293E', fontSize: 18 },
   optimizedTotal: { color: '#b8860b', fontSize: 18, fontWeight: 'bold' },
   customTotal: { color: '#0066cc', fontSize: 18, fontWeight: 'bold' },
+  duplaTotal: { color: '#2e7d32', fontSize: 18, fontWeight: 'bold' },
   marketDetails: { fontSize: 12, color: '#777' },
   expandedContent: { marginTop: 12 },
   expandedDivider: { marginBottom: 12, backgroundColor: '#ddd' },
