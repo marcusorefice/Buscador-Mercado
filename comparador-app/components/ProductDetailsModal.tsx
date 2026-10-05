@@ -130,6 +130,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   let displayCurrentPrice = currentPrice > 0 ? currentPrice : (productToRender.Menor_Preco || 0);
   let displayOriginalPrice = originalPrice > 0 ? originalPrice : displayCurrentPrice;
   let priceSuffix = ' un';
+  let mainPackInfo = '';
 
   if (activeOffer?.Unidade === 'KG') {
     const qtd = parseFloat(activeOffer.Qtd_Valor || '1');
@@ -139,6 +140,14 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
       displayOriginalPrice = displayOriginalPrice / factor;
     }
     priceSuffix = ' / kg';
+  } else if (activeOffer?.Unidade === 'UN' && parseFloat(activeOffer.Qtd_Valor || '1') > 1 && (activeOffer.Medida === 'UN' || activeOffer.Medida === 'PCT' || activeOffer.Medida === 'CX')) {
+    const factor = parseFloat(activeOffer.Qtd_Valor || '1');
+    if (factor > 0) {
+      displayCurrentPrice = displayCurrentPrice / factor;
+      displayOriginalPrice = displayOriginalPrice / factor;
+    }
+    priceSuffix = ' / un';
+    mainPackInfo = `(Pack c/ ${activeOffer.Qtd_Valor})`;
   } else if (activeOffer?.Medida === 'KG' && activeOffer?.Qtd_Valor === '1') {
     priceSuffix = ' / kg';
   } else if (activeOffer?.Unidade && activeOffer.Unidade !== 'UN') {
@@ -281,19 +290,26 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
               let offerAtacado = oferta.Preco_Atacado;
               let offerVarejo = oferta.Preco_Varejo;
               let offerSuffix = ' un';
+              let unitFactor = 1;
+              let packInfo = '';
               
               if (oferta.Unidade === 'KG') {
                 const qtd = parseFloat(oferta.Qtd_Valor || '1');
-                const factor = oferta.Medida === 'G' ? (qtd / 1000) : (oferta.Medida === 'KG' ? qtd : 1);
-                if (factor > 0) {
-                  offerAtacado = offerAtacado / factor;
-                  offerVarejo = offerVarejo / factor;
-                }
+                unitFactor = oferta.Medida === 'G' ? (qtd / 1000) : (oferta.Medida === 'KG' ? qtd : 1);
                 offerSuffix = ' / kg';
+              } else if (oferta.Unidade === 'UN' && parseFloat(oferta.Qtd_Valor || '1') > 1 && (oferta.Medida === 'UN' || oferta.Medida === 'PCT' || oferta.Medida === 'CX')) {
+                unitFactor = parseFloat(oferta.Qtd_Valor || '1');
+                offerSuffix = ' / un';
+                packInfo = `(Pack c/ ${oferta.Qtd_Valor})`;
               } else if (oferta.Medida === 'KG' && oferta.Qtd_Valor === '1') {
                 offerSuffix = ' / kg';
               } else if (oferta.Unidade && oferta.Unidade !== 'UN') {
                 offerSuffix = ` / ${oferta.Unidade.toLowerCase()}`;
+              }
+
+              if (unitFactor > 0 && unitFactor !== 1) {
+                offerAtacado = offerAtacado / unitFactor;
+                offerVarejo = offerVarejo / unitFactor;
               }
 
               const content = (
@@ -304,6 +320,9 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                       <Text style={styles.marketName}>
                         {oferta.Mercado}
                       </Text>
+                      {packInfo !== '' && (
+                        <Text style={{ fontSize: 10, color: '#e67e22', fontWeight: 'bold' }}>{packInfo}</Text>
+                      )}
                       {oferta.Condicao && (
                         <Text style={[styles.conditionText, oferta.Condicao === '1 UN' && { color: '#888' }]}>{oferta.Condicao}</Text>
                       )}
@@ -317,7 +336,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                           <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}>{offerSuffix}</Text>
                         </Text>
                         {oferta.Preco_Varejo > 0 && (
-                          <Text style={styles.retailText}>R$ {formatPrice(oferta.Preco_Varejo)}</Text>
+                          <Text style={styles.retailText}>R$ {formatPrice(offerVarejo)}</Text>
                         )}
                       </>
                     ) : (
@@ -352,7 +371,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
               <Text style={styles.emptyHistory}>Nenhum histórico registrado para este produto.</Text>
             ) : (
               <View style={styles.historyContainer}>
-                {history.map((item, index) => (
+                {history.slice(0, 50).map((item, index) => (
                   <View key={index} style={styles.historyRow}>
                     <View style={styles.historyMarketInfo}>
                       <Image source={getMarketLogo(item.mercado)} style={styles.historyMarketLogo} resizeMode="contain" />

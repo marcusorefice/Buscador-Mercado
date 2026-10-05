@@ -165,17 +165,21 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 p_v = float(custom_offers.get('listPriceCustom') or offers_data.get('highPrice') or 0.0)
                 if p_v <= 0: 
                     p_v = v_varejo
-                    
+
                 p_a = v_atacado if v_atacado > 0 else float(custom_offers.get('spotPriceCustom') or offers_data.get('lowPrice') or p_v or 0.0)
 
+                # FIX: spotPriceCustom is sometimes incorrectly multiplied by unitMultiplier on VTEX's backend
+                if p_a > p_v * 1.5:
+                    p_a = float(offers_data.get('lowPrice') or p_v or 0.0)
+
                 unit_multiplier = float(p.get('unitMultiplier') or 1.0)
-                if unit_multiplier > 0 and unit_multiplier < 1.0:
+                if unit_multiplier > 0 and unit_multiplier != 1.0:
                     # Se p_v veio como 1KG do v_varejo (fallback), não dividimos. Mas da vitrine é seguro dividir.
                     if p_v == v_varejo and p_v >= (p_a / unit_multiplier) * 0.9:
                         pass # v_varejo já é 1KG
                     else:
                         p_v = p_v / unit_multiplier
-                    
+
                     p_a = p_a / unit_multiplier
 
                 if p_v <= 0 and p_a <= 0: continue

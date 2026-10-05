@@ -325,14 +325,19 @@ async def motor_extracao_dom_olivio_full():
                                     
                                 p_a = v_atacado if v_atacado > 0 else float(custom_offers.get('spotPriceCustom') or offers_data.get('lowPrice') or p_v or 0.0)
 
+                                if p_a > p_v * 1.5:
+                                    p_a = float(offers_data.get('lowPrice') or p_v or 0.0)
+
                                 unit_multiplier = float(p.get('unitMultiplier') or 1.0)
-                                if unit_multiplier > 0 and unit_multiplier < 1.0:
-                                    if p_v == v_varejo and p_v >= (p_a / unit_multiplier) * 0.9:
-                                        pass
-                                    else:
-                                        p_v = p_v / unit_multiplier
-                                    
-                                    p_a = p_a / unit_multiplier
+                                measurement_unit = str(p.get('measurementUnit') or 'UN').upper()
+                                
+                                # Em vez de dividir o preco (o que causa bugs como 149.75 o kg), 
+                                # vamos preservar o preco da oferta original e registrar a Qtd_Valor.
+                                qv_from_vtex = "1"
+                                med_from_vtex = "UN"
+                                if unit_multiplier > 0 and unit_multiplier != 1.0:
+                                    qv_from_vtex = str(unit_multiplier)
+                                    med_from_vtex = measurement_unit
 
                                 if p_v <= 0 and p_a <= 0: continue
                                 if p_v <= 0: p_v = p_a
@@ -359,6 +364,11 @@ async def motor_extracao_dom_olivio_full():
                                 if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                                 
                                 nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+
+                                # Se a VTEX enviou um unitMultiplier (ex: 5.0 kg), usamos ele em vez da extração de texto
+                                if qv_from_vtex != "1":
+                                    qv = qv_from_vtex
+                                    med = med_from_vtex
 
                                 unidade_venda = "UN"
                                 measurement_unit = str(p.get('measurementUnit', '')).lower()

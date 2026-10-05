@@ -77,11 +77,23 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
   const showWeight = weightInfo !== '' && !titleText.toLowerCase().includes(weightInfo.toLowerCase());
 
   // Lógica de cálculo de desconto: buscando o maior preço entre as ofertas para comparação
+  // Para evitar misturar pacotes (ex: 120 latas) com unidades, consideramos apenas as ofertas com a mesma proporção.
   const maxOfferPrice = React.useMemo(() => {
-    return product.Ofertas?.reduce((max, oferta) => {
-      return Math.max(max, oferta.Preco_Varejo || 0, oferta.Preco_Atacado || 0);
-    }, 0) || 0;
-  }, [product.Ofertas]);
+    if (!product.Ofertas || product.Ofertas.length === 0 || !bestOffer) return 0;
+
+    const lowestPrice = bestOffer.Preco_Atacado || bestOffer.Preco_Varejo || 1;
+
+    return product.Ofertas
+      .filter((o: any) => {
+        const isSameSize = o.Qtd_Valor === bestOffer.Qtd_Valor && o.Medida === bestOffer.Medida;
+        const offerMaxPrice = Math.max(o.Preco_Varejo || 0, o.Preco_Atacado || 0);
+        // Ignora outliers (mais de 4x o preço do bestOffer) que provavelmente são packs (ex: 120 latas)
+        return isSameSize && offerMaxPrice <= lowestPrice * 4;
+      })
+      .reduce((max, oferta) => {
+        return Math.max(max, oferta.Preco_Varejo || 0, oferta.Preco_Atacado || 0);
+      }, 0) || 0;
+  }, [product.Ofertas, bestOffer]);
 
   const originalPrice = (product as any).Maior_Preco || maxOfferPrice;
   const currentPrice = product.Menor_Preco || 0;
