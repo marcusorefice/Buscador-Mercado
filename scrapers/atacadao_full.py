@@ -322,6 +322,7 @@ async def motor_extracao_atacadao_full():
                             break
                         offset += PAGE_SIZE
                         if offset >= 2500: # Limite VTEX
+                            logger.warning(f"   ⚠️ Categoria {cat_name} atingiu o limite de 2500 itens da VTEX: produtos além disso não foram coletados.")
                             break
                     except Exception as e:
                         logger.error(f"Erro na categoria {cat_name}: {e}")

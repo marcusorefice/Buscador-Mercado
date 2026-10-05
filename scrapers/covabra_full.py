@@ -172,7 +172,9 @@ async def motor_extracao_covabra_full():
                         if len(produtos_raw) < PAGE_SIZE:
                             break
                         _from += PAGE_SIZE
-                        if _from >= 2500: break # Limite VTEX
+                        if _from >= 2500: # Limite VTEX
+                            logger.warning(f"   ⚠️ Categoria {cat_name} atingiu o limite de 2500 itens da VTEX: produtos além disso não foram coletados.")
+                            break
                     except Exception as e:
                         logger.error(f"Erro na categoria {cat_path} pag {_from}: {e}")
                         break

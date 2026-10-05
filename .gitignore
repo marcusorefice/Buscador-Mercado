@@ -33,3 +33,7 @@ app_mercado.bat
 backup_antes_simplificacao/
 ssh-key-2026-06-03.key
 teste.py
+
+# Binários e temporários da gravação atômica
+ngrok.exe
+*.tmp

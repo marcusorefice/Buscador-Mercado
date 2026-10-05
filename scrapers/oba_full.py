@@ -166,7 +166,9 @@ async def motor_extracao_oba_full():
 
                         if len(produtos_raw) < PAGE_SIZE: break
                         _from += PAGE_SIZE
-                        if _from >= 2500: break
+                        if _from >= 2500: # Limite VTEX
+                            logger.warning(f"   ⚠️ Categoria {cat_name} atingiu o limite de 2500 itens da VTEX: produtos além disso não foram coletados.")
+                            break
                     except: break
             logger.info(f"   - Categoria {cat_name}: {len(produtos_categoria)} itens")
             return produtos_categoria
