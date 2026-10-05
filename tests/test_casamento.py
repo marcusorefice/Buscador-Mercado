@@ -133,6 +133,21 @@ class TestEquivalencias(unittest.TestCase):
         self.assertEqual(eq["7896004000002"], "7891000100103")  # cadeia resolvida
 
 
+class TestConferenciaEanWeb(unittest.TestCase):
+    def setUp(self):
+        self.casador = CasadorProdutos(biblioteca_exemplo())
+
+    def test_rejeita_produto_sem_relacao(self):
+        self.assertFalse(cp.nomes_conferem(self.casador, "REFRIGERANTE SPRITE FRESH LIMAO 510ML", "SPRITE", "Batata Asterix", "Oba"))
+
+    def test_aceita_nome_sem_medida_da_fonte(self):
+        self.assertTrue(cp.nomes_conferem(self.casador, "REFRIGERANTE COCA-COLA ZERO GARRAFA 2L", "COCA-COLA", "Coca-Cola Zero", "Coca-Cola"))
+
+    def test_rejeita_variacao_diferente(self):
+        self.assertFalse(cp.nomes_conferem(self.casador, "LEITE INTEGRAL ITALAC 1L", "ITALAC", "Leite UHT Desnatado Italac", "Italac"))
+        self.assertFalse(cp.nomes_conferem(self.casador, "SUCO DEL VALLE UVA 1L", "DEL VALLE", "Suco Del Valle Pêssego", "Del Valle"))
+
+
 class TestRevisao(unittest.TestCase):
     def test_exportar_e_importar_decisoes(self):
         import revisar_casamentos as rc

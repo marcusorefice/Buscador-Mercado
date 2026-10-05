@@ -7,7 +7,7 @@ import re
 
 from buscador_ean import tentar_recuperar_ean
 from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
-from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem
 import revisar_casamentos
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -237,7 +237,26 @@ async def main():
     equivalencias = montar_equivalencias(casador, casamentos)
     logger.info(f"   {len(equivalencias)} EANs repetidos serão unificados no EAN principal.")
     sugestoes_revisao = {}
-    contagem_casamento = {"confirmado": 0, "auto": 0, "revisao": 0, "interno": 0}
+    contagem_casamento = {"confirmado": 0, "auto": 0, "revisao": 0, "interno": 0, "web_rejeitado": 0}
+
+    def ean_web_confiavel(resultado, nome, marca):
+        """
+        Um EAN vindo da web (ou do cache dela) só é aceito se o nome bater:
+        - se o EAN já existe na biblioteca, com o nome da biblioteca;
+        - senão, com o nome que a própria fonte devolveu.
+        Sem nome para conferir, é rejeitado (era assim que números aleatórios viravam EAN).
+        """
+        ean = str((resultado or {}).get("ean", ""))
+        if not ean_eh_valido(ean) or ean.startswith("INT_"):
+            return False
+        ean = equivalencias.get(ean, ean)
+        if ean in biblioteca:
+            ref = biblioteca[ean]
+            return nomes_conferem(casador, nome, marca, ref.get("nome_comum", ""), ref.get("marca"))
+        encontrado = str(resultado.get("nome_encontrado") or "")
+        if encontrado and encontrado != "N/A":
+            return nomes_conferem(casador, nome, marca, encontrado, resultado.get("marca_encontrada"))
+        return False
 
     itens_por_ean = {}
     itens_sem_ean = []
@@ -390,8 +409,8 @@ async def main():
                     "Pontuação": casamento["score"], "chave": casamento["chave"],
                 }
 
-            # Lookup de Cache Imediato
-            if chave_busca in cache_buscas_web:
+            # Lookup de Cache Imediato (só se o EAN guardado conferir com o nome)
+            if chave_busca in cache_buscas_web and ean_web_confiavel(cache_buscas_web[chave_busca], nome, marca_bruta):
                 progresso_ean["atual"] += 1
                 resultado_cache = cache_buscas_web[chave_busca]
                 item["EAN"] = equivalencias.get(str(resultado_cache["ean"]), str(resultado_cache["ean"]))
@@ -419,7 +438,7 @@ async def main():
             if not sou_lider:
                 await buscas_em_andamento[chave_busca].wait()
                 progresso_ean["atual"] += 1
-                if chave_busca in cache_buscas_web:
+                if chave_busca in cache_buscas_web and ean_web_confiavel(cache_buscas_web[chave_busca], nome, marca_bruta):
                     resultado_cache = cache_buscas_web[chave_busca]
                     item["EAN"] = equivalencias.get(str(resultado_cache["ean"]), str(resultado_cache["ean"]))
                     item["Fonte_EAN"] = resultado_cache.get("fonte", "Web") + " (Cache Espera)"
@@ -465,6 +484,11 @@ async def main():
                         except Exception as e:
                             logger.warning(f"   ⚠️ {prefixo_progresso} Falha na busca web de '{nome}': {e}")
                             resultado = None
+
+                    if resultado and resultado.get("ean") and not ean_web_confiavel(resultado, nome, marca_bruta):
+                        contagem_casamento["web_rejeitado"] += 1
+                        logger.info(f"   🚫 {prefixo_progresso} EAN da web rejeitado (nome não confere): '{nome}' x '{resultado.get('nome_encontrado')}' ({resultado.get('fonte')})")
+                        resultado = None
 
                     if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
                         cache_buscas_web[chave_busca] = resultado
@@ -578,7 +602,7 @@ async def main():
     n_revisao = revisar_casamentos.exportar_sugestoes(list(sugestoes_revisao.values()))
     logger.info(
         f"🧩 Casamento de nomes: {contagem_casamento['confirmado']} confirmados por você, {contagem_casamento['auto']} automáticos, "
-        f"{contagem_casamento['interno']} em grupos internos (sem EAN)."
+        f"{contagem_casamento['interno']} em grupos internos (sem EAN), {contagem_casamento['web_rejeitado']} EANs da web rejeitados."
     )
     if n_revisao:
         logger.info(f"📝 {n_revisao} casamentos duvidosos em '{revisar_casamentos.ARQUIVO_REVISAO}'. Marque S/N e rode o passo 4 de novo.")

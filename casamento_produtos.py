@@ -336,6 +336,24 @@ class CasadorProdutos:
             self.df[t] += 1
         return novo_id
 
+LIMIAR_CONFERENCIA = 0.60  # para conferir um EAN vindo de fora (web/cache) contra o nome do item
+
+def nomes_conferem(casador: CasadorProdutos, nome_item, marca_item, nome_ref, marca_ref, limiar=LIMIAR_CONFERENCIA):
+    """
+    O nome de referência (biblioteca, Open Food Facts, Cosmos) descreve o mesmo produto do item?
+    Se a referência não informa medida/pack (comum no Open Food Facts), isso não conta como diferença;
+    marca, sabor e atributos (zero, lata, integral...) continuam sendo exigidos.
+    """
+    a, b = Assinatura(nome_item, marca_item), Assinatura(nome_ref, marca_ref)
+    if not a.tokens or not b.tokens:
+        return False
+    if b.medida is None:
+        b.medida = a.medida
+    if b.pack is None:
+        b.pack = a.pack
+    ok, _ = compativel(a, b)
+    return ok and casador.pontuar(a, b) >= limiar
+
 def gerar_id_interno(a: Assinatura):
     """ID estável e legível: o mesmo nome gera sempre o mesmo ID em todas as rodadas."""
     medida = f"{a.medida[1]:g}{a.medida[0].upper()}" if a.medida else ""

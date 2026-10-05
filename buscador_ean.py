@@ -9,12 +9,13 @@ import random
 
 logger = logging.getLogger(__name__)
 
+# Só usamos fontes que devolvem o NOME do produto junto com o EAN, para o passo 4 conferir se é
+# mesmo o produto procurado. Yahoo/Bing/DuckDuckGo/Google foram removidos: eles pegavam qualquer
+# número de 8-14 dígitos da página de resultados (IDs, rastreadores...) e geraram EANs falsos
+# (um único número chegou a ser atribuído a 3.152 produtos diferentes).
 cosmos_esgotado = False
-google_esgotado = False
-duckduckgo_semaphore = asyncio.Semaphore(1)
-yahoo_semaphore = asyncio.Semaphore(1)
-bing_semaphore = asyncio.Semaphore(1)
 off_semaphore = asyncio.Semaphore(2)
+cosmos_semaphore = asyncio.Semaphore(1)
 
 def is_valid_ean(ean_str):
     if not ean_str or not ean_str.isdigit(): return False
@@ -49,10 +50,12 @@ async def buscar_ean_cosmos_web(session: AsyncSession, termo_busca: str):
     try:
         response = await session.get(url, headers=headers, timeout=12)
         if response.status_code == 200:
-            matches = re.findall(r'href="/produtos/(\d{8,14})-[^"]+"', response.text)
-            for ean in matches:
+            matches = re.findall(r'href="/produtos/(\d{8,14})-([^"/?]+)"', response.text)
+            for ean, slug in matches:
                 if is_valid_ean(ean):
-                    return {"ean": ean, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Cosmos Web (Scraper)"}
+                    # ex: /produtos/7891000100103-leite-integral-italac-1l -> "LEITE INTEGRAL ITALAC 1L"
+                    nome = urllib.parse.unquote(slug).replace("-", " ").upper()
+                    return {"ean": ean, "nome_encontrado": nome, "marca_encontrada": "", "fonte": "Cosmos Web (Scraper)"}
     except Exception: pass
     return None
 
@@ -84,139 +87,6 @@ async def buscar_ean_open_food_facts(session: AsyncSession, termo_busca: str):
     
     return None
 
-async def buscar_ean_google_api(session: AsyncSession, nome_produto: str, marca: str = ""):
-    """
-    Busca usando a API oficial do Google Custom Search (100 requisições/dia grátis).
-    """
-    global google_esgotado
-    api_key = os.getenv("GOOGLE_SEARCH_API_KEY")
-    cx = os.getenv("GOOGLE_SEARCH_CX")
-    
-    if not api_key or not cx or google_esgotado:
-        return None
-        
-    # Pesquisa flexível: sem aspas! Deixa o Google cruzar as palavras do nome da melhor forma.
-    termo_busca = f'{nome_produto} {marca} EAN'.strip()
-    url = f"https://www.googleapis.com/customsearch/v1?q={urllib.parse.quote(termo_busca)}&key={api_key}&cx={cx}"
-    
-    try:
-        response = await session.get(url, timeout=10)
-        if response.status_code == 200:
-            dados = response.json()
-            items = dados.get("items", [])
-            
-            # Concatena os snippets (resumos) e títulos dos resultados para caçar o EAN
-            texto_resultados = " ".join([item.get("snippet", "") + " " + item.get("title", "") for item in items])
-            
-            # Procura por qualquer sequência de 8, 12, 13 ou 14 dígitos numéricos e valida matematicamente
-            matches = re.findall(r'\b(\d{8}|\d{12,14})\b', texto_resultados)
-            for ean_candidato in matches:
-                if is_valid_ean(ean_candidato):
-                    return {
-                        "ean": ean_candidato,
-                        "nome_encontrado": "N/A",
-                        "marca_encontrada": "N/A",
-                        "fonte": "Google Custom Search API"
-                    }
-        elif response.status_code in [403, 429]:
-            logger.warning("⚠️ Limite diário de 100 requisições do Google Search API esgotado (403/429).")
-            google_esgotado = True
-    except Exception as e:
-        logger.debug(f"Erro na API do Google Search: {e}")
-        
-    return None
-
-async def buscar_ean_duckduckgo(session: AsyncSession, nome_produto: str, marca: str = ""):
-    """
-    Busca o EAN usando a versão HTML (Lite) do DuckDuckGo. Grátis e sem limites de API.
-    """
-    termo_busca = f'{nome_produto} {marca} EAN'.strip()
-    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(termo_busca)}"
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://duckduckgo.com/",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
-    for tentativa in range(2): # Tenta até 2 vezes
-        try:
-            response = await session.get(url, headers=headers, timeout=15)
-            if response.status_code == 200:
-                matches = re.findall(r'\b(\d{8}|\d{12,14})\b', response.text)
-                for ean_candidato in matches:
-                    if is_valid_ean(ean_candidato):
-                        return { "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "DuckDuckGo HTML" }
-                return None # Se achou a página mas não o EAN, não adianta tentar de novo.
-            
-            logger.warning(f"⚠️ DuckDuckGo bloqueou a requisição (Status: {response.status_code}) para '{termo_busca}'")
-            if tentativa == 0: # Se for a primeira tentativa, espera um tempo bem mais longo
-                await asyncio.sleep(random.uniform(5.0, 10.0))
-        except Exception as e:
-            logger.debug(f"Erro no DuckDuckGo: {e}")
-            if tentativa == 0:
-                await asyncio.sleep(random.uniform(5.0, 10.0))
-    return None
-
-async def buscar_ean_yahoo(session: AsyncSession, nome_produto: str, marca: str = ""):
-    """
-    Busca o EAN usando o Yahoo Search, que é muito mais permissivo com raspagem.
-    """
-    termo_busca = f'{nome_produto} {marca} EAN'.strip()
-    url = f"https://br.search.yahoo.com/search?p={urllib.parse.quote(termo_busca)}"
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-    for tentativa in range(2):
-        try:
-            response = await session.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                matches = re.findall(r'\b(\d{8}|\d{12,14})\b', response.text)
-                for ean_candidato in matches:
-                    if is_valid_ean(ean_candidato):
-                        return {
-                            "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Yahoo Search"
-                        }
-                return None # Achou a página mas não o EAN, não tenta de novo
-        
-            logger.warning(f"⚠️ Yahoo bloqueou a requisição (Status: {response.status_code}) para '{termo_busca}'")
-            if tentativa == 0:
-                await asyncio.sleep(random.uniform(4.0, 7.0))
-
-        except Exception as e:
-            logger.debug(f"Erro no Yahoo: {e}")
-            if tentativa == 0:
-                await asyncio.sleep(random.uniform(4.0, 7.0))
-    return None
-
-async def buscar_ean_bing(session: AsyncSession, nome_produto: str, marca: str = ""):
-    """
-    Busca o EAN usando o Bing Search.
-    """
-    termo_busca = f'{nome_produto} {marca} EAN'.strip()
-    url = f"https://www.bing.com/search?q={urllib.parse.quote(termo_busca)}"
-    headers = {
-        "Accept-Language": "pt-BR,pt;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-    for tentativa in range(2):
-        try:
-            response = await session.get(url, headers=headers, timeout=15)
-            if response.status_code == 200:
-                matches = re.findall(r'\b(\d{8}|\d{12,14})\b', response.text)
-                for ean_candidato in matches:
-                    if is_valid_ean(ean_candidato):
-                        return {
-                            "ean": ean_candidato, "nome_encontrado": "N/A", "marca_encontrada": "N/A", "fonte": "Bing Search"
-                        }
-                return None # Achou a página mas não o EAN, não tenta de novo
-
-            logger.warning(f"⚠️ Bing bloqueou a requisição (Status: {response.status_code}) para '{termo_busca}'")
-            if tentativa == 0:
-                await asyncio.sleep(random.uniform(6.0, 10.0))
-        except Exception as e:
-            logger.debug(f"Erro no Bing: {e}")
-            if tentativa == 0:
-                await asyncio.sleep(random.uniform(6.0, 10.0))
-    return None
 
 async def buscar_ean_cosmos_api(nome_produto: str, marca: str = ""):
     """
@@ -244,10 +114,11 @@ async def buscar_ean_cosmos_api(nome_produto: str, marca: str = ""):
                 if lista and isinstance(lista, list) and len(lista) > 0:
                     ean_cosmos = str(lista[0].get("gtin", ""))
                     if ean_cosmos.isdigit():
+                        marca_cosmos = lista[0].get("brand") or {}
                         return {
                             "ean": ean_cosmos,
-                            "nome_encontrado": "N/A",
-                            "marca_encontrada": "N/A",
+                            "nome_encontrado": lista[0].get("description", ""),
+                            "marca_encontrada": marca_cosmos.get("name", "") if isinstance(marca_cosmos, dict) else str(marca_cosmos),
                             "fonte": "Cosmos API"
                         }
             elif res_cosmos.status_code == 429:
@@ -283,65 +154,29 @@ async def buscar_dados_por_ean_off(session: AsyncSession, ean: str):
 
 async def tentar_recuperar_ean(nome_produto: str, marca: str = "") -> dict:
     """
-    Tenta recuperar o EAN do produto seguindo a ordem solicitada:
-    Open Food Facts -> Yahoo -> Bing -> DuckDuckGo -> Cosmos -> Google.
-    Faz 2 tentativas completas (se necessário) antes de desistir.
+    Procura o EAN do produto em fontes que devolvem o nome junto (Open Food Facts e Cosmos).
+    O resultado ainda precisa ser conferido pelo passo 4 (o nome encontrado tem que bater com o item).
     """
     termo_simples = simplificar_termo(nome_produto, marca)
-    
     navegadores = ["chrome100", "chrome110", "chrome120", "edge99", "edge101", "safari15_3", "safari15_5", "safari17_0"]
-    
-    for rodada in range(2):
-        browser_escolhido = random.choice(navegadores)
-        
-        try:
-            async with AsyncSession(impersonate=browser_escolhido) as session:
-                # --- BUSCA SEQUENCIAL DISTRIBUÍDA (Carga Balanceada) ---
-                async def tent_off():
-                    async with off_semaphore:
-                        await asyncio.sleep(random.uniform(0.5, 1.5))
-                        return await buscar_ean_open_food_facts(session, termo_simples)
-                async def tent_yahoo():
-                    async with yahoo_semaphore:
-                        await asyncio.sleep(random.uniform(1.5, 3.0))
-                        return await buscar_ean_yahoo(session, termo_simples, "")
-                async def tent_bing():
-                    async with bing_semaphore:
-                        await asyncio.sleep(random.uniform(2.0, 4.0))
-                        return await buscar_ean_bing(session, termo_simples, "")
-                async def tent_ddg():
-                    async with duckduckgo_semaphore:
-                        await asyncio.sleep(random.uniform(1.5, 3.0))
-                        return await buscar_ean_duckduckgo(session, termo_simples, "")
 
-                # Embaralha os motores. Cada item vai começar por um buscador diferente!
-                motores = [tent_off, tent_yahoo, tent_bing, tent_ddg]
-                random.shuffle(motores)
+    try:
+        async with AsyncSession(impersonate=random.choice(navegadores)) as session:
+            async with off_semaphore:
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+                resultado = await buscar_ean_open_food_facts(session, termo_simples)
+            if resultado:
+                return resultado
 
-                # Executa sequencialmente a fila embaralhada do item
-                for motor in motores:
-                    resultado = await motor()
-                    if resultado and resultado.get("ean"):
-                        return resultado
-
-                # --- BUSCA SEQUENCIAL DE FALLBACK (Cosmos e Google) ---
+            async with cosmos_semaphore:
+                await asyncio.sleep(random.uniform(1.0, 2.0))
                 resultado = await buscar_ean_cosmos_web(session, termo_simples)
-                if resultado: return resultado
-                
-                resultado = await buscar_ean_cosmos_api(termo_simples, "")
-                if resultado: return resultado
-                
-                # 6. Google API
-                resultado = await buscar_ean_google_api(session, termo_simples, "")
-                if resultado: return resultado
+            if resultado:
+                return resultado
 
-        except Exception as e:
-            logger.debug(f"Erro na criação da sessão de busca (Rodada {rodada+1}): {e}")
-            
-        if rodada == 0:
-            logger.warning(f"🔁 Nenhuma EAN encontrada na 1ª tentativa para '{termo_simples}'. Tentando novamente...")
-            await asyncio.sleep(random.uniform(5.0, 8.0))
-
+            return await buscar_ean_cosmos_api(termo_simples, "")
+    except Exception as e:
+        logger.debug(f"Erro na busca de EAN para '{termo_simples}': {e}")
     return None
 
 if __name__ == "__main__":
