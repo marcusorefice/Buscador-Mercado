@@ -162,14 +162,17 @@ async def motor_extracao_svicente_full():
                     produtos_json = data_pagina.get('productsSearchResult', [])
                     
                     for p in produtos_json:
-                        nome_bruto = p.get('productName', p.get('name', '')).upper().strip()
+                      try:
+                        nome_bruto = str(p.get('productName') or p.get('name') or '').upper().strip()
                         if not nome_bruto: continue
-                        
+
                         img_url = ""
-                        imgs = p.get('images', {})
+                        imgs = p.get('images') or {}
                         for size in ['medium', 'large', 'small']:
                             if size in imgs and imgs[size]:
-                                img_url = imgs[size][0].get('url', "")
+                                url_img = imgs[size][0].get('url', "")
+                                # Alguns produtos (ex: cestas de Natal) vêm com url = {} em vez de texto
+                                img_url = url_img if isinstance(url_img, str) else ""
                                 if img_url.startswith('/'): img_url = f"{BASE_URL_CONFIG}{img_url}"
                                 break
 
@@ -195,6 +198,8 @@ async def motor_extracao_svicente_full():
                             "raw_data": p, "nome_bruto": nome_bruto, "img_url": img_url,
                             "ean_preliminar": ean, "precisa_pdp": precisa_pdp
                         })
+                      except Exception as e:
+                        logger.warning(f"  [São Vicente] Produto ignorado em {cat_nome} (formato inesperado): {e}")
 
                 resultados_pdp = []
                 if pdp_tasks:
@@ -289,9 +294,13 @@ async def motor_extracao_svicente_full():
                 return produtos_categoria
 
         tarefas_ofertas = [process_category(session, cgid, cat_nome, sem) for cgid, cat_nome in cgids_validos]
-        resultados_finais = await asyncio.gather(*tarefas_ofertas)
-        
-        for res in resultados_finais:
+        # return_exceptions: uma categoria com erro não derruba as outras (nem fecha a sessão no meio)
+        resultados_finais = await asyncio.gather(*tarefas_ofertas, return_exceptions=True)
+
+        for (cgid, cat_nome), res in zip(cgids_validos, resultados_finais):
+            if isinstance(res, Exception):
+                logger.error(f"  [São Vicente] Categoria {cat_nome} ({cgid}) ignorada por erro: {res}")
+                continue
             lista_final.extend(res)
 
     lista_unica = list({f"{v['Produto']}_{v['Marca']}_{v['Qtd_Valor']}_{v['Medida']}": v for v in lista_final}.values())
