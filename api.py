@@ -5,7 +5,6 @@ import base64
 import threading
 import uvicorn
 import httpx
-import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 from typing import List, Optional

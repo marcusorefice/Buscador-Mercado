@@ -7,13 +7,7 @@ import warnings
 from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
-from utils import (
-    extrair_medidas_inteligente, 
-    setup_logging, 
-    read_json_file, 
-    CATEGORIAS_IGNORADAS,
-    formatar_nome_categoria
-) 
+from utils import parse_preco, setup_logging, read_json_file
 
 # Silencia avisos para um log mais limpo
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -176,17 +170,16 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                 categorias_extraidas = [get_last_path_part(c).upper() for c in cat_tree]
 
                 cat_site_cru = categorias_extraidas[0] if categorias_extraidas and categorias_extraidas[0] else "OUTROS"
-                subcategoria_cru = formatar_nome_categoria(categorias_extraidas[1]) if len(categorias_extraidas) > 1 else "N/A"
-                tipo_prod_cru = formatar_nome_categoria(categorias_extraidas[2]) if len(categorias_extraidas) > 2 else "N/A"
+                subcategoria_cru = categorias_extraidas[1] if len(categorias_extraidas) > 1 else "N/A"
+                tipo_prod_cru = categorias_extraidas[2] if len(categorias_extraidas) > 2 else "N/A"
                 
-                if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                 
                 categoria = cat_site_cru
                 subcategoria = subcategoria_cru
                 tipo_produto = tipo_prod_cru
 
                 # --- LÓGICA DE MEDIDAS (Baseada no FastStore/VTEX) ---
-                nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                nome_limpo, qv, med = nome_cru, "1", "UN"
 
                 unidade_venda = "UN"
                 measurement_unit = str(p.get('measurementUnit', '')).lower()
@@ -226,8 +219,8 @@ async def _processar_edges(session: AsyncSession, edges: list, pagina_num: int):
                     "tipo_produto": tipo_produto,
                     "Produto": nome_limpo,
                     "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
-                    "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
-                    "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
+                    "Preço Varejo": round(p_v, 2),
+                    "Preço Atacado": round(p_a, 2),
                     "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
                     "Link_PDP": link_pdp
                 })
@@ -321,8 +314,8 @@ async def motor_extracao_boa():
         
         # Se o item já existir de outra busca, mantém o que tiver o menor preço de atacado
         if chave in lista_unica_dict:
-            preco_atual = float(str(lista_unica_dict[chave]['Preço Atacado']).replace('R$ ', '').replace(',', '.'))
-            preco_novo = float(str(v['Preço Atacado']).replace('R$ ', '').replace(',', '.'))
+            preco_atual = parse_preco(lista_unica_dict[chave]['Preço Atacado'])
+            preco_novo = parse_preco(v['Preço Atacado'])
             if preco_novo < preco_atual:
                 lista_unica_dict[chave] = v
         else:

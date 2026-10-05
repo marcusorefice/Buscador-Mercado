@@ -5,11 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import (
-    ean_eh_valido,
-    extrair_medidas_inteligente, setup_logging, 
-    read_json_file, normalizar_para_cache
-)
+from utils import ean_eh_valido, setup_logging, read_json_file, normalizar_para_cache
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -132,7 +128,7 @@ def _parse_produto(item, agora, indice_reverso, cat_path):
                 p_v = p_v * unit_multiplier
                 p_a = p_a * unit_multiplier
 
-        nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+        nome_limpo, qv, med = nome_cru, "1", "UN"
         
         measurement_unit = str(sku_p.get('measurementUnit', '')).lower()
         
@@ -177,8 +173,8 @@ def _parse_produto(item, agora, indice_reverso, cat_path):
             "Categoria": cat_site,
             "Produto": nome_limpo,
             "Marca": marca_str.upper(),
-            "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
-            "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
+            "Preço Varejo": round(p_v, 2),
+            "Preço Atacado": round(p_a, 2),
             "Qtd_Valor": qv,
             "Medida": med,
             "Unidade": unidade_venda,

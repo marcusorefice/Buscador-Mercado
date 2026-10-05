@@ -2,7 +2,7 @@ import os
 import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
-from utils import extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
+from utils import setup_logging, read_json_file
 
 logger = setup_logging()
 
@@ -114,19 +114,17 @@ async def extrair_dados():
                             if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
                                 partes_cat = categorias_vtex[0].strip('/').split('/')
                                 if len(partes_cat) > 0: cat_site_cru = partes_cat[0].upper()
-                                if len(partes_cat) > 1: subcategoria_cru = formatar_nome_categoria(partes_cat[1])
-                                if len(partes_cat) > 2: tipo_produto_cru = formatar_nome_categoria(partes_cat[2])
+                                if len(partes_cat) > 1: subcategoria_cru = partes_cat[1]
+                                if len(partes_cat) > 2: tipo_produto_cru = partes_cat[2]
                             
-                            if cat_site_cru in CATEGORIAS_IGNORADAS:
-                                continue
 
-                            # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
+                            # A categoria do site é usada como veio; a padronização acontece no passo 4.
                             # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
                             categoria = cat_site_cru
                             subcategoria = subcategoria_cru
                             tipo_produto = tipo_produto_cru
                             
-                            nome_limpo, qv, med = extrair_medidas_inteligente(nome_original)
+                            nome_limpo, qv, med = nome_original, "1", "UN"
 
                             # Dados de Preço e Oferta
                             item = p.get('items', [{}])[0]
@@ -207,8 +205,8 @@ async def extrair_dados():
                                 "tipo_produto": tipo_produto,
                                 "Produto": nome_limpo,
                                 "Marca": marca,
-                                "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
-                                "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
+                                "Preço Varejo": round(p_varejo, 2),
+                                "Preço Atacado": round(p_atacado, 2),
                                 "Qtd_Valor": qv,
                                 "Medida": med,
                                 "Unidade": unidade_venda, "Condição": condicao,

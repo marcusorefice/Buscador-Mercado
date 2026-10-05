@@ -4,14 +4,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
-from utils import (
-    padronizar_categoria, 
-    extrair_medidas_inteligente, 
-    setup_logging, 
-    read_json_file,
-    MAPA_PARA_APP, CATEGORIAS_IGNORADAS,
-    formatar_nome_categoria
-)
+from utils import setup_logging, read_json_file
 
 logger = setup_logging()
 
@@ -133,15 +126,13 @@ async def motor_extracao_oba():
                         if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
                             partes_cat = categorias_vtex[0].strip('/').split('/')
                             if len(partes_cat) > 0: cat_site = partes_cat[0].upper()
-                            if len(partes_cat) > 1: subcategoria = formatar_nome_categoria(partes_cat[1])
-                            if len(partes_cat) > 2: tipo_produto = formatar_nome_categoria(partes_cat[2])
+                            if len(partes_cat) > 1: subcategoria = partes_cat[1]
+                            if len(partes_cat) > 2: tipo_produto = partes_cat[2]
                         
-                        if cat_site in CATEGORIAS_IGNORADAS:
-                            continue
                         
                         # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
                         full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
-                        categoria = padronizar_categoria(full_context, cat_site)
+                        categoria = cat_site
 
                         # --- LÓGICA DE FILTRAGEM DE CONDIÇÕES ---
                         condicoes_uteis = []
@@ -192,7 +183,7 @@ async def motor_extracao_oba():
                         # Imagem e Unidade
                         img_url = sku.get('images', [{}])[0].get('imageUrl', '')
                         
-                        nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                        nome_limpo, qv, med = nome_bruto, "1", "UN"
 
                         # A unidade de venda será definida com base na medida extraída, e refinada no motor de validação.
                         unidade_venda = "KG" if med == "KG" else "UN"
@@ -229,8 +220,8 @@ async def motor_extracao_oba():
                             "tipo_produto": tipo_produto,
                             "Produto": nome_limpo,
                             "Marca": marca,
-                            "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
-                            "Preço Atacado": f"R$ {p_venda:.2f}".replace('.', ','),
+                            "Preço Varejo": round(p_varejo, 2),
+                            "Preço Atacado": round(p_venda, 2),
                             "Qtd_Valor": qv,
                             "Medida": med,
                             "Unidade": unidade_venda,

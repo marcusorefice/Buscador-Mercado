@@ -4,14 +4,8 @@ import json
 import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
-from utils import (
-    padronizar_categoria, 
-    extrair_medidas_inteligente, 
-    setup_logging, 
-    read_json_file,
-    MAPA_PARA_APP, CATEGORIAS_IGNORADAS
-) 
-from utils import formatar_nome_categoria
+from utils import setup_logging, read_json_file
+
 
 logger = setup_logging()
 
@@ -165,8 +159,8 @@ async def motor_extracao_paodeacucar():
                         if categorias_api and isinstance(categorias_api, list) and categorias_api[0]:
                             partes_cat = categorias_api[0].strip('/').split('/')
                             cat_site = partes_cat[0].upper() if len(partes_cat) > 0 else "GERAL"
-                            if len(partes_cat) > 1: subcategoria = formatar_nome_categoria(partes_cat[1])
-                            if len(partes_cat) > 2: tipo_produto = formatar_nome_categoria(partes_cat[2])
+                            if len(partes_cat) > 1: subcategoria = partes_cat[1]
+                            if len(partes_cat) > 2: tipo_produto = partes_cat[2]
                         else:
                             if p.get('departmentName'):
                                 cat_site = str(p.get('departmentName')).upper()
@@ -174,13 +168,10 @@ async def motor_extracao_paodeacucar():
                                 cat_site = str(p.get('categoryName')).upper()
 
                         # VERIFICAÇÃO DE CATEGORIA (Adicione um log aqui para saber o que está sendo pulado)
-                        if cat_site in CATEGORIAS_IGNORADAS:
-                            # logger.debug(f"🚫 Pulando {nome_bruto} - Categoria ignorada: {cat_site}")
-                            continue
 
                         # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
                         full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
-                        categoria = padronizar_categoria(full_context, cat_site)
+                        categoria = cat_site
                         
                         # --- LÓGICA DE CONDIÇÕES ---
                         condicoes = []
@@ -233,7 +224,7 @@ async def motor_extracao_paodeacucar():
                         # Adicionamos a barra / manualmente entre as chaves
                         img_url = f"{BASE_URL_CONFIG}/{img_path.lstrip('/')}" if img_path else ""
 
-                        nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                        nome_limpo, qv, med = nome_bruto, "1", "UN"
                         
                         unidade_venda = "UN"
                         if str(p.get('unit', '')).lower() == 'kg' or str(p.get('measurementUnit', '')).lower() == 'kg':
@@ -265,8 +256,8 @@ async def motor_extracao_paodeacucar():
                             "tipo_produto": tipo_produto,
                             "Produto": nome_limpo,
                             "Marca": str(p.get('brand', 'PRÓPRIA')).upper(),
-                            "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
-                            "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
+                            "Preço Varejo": round(p_varejo, 2),
+                            "Preço Atacado": round(p_atacado, 2),
                             "Qtd_Valor": qv,
                             "Medida": med,
                             "Unidade": unidade_venda,
@@ -335,9 +326,9 @@ async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
                     shelf_list = product_data.get('shelfList', [])
                     if shelf_list:
                         cats = [s.get('name', '').upper() for s in shelf_list if s.get('name')]
-                        if len(cats) > 0: result["cat"] = formatar_nome_categoria(cats[0])
-                        if len(cats) > 1: result["subcat"] = formatar_nome_categoria(cats[1])
-                        if len(cats) > 2: result["tipo"] = formatar_nome_categoria(cats[2])
+                        if len(cats) > 0: result["cat"] = cats[0]
+                        if len(cats) > 1: result["subcat"] = cats[1]
+                        if len(cats) > 2: result["tipo"] = cats[2]
                 
                 # Tenta extração via LD+JSON se o formato anterior falhou
                 if not result["cat"]:
@@ -352,9 +343,9 @@ async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
                                     if items:
                                         cats = [i.get('item', {}).get('name', '').upper() for i in items if i.get('item', {}).get('name')]
                                         if len(cats) > 0 and cats[0] == 'HOME': cats = cats[1:]
-                                        if len(cats) > 0: result["cat"] = formatar_nome_categoria(cats[0])
-                                        if len(cats) > 1: result["subcat"] = formatar_nome_categoria(cats[1])
-                                        if len(cats) > 2: result["tipo"] = formatar_nome_categoria(cats[2])
+                                        if len(cats) > 0: result["cat"] = cats[0]
+                                        if len(cats) > 1: result["subcat"] = cats[1]
+                                        if len(cats) > 2: result["tipo"] = cats[2]
                             except: pass
                     except: pass
         except:
@@ -395,7 +386,7 @@ async def enrich_eans_from_pdps(session, lista_produtos):
             subcat = res['subcat']
             tipo = res['tipo']
             
-            p['Categoria'] = padronizar_categoria(f"{p.get('Produto')} {cat_site} {subcat} {tipo}", cat_site)
+            p['Categoria'] = cat_site
             p['subcategoria'] = subcat
             p['tipo_produto'] = tipo
             

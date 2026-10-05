@@ -5,7 +5,7 @@ import re
 import logging
 import asyncio
 from dotenv import load_dotenv 
-from utils import setup_logging, read_json_file, write_json_file, normalizar_para_cache, criar_entrada_biblioteca, CATEGORIAS_MASTER, is_valid_check_digit
+from utils import setup_logging, read_json_file, write_json_file, normalizar_para_cache, CATEGORIAS_MASTER, ean_eh_valido
 
 load_dotenv()
 logger = setup_logging()
@@ -364,7 +364,7 @@ async def classificar_taxonomia_com_ia_async(lista_produtos_input, biblioteca_gl
                 
                 async with lock:
                     # Verifica duplicatas e insere APENAS se tiver EAN válido
-                    if final_ean != "N/A" and final_ean and is_valid_check_digit(final_ean):
+                    if final_ean != "N/A" and final_ean and ean_eh_valido(final_ean):
                         if item_id not in ids_processados and final_ean not in eans_processados:
                             biblioteca_ia.append(item_ia)
                             eans_processados[final_ean] = item_ia

@@ -2,11 +2,7 @@ import os
 import asyncio
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
-from utils import (
-    padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file,
-    re,
-    CATEGORIAS_IGNORADAS, formatar_nome_categoria
-)
+from utils import setup_logging, read_json_file, re
 
 logger = setup_logging()
 
@@ -79,7 +75,6 @@ async def motor_extracao_oba_full():
                                 if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
                                     partes_cat = categorias_vtex[0].strip('/').split('/')
                                     if len(partes_cat) > 0: cat_site = partes_cat[0].upper()
-                                if cat_site in CATEGORIAS_IGNORADAS: continue
 
                                 items = p.get('items', [])
                                 if not items: continue
@@ -124,7 +119,7 @@ async def motor_extracao_oba_full():
                                         p_varejo = p_varejo * unit_multiplier
                                         p_venda = p_venda * unit_multiplier
 
-                                nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                                nome_limpo, qv, med = nome_bruto, "1", "UN"
                                 
                                 measurement_unit = str(sku.get('measurementUnit', '')).lower()
                                 
@@ -157,7 +152,7 @@ async def motor_extracao_oba_full():
                                 produtos_categoria.append({
                                     "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_site,
                                     "Produto": nome_limpo, "Marca": marca,
-                                    "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','), "Preço Atacado": f"R$ {p_venda:.2f}".replace('.', ','),
+                                    "Preço Varejo": round(p_varejo, 2), "Preço Atacado": round(p_venda, 2),
                                     "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda,
                                     "Condição": "1 UN", "Data_Hora": agora, "Link_Imagem": img_url,
                                     "Link_PDP": link_pdp

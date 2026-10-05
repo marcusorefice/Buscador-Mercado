@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
 import asyncio
-from utils import extrair_medidas_inteligente, setup_logging, read_json_file, formatar_nome_categoria, CATEGORIAS_IGNORADAS
+from utils import setup_logging, read_json_file
 
 logger = setup_logging()
 
@@ -94,12 +94,11 @@ async def motor_extracao_covabra_full():
                                 if categorias_vtex and isinstance(categorias_vtex, list) and categorias_vtex[0]:
                                     partes_cat = categorias_vtex[0].strip('/').split('/')
                                     if len(partes_cat) > 0: cat_site_cru = partes_cat[0].upper()
-                                    if len(partes_cat) > 1: subcategoria_cru = formatar_nome_categoria(partes_cat[1])
-                                    if len(partes_cat) > 2: tipo_produto_cru = formatar_nome_categoria(partes_cat[2])
+                                    if len(partes_cat) > 1: subcategoria_cru = partes_cat[1]
+                                    if len(partes_cat) > 2: tipo_produto_cru = partes_cat[2]
                                 
-                                if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                                 
-                                nome_limpo, qv, med = extrair_medidas_inteligente(nome_original)
+                                nome_limpo, qv, med = nome_original, "1", "UN"
 
                                 item = p.get('items', [{}])[0]
                                 
@@ -157,8 +156,8 @@ async def motor_extracao_covabra_full():
                                     "tipo_produto": tipo_produto_cru,
                                     "Produto": nome_limpo,
                                     "Marca": marca,
-                                    "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
-                                    "Preço Atacado": f"R$ {p_venda:.2f}".replace('.', ','),
+                                    "Preço Varejo": round(p_varejo, 2),
+                                    "Preço Atacado": round(p_venda, 2),
                                     "Qtd_Valor": qv,
                                     "Medida": med,
                                     "Unidade": unidade_venda, "Condição": condicao,

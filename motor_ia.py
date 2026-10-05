@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime
 from PIL import Image, UnidentifiedImageError
 from google import genai
-from utils import setup_logging, clean_price_string, padronizar_categoria, extrair_medidas_inteligente
+from utils import setup_logging, parse_preco
 
 logger = setup_logging()
 
@@ -147,14 +147,14 @@ class MotorIA:
                 # Categorização LOCAL (Economiza Tokens da IA)
                 # Usa a junção de nome e marca para uma categoria mais precisa
                 nome_para_categoria = f"{p_bruto} {marca}".strip()
-                categoria = padronizar_categoria(nome_para_categoria)
+                categoria = ""
                 
                 # Limpa o nome do produto (p_bruto) para extrair medidas, sem a marca.
-                nome_limpo, qv, med = extrair_medidas_inteligente(p_bruto)
+                nome_limpo, qv, med = p_bruto, "1", "UN"
 
                 # Preços: lógica aprimorada para não mascarar dados ausentes
-                p_varejo = clean_price_string(item.get("pv", 0)) # Passa 0 se 'pv' não existir
-                p_atacado = clean_price_string(item.get("pa", 0)) # Passa 0 se 'pa' não existir
+                p_varejo = parse_preco(item.get("pv", 0)) # Passa 0 se 'pv' não existir
+                p_atacado = parse_preco(item.get("pa", 0)) # Passa 0 se 'pa' não existir
 
                 # Se o preço de atacado não existir, preenche com o preço de varejo
                 if p_atacado == 0:

@@ -8,13 +8,7 @@ import base64
 from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
-from utils import (
-    extrair_medidas_inteligente, 
-    setup_logging, 
-    read_json_file, 
-    CATEGORIAS_IGNORADAS,
-    formatar_nome_categoria
-)
+from utils import setup_logging, read_json_file
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -358,12 +352,11 @@ async def motor_extracao_dom_olivio_full():
                                         categorias_extraidas = [get_last_path_part(c).upper() for c in cat_tree]
 
                                 cat_site_cru = categorias_extraidas[0] if categorias_extraidas and categorias_extraidas[0] else "OUTROS"
-                                subcategoria_cru = formatar_nome_categoria(categorias_extraidas[1]) if len(categorias_extraidas) > 1 else "N/A"
-                                tipo_prod_cru = formatar_nome_categoria(categorias_extraidas[2]) if len(categorias_extraidas) > 2 else "N/A"
+                                subcategoria_cru = categorias_extraidas[1] if len(categorias_extraidas) > 1 else "N/A"
+                                tipo_prod_cru = categorias_extraidas[2] if len(categorias_extraidas) > 2 else "N/A"
                                 
-                                if cat_site_cru in CATEGORIAS_IGNORADAS: continue
                                 
-                                nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                                nome_limpo, qv, med = nome_cru, "1", "UN"
 
                                 # Se a VTEX enviou um unitMultiplier (ex: 5.0 kg), usamos ele em vez da extração de texto
                                 if qv_from_vtex != "1":
@@ -407,8 +400,8 @@ async def motor_extracao_dom_olivio_full():
                                     "tipo_produto": tipo_prod_cru,
                                     "Produto": nome_limpo,
                                     "Marca": p.get('brand', {}).get('name', 'OUTROS').upper(),
-                                    "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
-                                    "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
+                                    "Preço Varejo": round(p_v, 2),
+                                    "Preço Atacado": round(p_a, 2),
                                     "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda, "Condição": condicao, "Data_Hora": agora, "Link_Imagem": img,
                                     "Link_PDP": link_pdp
                                 })

@@ -33,28 +33,26 @@ def carregar_dados():
 
     conn = sqlite3.connect(DB_NOME)
     try:
-        # A query simples 'SELECT *' é suficiente, o pandas lida com os nomes das colunas
-        df = pd.read_sql_query("SELECT * FROM ofertas", conn)
+        # Espelho local gravado pelo passo 5 (mesmas tabelas do Supabase)
+        df = pd.read_sql_query('''
+            SELECT o.mercado AS "Mercado", COALESCE(p.nome_comum, o.nome_original) AS "Produto",
+                   p.marca AS "Marca", p.categoria AS "Categoria",
+                   o.qtd_valor AS "Qtd_Valor", o.medida AS "Medida", o.condicao AS "Condição",
+                   o.data_atualizacao AS "Data_Hora", o.preco_varejo, o.preco_atacado
+            FROM ofertas_atuais o
+            LEFT JOIN produtos p ON p.ean = o.ean
+        ''', conn)
+    except Exception:
+        return pd.DataFrame()
     finally:
         conn.close()
 
+    # Preço efetivo: o menor valor > 0 entre varejo e atacado
+    varejo = pd.to_numeric(df.pop('preco_varejo'), errors='coerce').fillna(0.0)
+    atacado = pd.to_numeric(df.pop('preco_atacado'), errors='coerce').fillna(0.0)
+    df['Preço Numérico'] = varejo.where(atacado <= 0, atacado.where(varejo <= 0, pd.concat([varejo, atacado], axis=1).min(axis=1)))
+
     df.fillna("", inplace=True)
-    
-    def tratar_melhor_preco(row):
-        def limpar(val):
-            try:
-                if not val or str(val).lower() == 'nan': return 0.0
-                return float(str(val).replace('R$', '').replace('.', '').replace(',', '.').strip())
-            except: return 0.0
-
-        varejo = limpar(row.get('Preço Varejo', 0))
-        atacado = limpar(row.get('Preço Atacado', 0))
-
-        if atacado == 0: return varejo
-        if varejo == 0: return atacado
-        return min(varejo, atacado)
-        
-    df['Preço Numérico'] = df.apply(tratar_melhor_preco, axis=1)
     return df
 
 df = carregar_dados()
@@ -132,8 +130,11 @@ st.sidebar.info(f"Última atualização:\n\n**{df['Data_Hora'].max()[:10] if 'Da
 df_filtrado = df.copy()
 
 if busca_texto:
-    termo = busca_texto.upper()
-    df_filtrado = df_filtrado[df_filtrado['Produto'].str.contains(termo) | df_filtrado['Marca'].str.contains(termo)]
+    termo = busca_texto.strip()
+    df_filtrado = df_filtrado[
+        df_filtrado['Produto'].str.contains(termo, case=False, regex=False)
+        | df_filtrado['Marca'].astype(str).str.contains(termo, case=False, regex=False)
+    ]
 
 if filtro_categoria != "Todas as Categorias":
     df_filtrado = df_filtrado[df_filtrado['Categoria'] == filtro_categoria]
@@ -173,6 +174,6 @@ if not df_filtrado.empty:
     else:
         st.markdown("#### 📋 Todas as Ofertas (Do mais barato ao mais caro):")
 
-    st.dataframe(df_filtrado[colunas_para_exibir], column_config=configuracao_colunas, hide_index=True, use_container_width=True, height=600)
+    st.dataframe(df_filtrado[colunas_para_exibir], column_config=configuracao_colunas, hide_index=True, width='stretch', height=600)
 else:
     st.info("Nenhuma oferta encontrada com esses filtros.")

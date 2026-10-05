@@ -5,7 +5,7 @@ import re
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from datetime import datetime
-from utils import extrair_medidas_inteligente, setup_logging, read_json_file, CATEGORIAS_IGNORADAS, ean_eh_valido
+from utils import setup_logging, read_json_file, ean_eh_valido
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -119,7 +119,7 @@ async def motor_extracao_svicente_full():
 
         tarefas_cgid = [fetch_true_cgid(session, url, name, sem) for name, url in links_categorias.items()]
         resultados_cgid = await asyncio.gather(*tarefas_cgid)
-        cgids_validos = [(cgid, name) for cgid, name in resultados_cgid if cgid and name not in CATEGORIAS_IGNORADAS]
+        cgids_validos = [(cgid, name) for cgid, name in resultados_cgid if cgid]
 
         if IS_TEST_MODE:
             cgids_validos = cgids_validos[:2] # Processa apenas 2 categorias para teste
@@ -262,7 +262,7 @@ async def motor_extracao_svicente_full():
                         else:
                             link_pdp = ""
 
-                        nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                        nome_limpo, qv, med = nome_bruto, "1", "UN"
                         measurement_unit = str(p.get('measurementUnit', '')).lower()
                         if measurement_unit == 'kg' or nome_bruto.upper().endswith(' KG'):
                             unid_venda = "KG"
@@ -277,8 +277,8 @@ async def motor_extracao_svicente_full():
                         produtos_categoria.append({
                             "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": cat_nome,
                             "Produto": nome_limpo, "Marca": marca,
-                            "Preço Varejo": f"R$ {valor_varejo:.2f}".replace('.', ','),
-                            "Preço Atacado": f"R$ {valor_atacado:.2f}".replace('.', ','),
+                            "Preço Varejo": round(valor_varejo, 2),
+                            "Preço Atacado": round(valor_atacado, 2),
                             "Qtd_Valor": qv, "Medida": med, "Unidade": unid_venda, "Condição": condicao,
                             "Data_Hora": agora, "Link_Imagem": img_url if img_url else "SEM IMAGEM",
                             "Link_PDP": link_pdp

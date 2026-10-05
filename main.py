@@ -1,8 +1,5 @@
-import pandas as pd
-import sqlite3
 import os
 import asyncio
-import unicodedata
 from datetime import datetime
 
 # Importações dos scrapers
@@ -20,74 +17,12 @@ import scrapers.fort as fort
 import scrapers.roldao as roldao
 import scrapers.tauste as tauste
 
-from utils import ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca, enriquecer_ean_produtos_async, exibir_resumo_coleta
-from classificador_ia import classificar_taxonomia_com_ia_async, carregar_biblioteca, salvar_biblioteca, gerar_id_unico, resolver_conflitos_ia_async
+from utils import ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, setup_logging, exibir_resumo_coleta
 
 logger = setup_logging()
 
 DATA_DIR = "data"
-DB_NOME = os.path.join(DATA_DIR, "monitoramento_Jundiai.db")
 
-# ==========================================
-# FUNÇÕES DE SUPORTE (DATABASE E EXCEL)
-# ==========================================
-
-def garantir_tabela_ofertas(db_path):
-    """Garante que o diretório de dados e as tabelas 'ofertas' e 'historico_precos' no banco de dados existam."""
-    data_dir = os.path.dirname(db_path)
-    if data_dir and not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    # Cria a tabela de ofertas (snapshot atual)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ofertas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            Mercado TEXT,
-            EAN TEXT,
-            Categoria TEXT,
-            subcategoria TEXT,
-            tipo_produto TEXT,
-            Produto TEXT,
-            Marca TEXT,
-            Preco_Varejo TEXT, 
-            Preco_Atacado TEXT, 
-            Qtd_Valor TEXT,
-            Medida TEXT,
-            Unidade TEXT,
-            Condicao TEXT,
-            Data_Hora TEXT,
-            Link_Imagem TEXT,
-            UNIQUE(Mercado, Produto, Qtd_Valor, Medida)
-        )
-    ''')
-    
-    # Cria a tabela de histórico de preços
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS historico_precos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            Mercado TEXT,
-            EAN TEXT,
-            Produto TEXT,
-            Preco_Varejo TEXT,
-            Preco_Atacado TEXT,
-            Data_Hora TEXT
-        )
-    ''')
-    
-    # --- CRIAÇÃO DE ÍNDICES PARA OTIMIZAÇÃO (PERFORMANCE) ---
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ofertas_ean ON ofertas(EAN);')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ofertas_mercado ON ofertas(Mercado);')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ofertas_categoria ON ofertas(Categoria);')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_historico_ean ON historico_precos(EAN);')
-
-    conn.commit()
-    conn.close()
-
-def salvar_dados_mercado(produtos, nome_mercado):
-    """(Desativado) A persistência no banco e no excel agora é feita exclusivamente pelo script 5_atualizar_banco.py."""
-    pass
 
 # ==========================================
 # PROCESSO PRINCIPAL (ORQUESTRADOR)

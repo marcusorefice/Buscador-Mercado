@@ -4,14 +4,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
-from utils import (
-    padronizar_categoria, 
-    extrair_medidas_inteligente, 
-    setup_logging, 
-    read_json_file,
-    CATEGORIAS_IGNORADAS,
-    formatar_nome_categoria
-)
+from utils import setup_logging, read_json_file
 
 logger = setup_logging()
 
@@ -152,18 +145,17 @@ async def motor_extracao_paodeacucar_full():
                             if categorias_api and isinstance(categorias_api, list) and categorias_api[0]:
                                 partes_cat = categorias_api[0].strip('/').split('/')
                                 cat_site = partes_cat[0].upper() if len(partes_cat) > 0 else "GERAL"
-                                if len(partes_cat) > 1: subcategoria = formatar_nome_categoria(partes_cat[1])
-                                if len(partes_cat) > 2: tipo_produto = formatar_nome_categoria(partes_cat[2])
+                                if len(partes_cat) > 1: subcategoria = partes_cat[1]
+                                if len(partes_cat) > 2: tipo_produto = partes_cat[2]
                             else:
                                 if p.get('departmentName'):
                                     cat_site = str(p.get('departmentName')).upper()
                                 elif p.get('categoryName'):
                                     cat_site = str(p.get('categoryName')).upper()
 
-                            if cat_site in CATEGORIAS_IGNORADAS: continue
                             
                             full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
-                            categoria = padronizar_categoria(full_context, cat_site)
+                            categoria = cat_site
                             
                             # Condições
                             condicoes = []
@@ -203,7 +195,7 @@ async def motor_extracao_paodeacucar_full():
                             img_path = p.get('productImages', [None])[0]
                             img_url = f"{BASE_URL_CONFIG}/{img_path.lstrip('/')}" if img_path else ""
 
-                            nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                            nome_limpo, qv, med = nome_bruto, "1", "UN"
                             
                             unidade_venda = "UN"
                             if str(p.get('unit', '')).lower() == 'kg' or str(p.get('measurementUnit', '')).lower() == 'kg':
@@ -237,8 +229,8 @@ async def motor_extracao_paodeacucar_full():
                                 "tipo_produto": tipo_produto,
                                 "Produto": nome_limpo,
                                 "Marca": str(p.get('brand', 'PRÓPRIA')).upper(),
-                                "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','),
-                                "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
+                                "Preço Varejo": round(p_varejo, 2),
+                                "Preço Atacado": round(p_atacado, 2),
                                 "Qtd_Valor": qv,
                                 "Medida": med,
                                 "Unidade": unidade_venda,

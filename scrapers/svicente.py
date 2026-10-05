@@ -5,7 +5,7 @@ import re
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from datetime import datetime
-from utils import padronizar_categoria, extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria, ean_eh_valido
+from utils import setup_logging, read_json_file, ean_eh_valido
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -265,13 +265,11 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                                     break
 
                     # --- LÓGICA DE TAXONOMIA ---
-                    if cat_nome in CATEGORIAS_IGNORADAS:
-                        continue
                     
                     # A 'cat_nome' (ex: 'CERVEJAS') é a nossa subcategoria mais provável.
-                    # A 'padronizar_categoria' encontra a categoria principal (ex: 'BEBIDAS').
-                    categoria_principal = padronizar_categoria(cat_nome, cat_nome)
-                    subcategoria_base = formatar_nome_categoria(cat_nome)
+                    # A categoria do site (ex: 'CERVEJAS') é usada como categoria e subcategoria.
+                    categoria_principal = cat_nome
+                    subcategoria_base = cat_nome
 
                     link_pdp_rel = p.get('url', '')
                     pid = p.get('id')
@@ -306,7 +304,7 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                                     if len(nome_url) > len(nome_bruto) or nome_bruto == marca:
                                         nome_bruto = nome_url
 
-                    nome_limpo, qv, med = extrair_medidas_inteligente(nome_bruto)
+                    nome_limpo, qv, med = nome_bruto, "1", "UN"
                     
                     measurement_unit = str(p.get('measurementUnit', '')).lower()
                     if measurement_unit == 'kg' or nome_bruto.upper().endswith(' KG'):
@@ -327,8 +325,8 @@ async def processar_categoria(session, cgid, cat_nome, semaforo, agora):
                         "tipo_produto": tipo_produto,
                         "Produto": nome_limpo,
                         "Marca": marca,
-                        "Preço Varejo": f"R$ {valor_varejo:.2f}".replace('.', ','),
-                        "Preço Atacado": f"R$ {valor_atacado:.2f}".replace('.', ','),
+                        "Preço Varejo": round(valor_varejo, 2),
+                        "Preço Atacado": round(valor_atacado, 2),
                         "Qtd_Valor": qv,
                         "Medida": med,
                         "Unidade": unid_venda,

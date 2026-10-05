@@ -7,7 +7,7 @@ import re
 from curl_cffi.requests import AsyncSession
 import random
 from datetime import datetime
-from utils import extrair_medidas_inteligente, setup_logging, read_json_file, MAPA_PARA_APP, CATEGORIAS_IGNORADAS, formatar_nome_categoria
+from utils import setup_logging, read_json_file
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -270,12 +270,11 @@ async def motor_extracao_atacadao():
                             
                             if cat_tree and isinstance(cat_tree, list):
                                 if len(cat_tree) > 0: cat_site_cru = cat_tree[0].get('name', '').upper()
-                                if len(cat_tree) > 1: subcategoria_cru = formatar_nome_categoria(cat_tree[1].get('name', 'N/A'))
-                                if len(cat_tree) > 2: tipo_produto_cru = formatar_nome_categoria(cat_tree[2].get('name', 'N/A'))
+                                if len(cat_tree) > 1: subcategoria_cru = cat_tree[1].get('name', 'N/A')
+                                if len(cat_tree) > 2: tipo_produto_cru = cat_tree[2].get('name', 'N/A')
 
-                            if cat_site_cru in CATEGORIAS_IGNORADAS: continue
 
-                            # A categorização final será feita pelo 'validar_e_limpar_produtos' no orquestrador.
+                            # A categoria do site é usada como veio; a padronização acontece no passo 4.
                             # Aqui, usamos a taxonomia base vinda do site para passar ao próximo passo.
                             categoria = cat_site_cru
                             subcategoria = subcategoria_cru
@@ -284,7 +283,7 @@ async def motor_extracao_atacadao():
                             marca_obj = p.get('brand', {})
                             marca_str = marca_obj.get('name', 'OUTROS').upper() if isinstance(marca_obj, dict) else str(marca_obj or 'OUTROS').upper()
 
-                            nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                            nome_limpo, qv, med = nome_cru, "1", "UN"
                             
                             measurement_unit = str(p.get('measurementUnit', '')).lower()
                             
@@ -318,7 +317,7 @@ async def motor_extracao_atacadao():
                                 "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": categoria,
                                 "subcategoria": subcategoria, "tipo_produto": tipo_produto,
                                 "Produto": nome_limpo, "Marca": marca_str,
-                                "Preço Varejo": f"R$ {p_varejo:.2f}".replace('.', ','), "Preço Atacado": f"R$ {p_atacado:.2f}".replace('.', ','),
+                                "Preço Varejo": round(p_varejo, 2), "Preço Atacado": round(p_atacado, 2),
                                 "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda,
                                 "Condição": condicao, "Data_Hora": agora, "Link_Imagem": imagem_url,
                                 "Link_PDP": link_pdp

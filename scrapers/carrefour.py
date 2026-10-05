@@ -5,11 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import (
-    ean_eh_valido,
-    extrair_medidas_inteligente, setup_logging, 
-    read_json_file, formatar_nome_categoria, normalizar_para_cache
-)
+from utils import ean_eh_valido, setup_logging, read_json_file, normalizar_para_cache
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -131,7 +127,7 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                             p_v = p_v * unit_multiplier
                             p_a = p_a * unit_multiplier
 
-                    nome_limpo, qv, med = extrair_medidas_inteligente(nome_cru)
+                    nome_limpo, qv, med = nome_cru, "1", "UN"
 
                     measurement_unit = str(sku_p.get('measurementUnit', '')).lower()
                     if measurement_unit == 'kg' or nome_cru.upper().endswith(' KG'):
@@ -167,8 +163,8 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                     lote.append({
                         "Mercado": NOME_MERCADO, "EAN": ean, "Categoria": "GERAL",
                         "Produto": nome_limpo, "Marca": str(item.get('brand', 'OUTROS')).upper(),
-                        "Preço Varejo": f"R$ {p_v:.2f}".replace('.', ','),
-                        "Preço Atacado": f"R$ {p_a:.2f}".replace('.', ','),
+                        "Preço Varejo": round(p_v, 2),
+                        "Preço Atacado": round(p_a, 2),
                         "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda,
                         "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN", 
                         "Data_Hora": agora, "Link_Imagem": link_foto,

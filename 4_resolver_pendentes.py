@@ -5,13 +5,6 @@ import asyncio
 import logging
 import re
 
-# Importa as ferramentas da IA do seu classificador já existente
-from classificador_ia import (
-    PROMPT_CLASSIFICACAO, 
-    PROMPT_CONFLITO,
-    CATEGORIAS_MASTER
-)
-import classificador_ia
 from buscador_ean import tentar_recuperar_ean
 from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
 from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias
