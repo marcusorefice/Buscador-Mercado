@@ -44,17 +44,25 @@ async def obter_precos_simulados(session, skus, cep="13211745", qtd=3):
         res = await session.post(url_simulacao, json=payload, timeout=30)
         if res.status_code == 200:
             dados = res.json()
-            resultado = {}
+            # Em promoções (leve X pague Y, brinde) a VTEX pode devolver o MESMO produto em várias
+            # linhas (ex: 2 un a R$ 4,99 + 1 un a R$ 0,01). Soma todas as linhas e usa o preço médio
+            # por unidade com desconto (sellingPrice), em vez de ficar só com a última linha.
+            somas = {}
             for item in dados.get('items', []):
                 sku_id = str(item.get('id'))
+                qtd_linha = int(item.get('quantity') or 0)
+                preco_pago = item.get('sellingPrice') if item.get('sellingPrice') is not None else item.get('price')
                 tags = item.get('priceTags', [])
-                tag_name = tags[0].get('name', 'DESCONTO PROGRESSIVO') if tags else 'PROMOÇÃO ATIVA'
-                
-                resultado[sku_id] = {
-                    'price': float(item.get('price') or 0) / 100,
-                    'listPrice': float(item.get('listPrice') or 0) / 100,
-                    'tag_name': tag_name
-                }
+                soma = somas.setdefault(sku_id, {'qtd': 0, 'total': 0.0, 'listPrice': 0.0, 'tag_name': 'PROMOÇÃO ATIVA'})
+                soma['qtd'] += qtd_linha
+                soma['total'] += float(preco_pago or 0) / 100 * qtd_linha
+                soma['listPrice'] = max(soma['listPrice'], float(item.get('listPrice') or 0) / 100)
+                if tags:
+                    soma['tag_name'] = tags[0].get('name', 'DESCONTO PROGRESSIVO')
+            resultado = {}
+            for sku_id, soma in somas.items():
+                if soma['qtd'] > 0:
+                    resultado[sku_id] = {'price': soma['total'] / soma['qtd'], 'listPrice': soma['listPrice'], 'tag_name': soma['tag_name']}
             return resultado
     except Exception as e:
         logger.error(f"⚠️ Falha na simulação em lote: {e}")
@@ -172,7 +180,10 @@ async def extrair_dados():
                                 p_lista = sim_data['listPrice']
                                 tag_name = sim_data['tag_name']
                                 
-                                if p_sim_3 > 0 and p_sim_3 < p_lista:
+                                # Trava de segurança: desconto por quantidade acima de 50% do preço atual é erro de leitura
+                                if 0 < p_sim_3 < p_venda * 0.5:
+                                    logger.warning(f"⚠️ Preço simulado suspeito ignorado: '{nome_original}' R$ {p_sim_3:.2f} (preço atual R$ {p_venda:.2f})")
+                                elif p_sim_3 > 0 and p_sim_3 < p_lista:
                                     p_atacado = p_sim_3
                                     # Usa o nome da tag, ou fallback se for uma promoção
                                     if "PROGRESSIVO" in tag_name.upper():
