@@ -65,6 +65,7 @@ export default function App() {
   const [isSuggestionModalVisible, setSuggestionModalVisible] = useState(false);
   const [suggestionText, setSuggestionText] = useState('');
   const [suggestionImage, setSuggestionImage] = useState<string | null>(null);
+  const [suggestionImageBase64, setSuggestionImageBase64] = useState<string | null>(null);
   const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
   const [dynamicTags, setDynamicTags] = useState<string[]>(['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó']);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -299,9 +300,11 @@ export default function App() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 0.7,
+      base64: true,
     });
     if (!result.canceled) {
       setSuggestionImage(result.assets[0].uri);
+      setSuggestionImageBase64(result.assets[0].base64 ?? null);
     }
   };
 
@@ -309,26 +312,24 @@ export default function App() {
     if (!suggestionText.trim()) return;
     setIsSendingSuggestion(true);
     try {
-      // ⚠️ COLE AQUI A URL DO SEU WEBHOOK DO DISCORD
-      const WEBHOOK_URL = '***WEBHOOK_REMOVIDO***';
-      
-      const formData = new FormData();
-      formData.append('content', `💡 **Nova Sugestão / Bug:**\n${suggestionText}`);
-      
-      if (suggestionImage) {
-        const filename = suggestionImage.split('/').pop() || 'print.jpg';
-        const match = /\.(\w+)$/.exec(filename);
-        const type = match ? `image/${match[1]}` : `image/jpeg`;
-        formData.append('file', { uri: suggestionImage, name: filename, type } as any);
-      }
-
-      const response = await fetch(WEBHOOK_URL, { method: 'POST', body: formData });
+      // A sugestão vai para a nossa API, que repassa ao Discord.
+      // A URL do webhook fica só no servidor (qualquer um consegue extrair o que está dentro do APK).
+      const response = await fetch(`${API_URL}/sugestoes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body: JSON.stringify({
+          texto: suggestionText,
+          imagem_base64: suggestionImage ? suggestionImageBase64 : null,
+          imagem_nome: suggestionImage ? (suggestionImage.split('/').pop() || 'print.jpg') : null,
+        }),
+      });
       
       if (response.ok || response.status === 204) {
         Alert.alert('Sucesso!', 'Sua sugestão foi enviada. Obrigado por ajudar a melhorar o app!');
         setSuggestionModalVisible(false);
         setSuggestionText('');
         setSuggestionImage(null);
+        setSuggestionImageBase64(null);
       } else {
         throw new Error('Falha no envio');
       }
@@ -475,6 +476,7 @@ export default function App() {
             onDismiss={() => setCartVisible(false)}
             allProducts={products}
             onProductPress={handleProductPress}
+            apiUrl={API_URL}
           />
 
           <Modal visible={isMarketModalVisible} animationType="slide" transparent={true}>

@@ -1,18 +1,35 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Modal, Image, TouchableOpacity } from 'react-native';
 import { Text, IconButton, Divider, Button, Chip, Checkbox } from 'react-native-paper';
 import { useShoppingListStore } from './useShoppingListStore';
 import { Product } from '../types';
+import { getPrecoEfetivo, getAvisoCondicao } from '../precos';
 
 interface Props {
   visible: boolean;
   onDismiss: () => void;
   allProducts?: Product[];
   onProductPress?: (product: Product) => void;
+  apiUrl?: string;
 }
 
-export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProductPress }: Props) => {
-  const { list, toggleProduct, clearList, updateQuantity, setPinnedMarket, toggleItemCheck } = useShoppingListStore();
+export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProductPress, apiUrl }: Props) => {
+  const { list, toggleProduct, clearList, updateQuantity, setPinnedMarket, toggleItemCheck, refreshOffers } = useShoppingListStore();
+
+  // A lista fica salva no celular; ao abrir, atualiza os preços com os dados mais recentes da API
+  useEffect(() => {
+    if (!visible || !apiUrl) return;
+    const eans = useShoppingListStore.getState().list.map(p => p.EAN);
+    if (eans.length === 0) return;
+    let cancelado = false;
+    fetch(`${apiUrl}/produtos/lote?eans=${encodeURIComponent(eans.join(','))}`, {
+      headers: { 'ngrok-skip-browser-warning': 'true' },
+    })
+      .then(res => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((atualizados: Product[]) => { if (!cancelado) refreshOffers(atualizados); })
+      .catch(() => { /* sem conexão: mantém os preços salvos */ });
+    return () => { cancelado = true; };
+  }, [visible, apiUrl, refreshOffers]);
   const [expandedMarkets, setExpandedMarkets] = useState<Record<string, boolean>>({});
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
   const [shoppingMode, setShoppingMode] = useState<{ type: 'cheapest' | 'custom' | 'single', market?: string, title: string } | null>(null);
@@ -25,21 +42,15 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
     setExpandedItems(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // Função interna para pegar o melhor preço da oferta
-  const getBestPrice = (oferta: any) => {
-    if (!oferta) return 0;
-    const pv = oferta.Preco_Varejo || 0;
-    const pa = oferta.Preco_Atacado || 0;
-    if (pa > 0 && pv > 0) return Math.min(pa, pv);
-    return Math.max(pa, pv);
-  };
+  // Preço unitário real considerando a quantidade (atacado só vale a partir da qtd mínima)
+  const getBestPrice = (oferta: any, quantidade = 1) => getPrecoEfetivo(oferta, quantidade);
 
-  const getBestAlternative = (product: Product) => {
+  const getBestAlternative = (product: Product, quantidade = 1) => {
     if (!product.Ofertas || product.Ofertas.length === 0) return null;
     let bestOffer = product.Ofertas[0];
-    let bestPrice = getBestPrice(bestOffer);
+    let bestPrice = getBestPrice(bestOffer, quantidade);
     for (let i = 1; i < product.Ofertas.length; i++) {
-      const price = getBestPrice(product.Ofertas[i]);
+      const price = getBestPrice(product.Ofertas[i], quantidade);
       if (price < bestPrice) {
         bestPrice = price;
         bestOffer = product.Ofertas[i];
@@ -104,9 +115,9 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
         missingCount++;
         return;
       }
-      const bestOffer = item.Ofertas.reduce((best, curr) => getBestPrice(curr) < getBestPrice(best) ? curr : best);
+      const bestOffer = item.Ofertas.reduce((best, curr) => getBestPrice(curr, item.quantity) < getBestPrice(best, item.quantity) ? curr : best);
       
-      total += getBestPrice(bestOffer) * item.quantity;
+      total += getBestPrice(bestOffer, item.quantity) * item.quantity;
       if (!markets[bestOffer.Mercado]) markets[bestOffer.Mercado] = [];
       markets[bestOffer.Mercado].push({ product: item, offer: bestOffer });
     });
@@ -133,11 +144,11 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
         chosenOffer = item.Ofertas.find(o => o.Mercado === item.pinnedMarket);
       }
       if (!chosenOffer) {
-        chosenOffer = item.Ofertas.reduce((best, curr) => getBestPrice(curr) < getBestPrice(best) ? curr : best);
+        chosenOffer = item.Ofertas.reduce((best, curr) => getBestPrice(curr, item.quantity) < getBestPrice(best, item.quantity) ? curr : best);
       }
 
       if (chosenOffer) {
-        total += getBestPrice(chosenOffer) * item.quantity;
+        total += getBestPrice(chosenOffer, item.quantity) * item.quantity;
         if (!markets[chosenOffer.Mercado]) markets[chosenOffer.Mercado] = [];
         markets[chosenOffer.Mercado].push({ product: item, offer: chosenOffer });
       } else {
@@ -169,9 +180,9 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
         if (marketOffers.length > 0) {
           // Pega a melhor oferta se houver mais de uma no mesmo mercado
           let bestOffer = marketOffers[0];
-          let bestPrice = getBestPrice(bestOffer);
+          let bestPrice = getBestPrice(bestOffer, item.quantity || 1);
           for (let i = 1; i < marketOffers.length; i++) {
-            const price = getBestPrice(marketOffers[i]);
+            const price = getBestPrice(marketOffers[i], item.quantity || 1);
             if (price < bestPrice) {
               bestPrice = price;
               bestOffer = marketOffers[i];
@@ -229,9 +240,12 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
             <Text style={[styles.listProductName, isChecked && { textDecorationLine: 'line-through', color: '#888' }]} numberOfLines={2}>{item.Produto_Ouro}</Text>
             <Text style={styles.listBrand}>{item.Marca}</Text>
             <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#E5293E', marginTop: 4 }}>
-              {item.quantity}x R$ {getBestPrice(offer).toFixed(2).replace('.', ',')} 
-              <Text style={{ fontSize: 12, color: '#666', fontWeight: 'normal' }}> (Total: R$ {(getBestPrice(offer) * item.quantity).toFixed(2).replace('.', ',')})</Text>
+              {item.quantity}x R$ {getBestPrice(offer, item.quantity).toFixed(2).replace('.', ',')} 
+              <Text style={{ fontSize: 12, color: '#666', fontWeight: 'normal' }}> (Total: R$ {(getBestPrice(offer, item.quantity) * item.quantity).toFixed(2).replace('.', ',')})</Text>
             </Text>
+            {getAvisoCondicao(offer, item.quantity) && (
+              <Text style={{ fontSize: 11, color: '#b26a00', marginTop: 2 }}>{getAvisoCondicao(offer, item.quantity)}</Text>
+            )}
           </View>
         </TouchableOpacity>
         </View>
@@ -304,7 +318,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                                   <Image source={substitute?.Imagem && substitute?.Imagem.startsWith('http') ? { uri: substitute?.Imagem } : require('../assets/placeholder.png')} style={styles.substituteImage} resizeMode="contain" />
                                   <View style={{ flex: 1, marginLeft: 8 }}>
                                     <Text style={styles.substituteName} numberOfLines={1}>{substitute?.Produto_Ouro}</Text>
-                                    <Text style={styles.substitutePrice}>R$ {getBestPrice(substitute?.Ofertas?.find(o => o.Mercado === shoppingMode?.market)).toFixed(2).replace('.', ',')}</Text>
+                                    <Text style={styles.substitutePrice}>R$ {getBestPrice(substitute?.Ofertas?.find(o => o.Mercado === shoppingMode?.market), prod.quantity).toFixed(2).replace('.', ',')}</Text>
                                   </View>
                                   <Button mode="contained-tonal" buttonColor="#e3f2fd" textColor="#0066cc" compact onPress={() => substitute && handleSwap(prod, substitute)}>
                                     Trocar
@@ -358,7 +372,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                               <TouchableOpacity key={`cheap-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
                                   <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
-                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
+                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                                 </View>
                               </TouchableOpacity>
                           ))}
@@ -403,7 +417,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                               <TouchableOpacity key={`cust-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
                                   <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
-                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
+                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                                 </View>
                               </TouchableOpacity>
                           ))}
@@ -466,7 +480,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                               <TouchableOpacity key={`found-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
                                   <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
-                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
+                                  <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                                 </View>
                               </TouchableOpacity>
                             ))}
@@ -477,7 +491,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                           <>
                             <Text style={[styles.expandedSectionTitle, { color: '#d32f2f', marginTop: 10 }]}>❌ Faltando:</Text>
                             {rank.missingItems.map((prod, idx) => {
-                              const alt = getBestAlternative(prod);
+                              const alt = getBestAlternative(prod, prod.quantity);
                               const substitute = getSubstitute(prod, rank.market);
                               return (
                                 <View key={`missing-${idx}`} style={styles.expandedMissingContainer}>
@@ -497,7 +511,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                                         <Image source={substitute?.Imagem && substitute?.Imagem.startsWith('http') ? { uri: substitute?.Imagem } : require('../assets/placeholder.png')} style={styles.substituteImage} resizeMode="contain" />
                                         <View style={{ flex: 1, marginLeft: 8 }}>
                                           <Text style={styles.substituteName} numberOfLines={1}>{substitute?.Produto_Ouro}</Text>
-                                          <Text style={styles.substitutePrice}>R$ {getBestPrice(substitute?.Ofertas?.find(o => o.Mercado === rank.market)).toFixed(2).replace('.', ',')}</Text>
+                                          <Text style={styles.substitutePrice}>R$ {getBestPrice(substitute?.Ofertas?.find(o => o.Mercado === rank.market), prod.quantity).toFixed(2).replace('.', ',')}</Text>
                                         </View>
                                         <Button mode="contained-tonal" buttonColor="#e3f2fd" textColor="#0066cc" compact onPress={() => substitute && handleSwap(prod, substitute)}>
                                           Trocar
@@ -595,7 +609,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                               textStyle={styles.marketChipText}
                               compact
                             >
-                              {o.Mercado} (R$ {getBestPrice(o).toFixed(2).replace('.', ',')})
+                              {o.Mercado} (R$ {getBestPrice(o, item.quantity).toFixed(2).replace('.', ',')})
                             </Chip>
                           ))}
                         </ScrollView>
