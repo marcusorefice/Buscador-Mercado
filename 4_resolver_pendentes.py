@@ -7,7 +7,7 @@ import re
 
 from buscador_ean import tentar_recuperar_ean
 from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
-from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack
 import revisar_casamentos
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -588,6 +588,13 @@ async def main():
                 item["Categoria"] = b_item.get("Categoria", "OUTROS")
                 item["subcategoria"] = b_item.get("subcategoria", "N/A")
                 item["tipo_produto"] = b_item.get("tipo_produto", "N/A")
+            # Mercado que vende um pack do produto com o mesmo EAN (ex: Red Bull "4 LATAS"):
+            # a oferta continua no mesmo produto, mas com Qtd_Valor = unidades do pack,
+            # para o app e a API compararem o preço por unidade.
+            if str(item.get("Unidade", "UN")).upper() != "KG":
+                unidades = unidades_por_pack(item.get("Produto", ""), item.get("Marca"), b_item.get("nome_comum", ""), b_item.get("marca"))
+                if unidades > 1:
+                    item["Qtd_Valor"], item["Medida"] = str(unidades), "UN"
             itens_prontos.append(item)
         else:
             itens_restantes.append(item)

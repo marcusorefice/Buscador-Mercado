@@ -3,6 +3,7 @@ import { View, StyleSheet, Image } from 'react-native';
 import { Card, Text, Title, IconButton } from 'react-native-paper';
 import { Product } from '../types';
 import { useShoppingListStore } from './useShoppingListStore';
+import { getUnidadesPack } from '../precos';
 
 type MarketName = 
   | 'Assaí Atacadista'
@@ -69,6 +70,10 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
     if (bestOffer.Unidade === 'KG' || (bestOffer.Medida === 'KG' && bestOffer.Qtd_Valor === '1')) {
       weightInfo = '1 KG';
     } 
+    // Pack vendido com o EAN da unidade (ex: Red Bull 4 latas): o preço exibido já é por unidade
+    else if (getUnidadesPack(bestOffer) > 1) {
+      weightInfo = `Pack c/ ${getUnidadesPack(bestOffer)}`;
+    }
     // Caso contrário, só monta a badge se não for um item genérico "1 UN"
     else if (bestOffer.Qtd_Valor !== "1" || bestOffer.Medida !== "UN") {
       weightInfo = `${bestOffer.Qtd_Valor}${bestOffer.Medida}`;
@@ -76,24 +81,22 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
   }
   const showWeight = weightInfo !== '' && !titleText.toLowerCase().includes(weightInfo.toLowerCase());
 
-  // Lógica de cálculo de desconto: buscando o maior preço entre as ofertas para comparação
-  // Para evitar misturar pacotes (ex: 120 latas) com unidades, consideramos apenas as ofertas com a mesma proporção.
+  // Lógica de cálculo de desconto: buscando o maior preço entre as ofertas para comparação.
+  // Tudo por unidade: um pack de 4 latas entra dividido por 4 (a API já ordena e calcula o menor preço assim).
   const maxOfferPrice = React.useMemo(() => {
     if (!product.Ofertas || product.Ofertas.length === 0 || !bestOffer) return 0;
 
-    const lowestPrice = bestOffer.Preco_Atacado || bestOffer.Preco_Varejo || 1;
+    const precoUnitarioMaximo = (o: any) => Math.max(o.Preco_Varejo || 0, o.Preco_Atacado || 0) / getUnidadesPack(o);
+    const lowestPrice = product.Menor_Preco || ((bestOffer.Preco_Atacado || bestOffer.Preco_Varejo || 1) / getUnidadesPack(bestOffer));
 
     return product.Ofertas
       .filter((o: any) => {
-        const isSameSize = o.Qtd_Valor === bestOffer.Qtd_Valor && o.Medida === bestOffer.Medida;
-        const offerMaxPrice = Math.max(o.Preco_Varejo || 0, o.Preco_Atacado || 0);
-        // Ignora outliers (mais de 4x o preço do bestOffer) que provavelmente são packs (ex: 120 latas)
-        return isSameSize && offerMaxPrice <= lowestPrice * 4;
+        const isSameSize = o.Medida === bestOffer.Medida || getUnidadesPack(o) > 1 || getUnidadesPack(bestOffer) > 1;
+        // Ignora outliers (mais de 4x o menor preço), que costumam ser cadastro errado
+        return isSameSize && precoUnitarioMaximo(o) <= lowestPrice * 4;
       })
-      .reduce((max, oferta) => {
-        return Math.max(max, oferta.Preco_Varejo || 0, oferta.Preco_Atacado || 0);
-      }, 0) || 0;
-  }, [product.Ofertas, bestOffer]);
+      .reduce((max, oferta) => Math.max(max, precoUnitarioMaximo(oferta)), 0) || 0;
+  }, [product.Ofertas, product.Menor_Preco, bestOffer]);
 
   const originalPrice = (product as any).Maior_Preco || maxOfferPrice;
   const currentPrice = product.Menor_Preco || 0;

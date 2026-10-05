@@ -148,6 +148,22 @@ class TestConferenciaEanWeb(unittest.TestCase):
         self.assertFalse(cp.nomes_conferem(self.casador, "SUCO DEL VALLE UVA 1L", "DEL VALLE", "Suco Del Valle Pêssego", "Del Valle"))
 
 
+class TestPack(unittest.TestCase):
+    PRODUTO = ("Energético Red Bull Energy Drink 250ml", "Red Bull")
+
+    def test_pack_vendido_com_ean_da_unidade(self):
+        for nome in ("ENERGÉTICO RED BULL ENERGY DRINK 250ML (4 LATAS)", "RED BULL ENERGÉTICO 250ML 4 LATAS", "RED BULL 4X250ML"):
+            self.assertEqual(cp.unidades_por_pack(nome, "RED BULL", *self.PRODUTO), 4, nome)
+
+    def test_unidade_e_produto_diferente(self):
+        self.assertEqual(cp.unidades_por_pack("ENERGÉTICO RED BULL ENERGY DRINK 250ML", "RED BULL", *self.PRODUTO), 1)
+        self.assertEqual(cp.unidades_por_pack("RED BULL 473ML 4 LATAS", "RED BULL", *self.PRODUTO), 1)
+
+    def test_fardo_c_barra(self):
+        self.assertEqual(cp.unidades_por_pack("CERVEJA SKOL LATA 350ML C/12", "SKOL", "Cerveja Skol Lata 350ml", "Skol"), 12)
+        self.assertEqual(Assinatura("BISCOITO C/ 3 SABORES", "X").pack, None)
+
+
 class TestRevisao(unittest.TestCase):
     def test_exportar_e_importar_decisoes(self):
         import revisar_casamentos as rc

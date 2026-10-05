@@ -121,6 +121,8 @@ RE_PACK = re.compile(
     r"(?:UN|UND|UNID|UNIDADES?|ROLOS?|SACHES?|SACH|CAPSULAS?|CAPS|LATAS?|GARRAFAS?|FRALDAS?|TABLETES?|PCS?|PECAS?|SAQUINHOS?|ENVELOPES?|BARRAS?)(?![A-Z])"
 )
 RE_PACK_X = re.compile(r"(?<![A-Z0-9])(\d+)\s*X(?![A-Z])|(?<![A-Z0-9])X\s*(\d+)(?![A-Z0-9])")
+# "C/12", "COM 6" sem palavra depois (fardos e caixas: "CERVEJA SKOL LATA 350ML C/12")
+RE_PACK_COM = re.compile(r"(?<![A-Z0-9])(?:C/|COM)\s*(\d+)(?![\d.])(?!\s*[A-Z])")  # não pode vir palavra depois ("C/ 3 SABORES")
 
 def eh_obrigatorio(token):
     return token in ATRIBUTOS_OBRIGATORIOS or token.startswith("SEM_")
@@ -168,10 +170,12 @@ class Assinatura:
         # Quantidade do pack (só conta se > 1)
         packs = [int(n) for n in RE_PACK.findall(texto)]
         packs += [int(a or b) for a, b in RE_PACK_X.findall(texto)]
+        packs += [int(n) for n in RE_PACK_COM.findall(texto)]
         packs = [p for p in packs if p > 1]
         self.pack = max(packs) if packs else None
         texto = RE_PACK.sub(" ", texto)
         texto = RE_PACK_X.sub(" ", texto)
+        texto = RE_PACK_COM.sub(" ", texto)
 
         palavras = re.findall(r"[A-Z0-9_]+", re.sub(r"[^A-Z0-9_ ]", " ", texto))
         self.palavras = frozenset(palavras)
@@ -353,6 +357,26 @@ def nomes_conferem(casador: CasadorProdutos, nome_item, marca_item, nome_ref, ma
         b.pack = a.pack
     ok, _ = compativel(a, b)
     return ok and casador.pontuar(a, b) >= limiar
+
+def unidades_por_pack(nome_oferta, marca_oferta, nome_produto, marca_produto):
+    """
+    Quantas unidades do produto vêm nesta oferta. Ex: o produto é "Red Bull 250ml" e o Carrefour
+    vende "RED BULL 250ML (4 LATAS)" com o mesmo EAN -> 4. Retorna 1 quando não é um pack do produto.
+    """
+    oferta, produto = Assinatura(nome_oferta, marca_oferta), Assinatura(nome_produto, marca_produto)
+    pack_oferta, pack_produto = oferta.pack or 1, produto.pack or 1
+    if pack_oferta <= pack_produto or pack_oferta % pack_produto:
+        return 1
+    unidades = pack_oferta // pack_produto
+    # A medida de cada unidade tem que ser a mesma: "250ML 4 LATAS" (por unidade) ou
+    # "4X250ML" (que vira 1000ML no total) para um produto de 250ml
+    if oferta.medida and produto.medida:
+        mesmo_tipo = oferta.medida[0] == produto.medida[0]
+        por_unidade = abs(oferta.medida[1] - produto.medida[1]) <= produto.medida[1] * 0.02
+        total = abs(oferta.medida[1] - produto.medida[1] * unidades) <= produto.medida[1] * unidades * 0.02
+        if not (mesmo_tipo and (por_unidade or total)):
+            return 1
+    return unidades
 
 def gerar_id_interno(a: Assinatura):
     """ID estável e legível: o mesmo nome gera sempre o mesmo ID em todas as rodadas."""

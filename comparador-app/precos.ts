@@ -6,20 +6,36 @@ export const getQtdMinimaAtacado = (oferta?: Oferta | null): number | null => {
   return match ? parseInt(match[1], 10) : null;
 };
 
-// Preço unitário que a pessoa realmente paga levando `quantidade` unidades.
+// Quantas unidades do produto vêm na oferta. Alguns mercados vendem um pack com o EAN da unidade
+// (ex: Red Bull "4 LATAS"); o passo 4 grava isso em Qtd_Valor com Medida "UN".
+export const getUnidadesPack = (oferta?: Oferta | null): number => {
+  if (!oferta || oferta.Medida !== 'UN' || !/^\d+$/.test(oferta.Qtd_Valor || '')) return 1;
+  return Math.max(1, parseInt(oferta.Qtd_Valor as string, 10));
+};
+
+// Preço de UMA embalagem do mercado (a unidade ou o pack inteiro) comprando `embalagens` delas.
 // O preço de atacado só vale se a quantidade atingir o mínimo exigido pelo mercado.
-export const getPrecoEfetivo = (oferta?: Oferta | null, quantidade = 1): number => {
-  if (!oferta) return 0;
+const precoPorEmbalagem = (oferta: Oferta, embalagens: number): number => {
   const pv = oferta.Preco_Varejo || 0;
   const pa = oferta.Preco_Atacado || 0;
   if (pa > 0 && pv > 0) {
     if (pa < pv) {
       const minimo = getQtdMinimaAtacado(oferta);
-      if (minimo && quantidade < minimo) return pv;
+      if (minimo && embalagens < minimo) return pv;
     }
     return Math.min(pa, pv);
   }
   return Math.max(pa, pv);
+};
+
+// Preço por unidade que a pessoa realmente paga levando `quantidade` unidades.
+// Em pack, compra-se a embalagem inteira: 1 lata num pack de 4 custa o pack todo.
+export const getPrecoEfetivo = (oferta?: Oferta | null, quantidade = 1): number => {
+  if (!oferta) return 0;
+  const qtd = Math.max(1, quantidade);
+  const unidades = getUnidadesPack(oferta);
+  const embalagens = Math.ceil(qtd / unidades);
+  return (precoPorEmbalagem(oferta, embalagens) * embalagens) / qtd;
 };
 
 type ItemDaLista = { quantity: number; Ofertas?: Oferta[] };
@@ -74,6 +90,13 @@ export const melhorCombinacao = <T extends ItemDaLista>(itens: T[], maxMercados 
 // Texto curto explicando a condição do preço exibido (ou null se for preço normal)
 export const getAvisoCondicao = (oferta?: Oferta | null, quantidade = 1): string | null => {
   if (!oferta) return null;
+  const unidades = getUnidadesPack(oferta);
+  if (unidades > 1) {
+    const embalagens = Math.ceil(Math.max(1, quantidade) / unidades);
+    const preco = precoPorEmbalagem(oferta, embalagens).toFixed(2).replace('.', ',');
+    return `Vendido em pack c/ ${unidades} (R$ ${preco} o pack)` +
+      (embalagens * unidades > quantidade ? ` · você leva ${embalagens * unidades} un` : '');
+  }
   const pv = oferta.Preco_Varejo || 0;
   const pa = oferta.Preco_Atacado || 0;
   const minimo = getQtdMinimaAtacado(oferta);

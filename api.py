@@ -101,13 +101,18 @@ def debug_connection():
         print(f"Erro no /debug: {e}")
         return {"status": "ERRO", "url_configurada": bool(DB_URL)}
 
-# Preço efetivo de uma oferta: o menor valor > 0 entre varejo e atacado
-SQL_PRECO_EFETIVO = '''
-    CASE
+# Unidades do produto na oferta (pack vendido com o EAN da unidade, ex: Red Bull "4 LATAS" -> 4)
+SQL_UNIDADES_PACK = '''
+    CASE WHEN o.medida = 'UN' AND o.qtd_valor ~ '^[0-9]+$' THEN GREATEST(CAST(o.qtd_valor AS INTEGER), 1) ELSE 1 END
+'''
+
+# Preço efetivo POR UNIDADE: o menor valor > 0 entre varejo e atacado, dividido pelas unidades do pack
+SQL_PRECO_EFETIVO = f'''
+    (CASE
         WHEN o.preco_atacado > 0 AND o.preco_varejo > 0 THEN LEAST(o.preco_atacado, o.preco_varejo)
         WHEN o.preco_atacado > 0 THEN o.preco_atacado
         ELSE o.preco_varejo
-    END
+    END) / ({SQL_UNIDADES_PACK})
 '''
 
 def _montar_produtos(rows):
@@ -196,7 +201,7 @@ def get_produtos(
     # 1º calcula o ranking e corta em 200 DENTRO do banco; 2º busca as ofertas só desses produtos.
     query_ranking = f'''
         WITH filtradas AS (
-            SELECT o.ean, o.mercado, o.preco_varejo, NULLIF({SQL_PRECO_EFETIVO}, 0) AS preco_efetivo
+            SELECT o.ean, o.mercado, o.preco_varejo / ({SQL_UNIDADES_PACK}) AS preco_varejo, NULLIF({SQL_PRECO_EFETIVO}, 0) AS preco_efetivo
             FROM produtos p
             JOIN ofertas_atuais o ON p.ean = o.ean
             {where_sql}
