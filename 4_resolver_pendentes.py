@@ -12,7 +12,7 @@ from classificador_ia import (
 )
 import classificador_ia
 from buscador_ean import tentar_recuperar_ean
-from utils import ean_eh_valido, gerar_id_interno, otimizar_nome_produto, aplicar_title_case
+from utils import ean_eh_valido, gerar_id_interno, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -184,11 +184,13 @@ def checar_conflito_anomalia(nome_base, nome_novo):
                 return True 
         return False 
 
-    # 1. Estado Físico
-    termos_fisicos = ["FATIADO", "FATIADA", "RALADO", "RALADA", "CORTADO", "CORTADA", "PICADO", "PICADA", "CUBOS", "BANDEJA", "DESCASCADO", "DESCASCADA", "PEDACOS"]
-    fisico_base = {w for w in termos_fisicos if w in nome_base_norm}
-    fisico_novo = {w for w in termos_fisicos if w in nome_novo_norm}
-    if fisico_base != fisico_novo: return True
+    # 1. Estado Físico (REMOVIDO PARA NÃO BARRAR EANs CORRETOS)
+    # Palavras como "FATIADO", "BANDEJA", "PEDACOS" muitas vezes são omitidas por alguns mercados,
+    # mas se o EAN é o mesmo, é o mesmo produto de fábrica.
+    # termos_fisicos = ["FATIADO", "FATIADA", "RALADO", "RALADA", "CORTADO", "CORTADA", "PICADO", "PICADA", "CUBOS", "BANDEJA", "DESCASCADO", "DESCASCADA", "PEDACOS"]
+    # fisico_base = {w for w in termos_fisicos if w in nome_base_norm}
+    # fisico_novo = {w for w in termos_fisicos if w in nome_novo_norm}
+    # if fisico_base != fisico_novo: return True
 
     # 2. Validação Flexível de Atacado / Diferença de Volume (Diferença de UN ou Peso)
     if m_base["unidades"] and m_novo["unidades"] and m_base["unidades"] != m_novo["unidades"]:
@@ -211,7 +213,21 @@ def checar_conflito_anomalia(nome_base, nome_novo):
     tem_kg_base = bool(re.search(r'\bKG\b|/KG\b|\bQUILO\b', nome_base_norm))
     tem_kg_novo = bool(re.search(r'\bKG\b|/KG\b|\bQUILO\b', nome_novo_norm))
     if tem_kg_base != tem_kg_novo and (m_base["peso_num"] is None and m_novo["peso_num"] is None):
-        # Só barra se for explicitamente diferente em conceito de KG vs UN e não houver métricas de peso comparáveis
+        # ATUALIZAÇÃO: Muitos produtos embalados de açougue/frios têm EAN fixo e um mercado bota "KG" no nome e o outro não.
+        # Só vamos barrar se um deles indicar "UN" ou "UNIDADE" explicitamente, caracterizando conflito real.
+        tem_un_base = bool(re.search(r'\bUN\b|\bUNIDADE\b|\bUNIDADES\b|\bPC\b|\bPECA\b', nome_base_norm))
+        tem_un_novo = bool(re.search(r'\bUN\b|\bUNIDADE\b|\bUNIDADES\b|\bPC\b|\bPECA\b', nome_novo_norm))
+        if tem_un_base or tem_un_novo:
+            return True
+        # Se nenhum diz "UN", não é conflito forte o suficiente para ignorar um EAN válido.
+
+    # 4. Lata vs Garrafa (Especialmente para Bebidas)
+    is_lata_base = "LATA" in nome_base_norm
+    is_lata_novo = "LATA" in nome_novo_norm
+    is_garrafa_base = "GARRAFA" in nome_base_norm or "LONG NECK" in nome_base_norm
+    is_garrafa_novo = "GARRAFA" in nome_novo_norm or "LONG NECK" in nome_novo_norm
+    
+    if (is_lata_base and is_garrafa_novo) or (is_garrafa_base and is_lata_novo):
         return True
 
     # Ignora divergências puras de nome (assinatura e similaridade de texto foram removidas)
@@ -233,48 +249,37 @@ async def main():
         logger.info("✅ Nenhum produto pendente na lista.")
         return
 
-    biblioteca = {}
-    if os.path.exists(ARQUIVO_BIBLIOTECA):
-        try:
-            with open(ARQUIVO_BIBLIOTECA, "r", encoding="utf-8") as f:
-                biblioteca = json.load(f)
-        except Exception as e:
-            logger.error(f"❌ Erro ao ler biblioteca: {e}")
+    # Biblioteca, quarentena e itens prontos são gravados de volta no final.
+    # Se algum estiver corrompido, aborta: seguir com {} / [] apagaria os dados bons.
+    try:
+        biblioteca = ler_json_seguro(ARQUIVO_BIBLIOTECA, {})
+        itens_quarentena = ler_json_seguro(ARQUIVO_QUARENTENA, [])
+        itens_prontos_anteriores = ler_json_seguro(ARQUIVO_PROCESSADOS, [])
+    except ArquivoCorrompidoError as e:
+        logger.error(f"❌ {e}")
+        logger.error("   Abortando para não sobrescrever dados. Restaure o arquivo (ou o .tmp ao lado dele) e rode de novo.")
+        return
 
-    cache_buscas_web = {}
-    if os.path.exists(ARQUIVO_CACHE_WEB):
-        try:
-            with open(ARQUIVO_CACHE_WEB, "r", encoding="utf-8") as f:
-                cache_buscas_web = json.load(f)
-        except Exception as e:
-            logger.error(f"❌ Erro ao ler cache_buscas_web: {e}")
+    try:
+        cache_buscas_web = ler_json_seguro(ARQUIVO_CACHE_WEB, {})
+    except ArquivoCorrompidoError as e:
+        logger.warning(f"⚠️ {e} — começando com cache de buscas vazio.")
+        cache_buscas_web = {}
 
     itens_por_ean = {}
     itens_sem_ean = []
-    itens_quarentena = []
-
-    if os.path.exists(ARQUIVO_QUARENTENA):
-        try:
-            with open(ARQUIVO_QUARENTENA, "r", encoding="utf-8") as f:
-                itens_quarentena = json.load(f)
-        except:
-            itens_quarentena = []
 
     def salvar_estado_intermediario():
         try:
-            with open(ARQUIVO_PENDENTES, "w", encoding="utf-8") as f:
-                json.dump(pendentes, f, ensure_ascii=False, indent=4)
-            with open(ARQUIVO_BIBLIOTECA, "w", encoding="utf-8") as f:
-                json.dump(biblioteca, f, ensure_ascii=False, indent=4)
+            salvar_json_atomico(ARQUIVO_PENDENTES, pendentes)
+            salvar_json_atomico(ARQUIVO_BIBLIOTECA, biblioteca)
             
             q_dict = {}
             for q in itens_quarentena:
                 k = f"{q.get('EAN', '')}_{q.get('Produto', '')}_{q.get('Mercado', '')}"
                 q_dict[k] = q
-            with open(ARQUIVO_QUARENTENA, "w", encoding="utf-8") as f:
-                json.dump(list(q_dict.values()), f, ensure_ascii=False, indent=4)
-            with open(ARQUIVO_CACHE_WEB, "w", encoding="utf-8") as f:
-                json.dump(cache_buscas_web, f, ensure_ascii=False, indent=4)
+            salvar_json_atomico(ARQUIVO_QUARENTENA, list(q_dict.values()))
+            salvar_json_atomico(ARQUIVO_CACHE_WEB, cache_buscas_web)
         except Exception as e:
             logger.error(f"   ❌ Erro ao salvar estado intermediário: {e}")
 
@@ -330,6 +335,8 @@ async def main():
                 if "DESCASCADO" in nome_item or "DESCASCADA" in nome_item: sufixos.append("DESCASCADA")
                 if "CUBOS" in nome_item: sufixos.append("CUBOS")
                 if re.search(r'\b(DISPLAY|FARDO|FD|PACK)\b|\b(CX|PCT)\s+(C/|COM)\s*\d+', nome_item): sufixos.append("CX")
+                if "LATA" in nome_item: sufixos.append("LATA")
+                if "GARRAFA" in nome_item or "LONG NECK" in nome_item: sufixos.append("GARRAFA")
                 
                 suf_str = "_".join(sufixos) if sufixos else "VARIANTE"
                 novo_ean = f"{ean}_{suf_str}"
@@ -416,49 +423,57 @@ async def main():
                     logger.info(f"   ⚙️ [{progresso_ean['atual']}/{total_sem_ean}] EAN Interno gerado (Após Espera): '{nome}' -> {item['EAN']}")
                     return item
 
-            async with sem_recuperacao:
-                progresso_ean["atual"] += 1
-                atual = progresso_ean["atual"]
-                prefixo_progresso = f"[{atual}/{total_sem_ean}]"
+            # O finally garante que os "seguidores" nunca fiquem esperando para sempre,
+            # mesmo se a busca do líder der exceção.
+            try:
+                async with sem_recuperacao:
+                    progresso_ean["atual"] += 1
+                    atual = progresso_ean["atual"]
+                    prefixo_progresso = f"[{atual}/{total_sem_ean}]"
                 
-                import random
-                await asyncio.sleep(random.uniform(0.5, 1.5))
+                    import random
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
                 
-                # --- Lógica Inteligente para Pular Busca Web ---
-                categoria = str(item.get("Categoria", "")).upper()
-                categorias_frescos = ["HORTIFR", "PADARIA", "PEIXARIA", "AÇOUGUE", "ACOUGUE", "FRIOS"]
+                    # --- Lógica Inteligente para Pular Busca Web ---
+                    categoria = str(item.get("Categoria", "")).upper()
+                    categorias_frescos = ["HORTIFR", "PADARIA", "PEIXARIA", "AÇOUGUE", "ACOUGUE", "FRIOS"]
                 
-                # Se tem marca reconhecida (Não é "Própria", "Outros", etc), tenta salvar o EAN na web!
-                marcas_genericas = ["OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "NONE", "GERAL", "", "FEIRA", "ACOUGUE", "PADARIA"]
-                tem_marca_famosa = marca_bruta.upper() not in marcas_genericas
+                    # Se tem marca reconhecida (Não é "Própria", "Outros", etc), tenta salvar o EAN na web!
+                    marcas_genericas = ["OUTROS", "PRÓPRIA", "PROPRIA", "N/A", "NONE", "GERAL", "", "FEIRA", "ACOUGUE", "PADARIA"]
+                    tem_marca_famosa = marca_bruta.upper() not in marcas_genericas
                 
-                # Só pula a web se for fresco E não tiver marca famosa
-                is_fresco_sem_marca = any(cf in categoria for cf in categorias_frescos) and not tem_marca_famosa
+                    # Só pula a web se for fresco E não tiver marca famosa
+                    is_fresco_sem_marca = any(cf in categoria for cf in categorias_frescos) and not tem_marca_famosa
                 
-                if is_fresco_sem_marca:
-                    resultado = None
-                    logger.info(f"   ⏭️ {prefixo_progresso} Busca web pulada para item fresco genérico ({categoria}).")
-                else:
-                    resultado = await tentar_recuperar_ean(nome, marca_busca)
+                    if is_fresco_sem_marca:
+                        resultado = None
+                        logger.info(f"   ⏭️ {prefixo_progresso} Busca web pulada para item fresco genérico ({categoria}).")
+                    else:
+                        try:
+                            resultado = await tentar_recuperar_ean(nome, marca_busca)
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ {prefixo_progresso} Falha na busca web de '{nome}': {e}")
+                            resultado = None
 
-                if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
-                    cache_buscas_web[chave_busca] = resultado
-                    item["EAN"] = str(resultado["ean"])
-                    item["Fonte_EAN"] = resultado.get("fonte", "Web")
-                    if resultado.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
-                        item["Link_Imagem"] = resultado.get("Link_Imagem", "")
-                    logger.info(f"   🌐 {prefixo_progresso} EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
-                else:
-                    id_interno = gerar_id_interno(nome, marca_bruta)
-                    item["EAN"] = id_interno
-                    item["Fonte_EAN"] = "Gerado_Internamente"
-                    logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
-                    if not is_fresco:
-                        logger.warning("   ⏳ Esfriando IP por 3.0s após falha na busca web...")
-                        await asyncio.sleep(3.0)
+                    if resultado and resultado.get("ean") and str(resultado["ean"]).isdigit():
+                        cache_buscas_web[chave_busca] = resultado
+                        item["EAN"] = str(resultado["ean"])
+                        item["Fonte_EAN"] = resultado.get("fonte", "Web")
+                        if resultado.get("Link_Imagem") and (not item.get("Link_Imagem") or item.get("Link_Imagem") == "SEM IMAGEM"):
+                            item["Link_Imagem"] = resultado.get("Link_Imagem", "")
+                        logger.info(f"   🌐 {prefixo_progresso} EAN Web ({resultado.get('fonte')}): '{nome}' -> {item['EAN']}")
+                    else:
+                        id_interno = gerar_id_interno(nome, marca_bruta)
+                        item["EAN"] = id_interno
+                        item["Fonte_EAN"] = "Gerado_Internamente"
+                        logger.info(f"   ⚙️ {prefixo_progresso} EAN Interno gerado: '{nome}' -> {item['EAN']}")
+                        if not is_fresco_sem_marca:
+                            logger.warning("   ⏳ Esfriando IP por 3.0s após falha na busca web...")
+                            await asyncio.sleep(3.0)
                 
+            finally:
                 buscas_em_andamento[chave_busca].set()
-                return item
+            return item
 
         TAMANHO_LOTE_REC = 200
         lotes_recuperacao = [itens_sem_ean[i:i + TAMANHO_LOTE_REC] for i in range(0, len(itens_sem_ean), TAMANHO_LOTE_REC)]
@@ -519,7 +534,7 @@ async def main():
             salvar_estado_intermediario()
 
     # --- TRIAGEM FINAL DE ARQUIVOS (FIM DO LOOP INFINITO) ---
-    itens_prontos = []
+    itens_prontos = list(itens_prontos_anteriores)
     itens_restantes = []
     
     q_keys = {f"{q.get('EAN', '')}_{q.get('Produto', '')}_{q.get('Mercado', '')}" for q in itens_quarentena}
@@ -548,14 +563,10 @@ async def main():
             itens_restantes.append(item)
 
     # Escrita final e persistência em disco
-    with open(ARQUIVO_BIBLIOTECA, "w", encoding="utf-8") as f:
-        json.dump(biblioteca, f, ensure_ascii=False, indent=4)
-    with open(ARQUIVO_PROCESSADOS, "w", encoding="utf-8") as f:
-        json.dump(itens_prontos, f, ensure_ascii=False, indent=4)
-    with open(ARQUIVO_QUARENTENA, "w", encoding="utf-8") as f:
-        json.dump(itens_quarentena, f, ensure_ascii=False, indent=4)
-    with open(ARQUIVO_PENDENTES, "w", encoding="utf-8") as f:
-        json.dump(itens_restantes, f, ensure_ascii=False, indent=4)
+    salvar_json_atomico(ARQUIVO_BIBLIOTECA, biblioteca)
+    salvar_json_atomico(ARQUIVO_PROCESSADOS, itens_prontos)
+    salvar_json_atomico(ARQUIVO_QUARENTENA, itens_quarentena)
+    salvar_json_atomico(ARQUIVO_PENDENTES, itens_restantes)
 
     logger.info(f"🧹 Concluído! {len(itens_prontos)} prontos, {len(itens_quarentena)} na quarentena e {len(itens_restantes)} pendentes.")
 

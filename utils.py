@@ -24,27 +24,93 @@ def setup_logging(log_file=os.path.join('data', 'app.log'), level=logging.INFO):
 logger = setup_logging()
 
 # --- 2. Leitura e escrita segura de arquivos JSON ---
-def read_json_file(filepath, default_value=None):
+class ArquivoCorrompidoError(Exception):
+    """O arquivo existe mas não é um JSON válido. Nunca deve ser tratado como 'vazio'."""
+
+def ler_json_seguro(filepath, default_value=None):
+    """
+    Retorna default_value apenas se o arquivo NÃO existir.
+    Se o arquivo existir e estiver corrompido, levanta ArquivoCorrompidoError
+    (para o pipeline abortar em vez de sobrescrever dados bons com uma lista vazia).
+    """
     if default_value is None: default_value = {}
     if not os.path.exists(filepath): return default_value
     try:
         with open(filepath, 'r', encoding='utf-8') as f: return json.load(f)
-    except: return default_value
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ArquivoCorrompidoError(f"Arquivo JSON corrompido: {filepath} ({e})") from e
+
+def read_json_file(filepath, default_value=None):
+    if default_value is None: default_value = {}
+    try:
+        return ler_json_seguro(filepath, default_value)
+    except (ArquivoCorrompidoError, OSError) as e:
+        logging.getLogger(__name__).error(f"❌ Falha ao ler {filepath}: {e}")
+        return default_value
+
+def salvar_json_atomico(filepath, data, indent=4):
+    """
+    Grava em um arquivo temporário e só depois substitui o original (os.replace é atômico).
+    Se o processo cair no meio da gravação, o arquivo original continua intacto.
+    """
+    pasta = os.path.dirname(filepath)
+    if pasta: os.makedirs(pasta, exist_ok=True)
+    tmp_path = f"{filepath}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=indent, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, filepath)
 
 def write_json_file(filepath, data):
     try:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+        salvar_json_atomico(filepath, data)
         return True
-    except: return False
+    except Exception as e:
+        logging.getLogger(__name__).error(f"❌ Falha ao gravar {filepath}: {e}")
+        return False
 
 # --- 3. Limpeza de Preço ---
+def parse_preco(valor):
+    """
+    Converte qualquer representação de preço para float.
+    Aceita: 12.5, "R$ 12,50", "1.234,56", "1234,56", "12.99", "1,234.56".
+    Retorna 0.0 se não conseguir interpretar.
+    """
+    if valor is None or isinstance(valor, bool): return 0.0
+    if isinstance(valor, (int, float)): return float(valor)
+    s = str(valor).upper().replace('R$', '').replace('\xa0', '').replace(' ', '').strip()
+    if s in ("", "N/A", "NONE", "NAN"): return 0.0
+    if ',' in s and '.' in s:
+        # O separador que aparece por último é o decimal
+        if s.rfind(',') > s.rfind('.'):
+            s = s.replace('.', '').replace(',', '.')   # 1.234,56
+        else:
+            s = s.replace(',', '')                     # 1,234.56
+    elif ',' in s:
+        s = s.replace(',', '.')                        # 12,50
+    elif s.count('.') > 1:
+        s = s.replace('.', '')                         # 1.234.567
+    try: return float(s)
+    except ValueError: return 0.0
+
 def clean_price_string(price_str):
-    if not isinstance(price_str, (str, int, float)): return 0.0
-    if isinstance(price_str, (int, float)): return float(price_str)
-    cleaned = str(price_str).upper().replace('R$', '').replace(',', '.').strip()
-    try: return float(cleaned)
-    except: return 0.0
+    return parse_preco(price_str)
+
+def normalizar_data_iso(valor):
+    """
+    Converte 'dd/mm/AAAA HH:MM:SS' (formato dos scrapers) para 'AAAA-MM-DD HH:MM:SS',
+    que ordena corretamente como texto no banco. Valores já em ISO passam direto.
+    """
+    from datetime import datetime
+    if not valor: return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    s = str(valor).strip()
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    return s
 
 # --- 4. CATEGORIAS MASTER (necessárias apenas se a IA classificar algo novo) ---
 CATEGORIAS_MASTER = [

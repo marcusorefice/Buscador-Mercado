@@ -10,7 +10,7 @@ import scrapers.oba_full as oba_full
 import scrapers.paodeacucar_full as paodeacucar_full
 import scrapers.svicente_full as svicente_full
 import scrapers.assai as assai
-from utils import setup_logging, write_json_file, read_json_file, exibir_resumo_coleta
+from utils import setup_logging, read_json_file, exibir_resumo_coleta, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
 
 logger = setup_logging()
 DATA_DIR = "data"
@@ -59,7 +59,19 @@ async def processar_mercado_concorrente(modulo, nome_mercado_label, mercados_con
                 p["Scraper_Origem"] = "FULL"
                 
             async with lock:
-                # 3. Atualiza o checkpoint leve lendo o mais recente do disco
+                # 3. Joga os dados desse mercado na fila do passo 4 (IA / DB) ANTES de marcar como concluído.
+                #    Se a fila estiver corrompida, os produtos vão para um arquivo de resgate em vez de sumir.
+                try:
+                    fila_ia = ler_json_seguro(ARQUIVO_FILA_IA, [])
+                    fila_ia.extend(produtos_brutos)
+                    salvar_json_atomico(ARQUIVO_FILA_IA, fila_ia)
+                except (ArquivoCorrompidoError, OSError) as e:
+                    arquivo_resgate = os.path.join(DATA_DIR, f"resgate_{mercado_base.replace(' ', '_')}.json")
+                    salvar_json_atomico(arquivo_resgate, produtos_brutos)
+                    logger.error(f"❌ Não foi possível atualizar a fila ({e}). {len(produtos_brutos)} itens salvos em '{arquivo_resgate}'. O mercado NÃO foi marcado como concluído.")
+                    return
+
+                # 4. Atualiza o checkpoint leve lendo o mais recente do disco
                 checkpoint = read_json_file(ARQUIVO_CHECKPOINT, default_value={"mercados_concluidos": [], "totais": {}})
                 mc_atualizado = set(checkpoint.get("mercados_concluidos", []))
                 totais_atualizado = checkpoint.get("totais", {})
@@ -69,16 +81,11 @@ async def processar_mercado_concorrente(modulo, nome_mercado_label, mercados_con
                 
                 checkpoint["mercados_concluidos"] = list(mc_atualizado)
                 checkpoint["totais"] = totais_atualizado
-                write_json_file(ARQUIVO_CHECKPOINT, checkpoint)
+                salvar_json_atomico(ARQUIVO_CHECKPOINT, checkpoint)
                 
                 # Atualiza as variáveis em memória para o log final
                 resumo_geral[nome_mercado_label] = {"qtd": len(produtos_brutos), "tempo": duration}
                 mercados_concluidos.add(mercado_base)
-                
-                # 4. Joga os dados desse mercado direto na fila do passo 4 (IA / DB)!
-                fila_ia = read_json_file(ARQUIVO_FILA_IA, default_value=[])
-                fila_ia.extend(produtos_brutos)
-                write_json_file(ARQUIVO_FILA_IA, fila_ia)
                 
             logger.info(f"💾 Progresso salvo! [{idx_atual}/{total_m}] {len(produtos_brutos)} itens do {mercado_base} enviados para o 'pendentes_ia.json'. Tempo: {duration:.2f}s")
 
@@ -99,11 +106,11 @@ async def main():
     scrapers_full = [
         (atacadao_full, "Atacadão (Full)"),
         (carrefour_full, "Carrefour (Full)"),
-        (boa_full, "Boa Supermercadose (Full)"),
+        (boa_full, "Boa Supermercados (Full)"),
         (covabra_full, "Covabra (Full)"),
         (dom_olivio_full, "Dom Olívio (Full)"),
         (oba_full, "Oba Hortifruti (Full)"),
-        (paodeacucar_full, "Pão de Açúcar (Full)"),
+        # (paodeacucar_full, "Pão de Açúcar (Full)"),
         (svicente_full, "São Vicente (Full)")
     ]
 
@@ -119,6 +126,17 @@ async def main():
     ]
     
     await asyncio.gather(*tarefas)
+
+    # Se todos os mercados terminaram, a rodada está completa: apaga o checkpoint para
+    # que a próxima execução colete tudo de novo (antes ele pulava todos para sempre).
+    nomes_base = {label.replace(" (Full)", "").strip() for _, label in scrapers_full}
+    if nomes_base <= mercados_concluidos:
+        if os.path.exists(ARQUIVO_CHECKPOINT):
+            os.remove(ARQUIVO_CHECKPOINT)
+        logger.info("🏁 Todos os mercados coletados. Checkpoint apagado para a próxima rodada.")
+    else:
+        faltando = ", ".join(sorted(nomes_base - mercados_concluidos))
+        logger.warning(f"⚠️ Mercados sem coleta nesta rodada: {faltando}. Rode de novo para retomar só eles.")
 
     logger.info("\n" + "="*50)
     logger.info("📦 Processo de extração finalizado.")

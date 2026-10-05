@@ -20,7 +20,7 @@ import scrapers.fort as fort
 import scrapers.roldao as roldao
 import scrapers.tauste as tauste
 
-from utils import read_json_file, write_json_file, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca, enriquecer_ean_produtos_async, exibir_resumo_coleta
+from utils import ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, setup_logging, validar_e_limpar_produtos, criar_entrada_biblioteca, enriquecer_ean_produtos_async, exibir_resumo_coleta
 from classificador_ia import classificar_taxonomia_com_ia_async, carregar_biblioteca, salvar_biblioteca, gerar_id_unico, resolver_conflitos_ia_async
 
 logger = setup_logging()
@@ -177,7 +177,16 @@ async def main():
 
     if itens_corrigidos:
         arquivo_pendentes = os.path.join(DATA_DIR, "pendentes_ia.json")
-        write_json_file(arquivo_pendentes, itens_corrigidos)
+        # Acrescenta à fila em vez de sobrescrever: ela pode ter itens do main_full.py
+        # ou sobras do passo 4 que ainda não foram processados.
+        try:
+            fila = ler_json_seguro(arquivo_pendentes, [])
+        except ArquivoCorrompidoError as e:
+            arquivo_pendentes = os.path.join(DATA_DIR, f"resgate_diario_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            logger.error(f"❌ {e}. Os itens desta coleta serão salvos em '{arquivo_pendentes}'.")
+            fila = []
+        fila.extend(itens_corrigidos)
+        salvar_json_atomico(arquivo_pendentes, fila)
         
         logger.info("\n" + "="*50)
         logger.info(f"📦 Sucesso! {len(itens_corrigidos)} itens totais raspados salvos em 'pendentes_ia.json'.")
