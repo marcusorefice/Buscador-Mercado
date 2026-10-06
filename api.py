@@ -1,7 +1,9 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import base64
+import re
+import unicodedata
 import threading
 import uvicorn
 import httpx
@@ -30,6 +32,11 @@ FATOR_OUTLIER = 2.5
 # Peso do "de/por" de um mercado só no ranking da tela inicial. O foco do app é comparar mercados, e o
 # preço "de" informado pelo site às vezes é inflado; 0.5 = metade do peso de uma economia entre mercados.
 PESO_DE_POR = 0.5
+# Ranking "Em alta": janela de popularidade e mínimo de mercados para aparecer na tela inicial
+DIAS_POPULARIDADE = 30
+MIN_MERCADOS_EM_ALTA = 3
+# Categorias que não são de compra do dia a dia: no "Em alta" pesam menos (até terem buscas de verdade)
+RE_CATEGORIAS_FORA_DA_LISTA = "BAZAR|UTILIDADE|CASA|DECORA|ELETR|PAPELARIA|BRINQUED|AUTOMOTIV|FERRAMENT|FLORICULT|INFORMATIC"
 
 _pool: Optional[ThreadedConnectionPool] = None
 _pool_lock = threading.Lock()
@@ -41,6 +48,45 @@ def _get_pool() -> ThreadedConnectionPool:
             if _pool is None:
                 _pool = ThreadedConnectionPool(1, 10, DB_URL, cursor_factory=RealDictCursor)
     return _pool
+
+# --- Interesse dos usuários (buscas e produtos abertos), usado no ranking "Em alta" ---
+_tabelas_interesse_ok = False
+
+def _garantir_tabelas_interesse(cursor):
+    global _tabelas_interesse_ok
+    if _tabelas_interesse_ok:
+        return
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS buscas_dia (termo TEXT, dia DATE, vezes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (termo, dia));
+        CREATE TABLE IF NOT EXISTS visualizacoes_dia (ean TEXT, dia DATE, vezes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (ean, dia));
+    """)
+    _tabelas_interesse_ok = True
+
+def _normalizar_termo(termo):
+    termo = unicodedata.normalize("NFKD", str(termo)).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"\s+", " ", termo).strip()
+
+def _registrar_busca(termo):
+    """Roda em segundo plano: contagem nunca pode atrasar nem derrubar a resposta."""
+    termo = _normalizar_termo(termo)
+    if len(termo) < 3 or termo.replace(" ", "").isdigit():
+        return
+    try:
+        with get_db_cursor() as cursor:
+            _garantir_tabelas_interesse(cursor)
+            cursor.execute("""INSERT INTO buscas_dia (termo, dia, vezes) VALUES (%s, CURRENT_DATE, 1)
+                              ON CONFLICT (termo, dia) DO UPDATE SET vezes = buscas_dia.vezes + 1""", (termo[:80],))
+    except Exception as e:
+        print(f"Erro ao registrar busca: {e}")
+
+def _registrar_visualizacao(ean):
+    try:
+        with get_db_cursor() as cursor:
+            _garantir_tabelas_interesse(cursor)
+            cursor.execute("""INSERT INTO visualizacoes_dia (ean, dia, vezes) VALUES (%s, CURRENT_DATE, 1)
+                              ON CONFLICT (ean, dia) DO UPDATE SET vezes = visualizacoes_dia.vezes + 1""", (ean[:80],))
+    except Exception as e:
+        print(f"Erro ao registrar visualização: {e}")
 
 @contextmanager
 def get_db_cursor():
@@ -220,12 +266,15 @@ def _montar_produtos(rows):
 
 @app.get("/produtos", response_model=List[ProdutoAgrupadoResponse])
 def get_produtos(
+    background_tasks: BackgroundTasks,
     q: str = Query(None, description="Busca por nome do produto ou marca"),
-    sort_by: str = Query("discount", description="Ordenação: discount ou price"),
+    sort_by: str = Query("discount", description="Ordenação: relevance (em alta), discount ou price"),
     market: str = Query(None, description="Filtrar por mercado específico")
 ):
     params = []
     where_clauses = []
+    if q and not (q.isdigit() and len(q) >= 8):
+        background_tasks.add_task(_registrar_busca, q)
 
     if q:
         # Se a busca for um número longo, trata como busca exata por EAN (usado pelo scanner e pelo modal de detalhes)
@@ -250,8 +299,28 @@ def get_produtos(
     # "discount" = quanto a oferta mais barata está abaixo da MEDIANA das outras do mesmo produto (já sem as
     # fora da curva). Com só 2 ofertas e diferença acima de 2x não dá para saber qual está errada, então o
     # produto não é promovido. Num mercado só, usa o "de/por" da oferta com peso menor (PESO_DE_POR).
+    economia_sql = f'''
+            CASE
+                WHEN qtd_ofertas = 2 AND maior_preco > menor_preco * 2 THEN 0
+                WHEN qtd_ofertas > 1 AND mediana_outros > 0 THEN GREATEST(mediana_outros - menor_preco, 0) / mediana_outros
+                WHEN maior_varejo > 0 AND menor_preco IS NOT NULL THEN {PESO_DE_POR} * GREATEST(maior_varejo - menor_preco, 0) / maior_varejo
+                ELSE 0
+            END'''
+    filtro_relevancia = ""
     if sort_by == "price":
-        order_sql = "menor_preco ASC NULLS LAST, ean"
+        order_sql = "menor_preco ASC NULLS LAST, a.ean"
+    elif sort_by == "relevance":
+        # "Em alta": produto que muita gente procura E é vendido em vários mercados, com peso para a economia.
+        #  - quantos mercados vendem: Coca, leite e arroz estão em 6-8 mercados; itens obscuros em 1-2
+        #  - quantas vezes foi aberto no app nos últimos 30 dias (cresce com o uso)
+        #  - economia: o produto aparece mesmo com pouca economia, mas quanto maior, mais alto
+        order_sql = f'''
+            (0.15 + {economia_sql}) * LN(1 + qtd_ofertas) * (1 + LN(1 + COALESCE(pop.vezes, 0)))
+                * CASE WHEN UPPER(COALESCE(prod.categoria, '')) ~ '{RE_CATEGORIAS_FORA_DA_LISTA}' THEN 0.3 ELSE 1 END DESC,
+            menor_preco ASC NULLS LAST, a.ean
+        '''
+        if not q:
+            filtro_relevancia = f"WHERE qtd_ofertas >= {MIN_MERCADOS_EM_ALTA}"
     else:
         order_sql = f'''
             CASE
@@ -259,7 +328,7 @@ def get_produtos(
                 WHEN qtd_ofertas > 1 AND mediana_outros > 0 THEN GREATEST(mediana_outros - menor_preco, 0) / mediana_outros
                 WHEN maior_varejo > 0 AND menor_preco IS NOT NULL THEN {PESO_DE_POR} * GREATEST(maior_varejo - menor_preco, 0) / maior_varejo
                 ELSE 0
-            END DESC, menor_preco ASC NULLS LAST, ean
+            END DESC, menor_preco ASC NULLS LAST, a.ean
         '''
 
     # 1º calcula o ranking e corta em 200 DENTRO do banco; 2º busca as ofertas só desses produtos.
@@ -280,13 +349,21 @@ def get_produtos(
                    COUNT(*) AS qtd_ofertas
             FROM ordenadas
             GROUP BY ean
+        ),
+        popularidade AS (
+            SELECT ean, SUM(vezes) AS vezes FROM visualizacoes_dia
+            WHERE dia >= CURRENT_DATE - {DIAS_POPULARIDADE} GROUP BY ean
         )
-        SELECT ean FROM agregadas
+        SELECT a.ean FROM agregadas a
+        LEFT JOIN popularidade pop ON pop.ean = a.ean
+        LEFT JOIN produtos prod ON prod.ean = a.ean
+        {filtro_relevancia}
         ORDER BY {order_sql}
         LIMIT {LIMITE_PRODUTOS}
     '''
 
     with get_db_cursor() as cursor:
+        _garantir_tabelas_interesse(cursor)
         cursor.execute(query_ranking, params + ([market] if filtro_mercado else []))
         eans_ordenados = [r["ean"] for r in cursor.fetchall()]
         if not eans_ordenados:
@@ -320,8 +397,26 @@ def get_produtos_lote(eans: str = Query(..., description="EANs separados por ví
         rows = cursor.fetchall()
     return _montar_produtos(rows)
 
+@app.get("/buscas-populares")
+def buscas_populares(limite: int = Query(8, ge=1, le=20)):
+    """Termos mais buscados por todos os usuários nos últimos dias (chips da tela inicial)."""
+    try:
+        with get_db_cursor() as cursor:
+            _garantir_tabelas_interesse(cursor)
+            cursor.execute(f"""
+                SELECT termo FROM buscas_dia WHERE dia >= CURRENT_DATE - {DIAS_POPULARIDADE}
+                GROUP BY termo HAVING SUM(vezes) >= 2
+                ORDER BY SUM(vezes) DESC, termo LIMIT %s
+            """, (limite,))
+            return {"termos": [r["termo"] for r in cursor.fetchall()]}
+    except Exception as e:
+        print(f"Erro em buscas populares: {e}")
+        return {"termos": []}
+
 @app.get("/produtos/{ean}/historico")
-def obter_historico(ean: str):
+def obter_historico(ean: str, background_tasks: BackgroundTasks):
+    # O app pede o histórico quando a pessoa abre um produto: conta como visualização para o "Em alta"
+    background_tasks.add_task(_registrar_visualizacao, ean)
     # data_hora é gravado em ISO (AAAA-MM-DD HH:MM:SS), então ordenar o texto ordena por data
     with get_db_cursor() as cursor:
         cursor.execute("""

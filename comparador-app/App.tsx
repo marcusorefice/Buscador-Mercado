@@ -48,6 +48,23 @@ const MARKETS = [
   'Tenda Atacado'
 ];
 
+type Ordenacao = 'relevance' | 'discount' | 'price';
+
+// O botão de ordenação alterna entre as três, nessa ordem
+const ORDENACOES: Record<Ordenacao, { titulo: string; icone: string; proxima: Ordenacao }> = {
+  relevance: { titulo: 'Em Alta', icone: 'fire', proxima: 'discount' },
+  discount: { titulo: 'Maiores Descontos', icone: 'percent', proxima: 'price' },
+  price: { titulo: 'Menores Preços', icone: 'currency-usd', proxima: 'relevance' },
+};
+
+const TAGS_PADRAO = ['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó'];
+
+// Chips da tela inicial: o que a pessoa mais busca, depois o que todos mais buscam, depois o padrão
+const montarTags = (historico: Record<string, number>, populares: string[]): string[] => {
+  const pessoais = Object.entries(historico).sort((a, b) => b[1] - a[1]).map(e => String(e[0]));
+  return Array.from(new Set([...pessoais.slice(0, 4), ...populares, ...pessoais, ...TAGS_PADRAO])).slice(0, 8);
+};
+
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const searchQueryRef = useRef('');
@@ -80,7 +97,9 @@ export default function App() {
   const cartItemsCount = useShoppingListStore(state => state.list.length);
 
   // Filtros Globais
-  const [sortBy, setSortBy] = useState<'discount' | 'price'>('discount');
+  const [sortBy, setSortBy] = useState<Ordenacao>('relevance');
+  // Termos mais buscados por todos os usuários (vêm da API) para os chips da tela inicial
+  const buscasPopularesRef = useRef<string[]>([]);
   const [selectedMarket, setSelectedMarket] = useState('Todos os Mercados');
   const [isMarketModalVisible, setMarketModalVisible] = useState(false);
 
@@ -136,7 +155,7 @@ export default function App() {
       setProducts(response.data);
 
       // Otimização Extrema (Offline-first): Salva em cache se for a busca inicial padrão
-      if (!currentQuery && selectedMarket === 'Todos os Mercados' && sortBy === 'discount') {
+      if (!currentQuery && selectedMarket === 'Todos os Mercados' && sortBy === 'relevance') {
         AsyncStorage.setItem('@cached_home_products', JSON.stringify(response.data)).catch(() => {});
       }
     } catch (err) {
@@ -161,13 +180,16 @@ export default function App() {
         const history = await AsyncStorage.getItem('@search_history');
         if (history) {
           const parsed = JSON.parse(history);
-          const sorted = Object.entries(parsed).sort((a: any, b: any) => b[1] - a[1]).map(e => String(e[0]));
-          const defaultTags = ['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó'];
-          const finalTags = Array.from(new Set([...sorted, ...defaultTags])).slice(0, 8);
-          if (finalTags.length > 0) {
-            setDynamicTags(finalTags);
-          }
+          setDynamicTags(montarTags(parsed, buscasPopularesRef.current));
         }
+
+        // Mais buscados por todos os usuários
+        const resposta = await axios.get<{ termos: string[] }>(`${API_URL}/buscas-populares`, {
+          headers: { 'ngrok-skip-browser-warning': 'true' }, timeout: 5000,
+        });
+        buscasPopularesRef.current = resposta.data.termos || [];
+        const historico = await AsyncStorage.getItem('@search_history');
+        setDynamicTags(montarTags(historico ? JSON.parse(historico) : {}, buscasPopularesRef.current));
       } catch (e) {}
     };
     loadCache();
@@ -224,9 +246,7 @@ export default function App() {
       parsed[q] = (parsed[q] || 0) + 1;
       await AsyncStorage.setItem('@search_history', JSON.stringify(parsed));
       
-      const sorted = Object.entries(parsed).sort((a: any, b: any) => b[1] - a[1]).map(e => String(e[0]));
-      const defaultTags = ['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó'];
-      setDynamicTags(Array.from(new Set([...sorted, ...defaultTags])).slice(0, 8));
+      setDynamicTags(montarTags(parsed, buscasPopularesRef.current));
     } catch (e) {}
   };
 
@@ -406,12 +426,12 @@ export default function App() {
             </ScrollView>
 
             <View style={styles.filtersRow}>
-              <Chip 
-                icon={sortBy === 'discount' ? "percent" : "currency-usd"} 
-                onPress={() => setSortBy(prev => prev === 'discount' ? 'price' : 'discount')}
+              <Chip
+                icon={ORDENACOES[sortBy].icone}
+                onPress={() => setSortBy(prev => ORDENACOES[prev].proxima)}
                 style={styles.filterChip}
               >
-                {sortBy === 'discount' ? 'Maiores Descontos' : 'Menores Preços'}
+                {ORDENACOES[sortBy].titulo}
               </Chip>
               <Chip 
                 icon="store" 
