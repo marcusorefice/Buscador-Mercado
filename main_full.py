@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 from datetime import datetime
 import scrapers.atacadao_full as atacadao_full
@@ -11,6 +12,7 @@ import scrapers.paodeacucar_full as paodeacucar_full
 import scrapers.svicente_full as svicente_full
 import scrapers.assai as assai
 from utils import setup_logging, read_json_file, exibir_resumo_coleta, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
+from casamento_produtos import sem_acentos
 
 logger = setup_logging()
 DATA_DIR = "data"
@@ -113,6 +115,14 @@ async def main():
         (paodeacucar_full, "Pão de Açúcar (Full)"),
         (svicente_full, "São Vicente (Full)")
     ]
+
+    # "python main_full.py oba carrefour": coleta só esses mercados, mesmo que já estejam no checkpoint
+    escolhidos = [sem_acentos(a).lower() for a in sys.argv[1:]]
+    if escolhidos:
+        scrapers_full = [(m, nome) for m, nome in scrapers_full if any(e in sem_acentos(nome).lower() for e in escolhidos)]
+        for _, nome in scrapers_full:
+            mercados_concluidos.discard(nome.replace(" (Full)", "").strip())
+        logger.info(f"🎯 Coletando só: {', '.join(nome for _, nome in scrapers_full) or '(nenhum mercado com esse nome)'}")
 
     lock = asyncio.Lock()
     # Todos os mercados ao mesmo tempo: cada um é um site diferente, então não disputam limite de acesso.

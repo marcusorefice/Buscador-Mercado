@@ -107,9 +107,19 @@ def debug_connection():
         print(f"Erro no /debug: {e}")
         return {"status": "ERRO", "url_configurada": bool(DB_URL)}
 
-# Unidades do produto na oferta (pack vendido com o EAN da unidade, ex: Red Bull "4 LATAS" -> 4)
+# Por quanto dividir o preço da oferta para chegar ao preço comparável:
+#  - pack vendido com o EAN da unidade (Red Bull "4 LATAS") -> 4 unidades
+#  - item vendido por peso: o preço gravado é o da peça/embalagem, Qtd_Valor é o peso dela -> preço por kg
+#    (ex: queijo no Oba: peça de 0,2 kg por R$ 29,98 -> R$ 149,90/kg)
 SQL_UNIDADES_PACK = '''
-    CASE WHEN o.medida = 'UN' AND o.qtd_valor ~ '^[0-9]+$' THEN GREATEST(CAST(o.qtd_valor AS INTEGER), 1) ELSE 1 END
+    CASE
+        WHEN o.medida = 'UN' AND o.qtd_valor ~ '^[0-9]+$' THEN GREATEST(CAST(o.qtd_valor AS INTEGER), 1)
+        WHEN UPPER(o.unidade) = 'KG' AND o.medida = 'KG' AND o.qtd_valor ~ '^[0-9]+([.][0-9]+)?$'
+            THEN COALESCE(NULLIF(CAST(o.qtd_valor AS NUMERIC), 0), 1)
+        WHEN UPPER(o.unidade) = 'KG' AND o.medida = 'G' AND o.qtd_valor ~ '^[0-9]+([.][0-9]+)?$'
+            THEN COALESCE(NULLIF(CAST(o.qtd_valor AS NUMERIC), 0), 1000) / 1000
+        ELSE 1
+    END
 '''
 
 # Preço efetivo POR UNIDADE: o menor valor > 0 entre varejo e atacado, dividido pelas unidades do pack

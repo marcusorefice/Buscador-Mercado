@@ -315,3 +315,15 @@ class CacheEanPdp:
 
     def salvar(self):
         write_json_file(self.caminho, self.dados)
+
+
+# --- Itens vendidos por peso nas lojas VTEX (catálogo legado) ---
+def preco_da_peca_vtex(p_venda, p_varejo, unit_multiplier, measurement_unit):
+    """
+    Em item vendido por kg, o Price/ListPrice da VTEX é POR KG e o unitMultiplier é o peso da peça em kg
+    (ex: queijo Gouda no Oba: 149,90/kg, peça de 0,2 kg = 29,98). O pipeline grava "preço de Qtd_Valor kg",
+    então devolve o preço da peça e o peso dela. Para os outros itens não muda nada (peso = None).
+    """
+    if str(measurement_unit).lower() == "kg" and unit_multiplier and unit_multiplier > 0:
+        return p_venda * unit_multiplier, p_varejo * unit_multiplier, round(float(unit_multiplier), 3)
+    return p_venda, p_varejo, None

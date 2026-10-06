@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
 import asyncio
-from utils import setup_logging, read_json_file
+from utils import setup_logging, read_json_file, preco_da_peca_vtex
 
 logger = setup_logging()
 
@@ -125,13 +125,10 @@ async def motor_extracao_covabra_full():
                                 if p_venda <= 0: continue
 
                                 # --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
+                                # Item vendido por kg: a VTEX manda o preço POR KG e o peso da peça (unitMultiplier).
+                                # Grava o preço da peça + o peso dela (o pipeline usa "preço de Qtd_Valor kg").
                                 unit_multiplier = float(item.get('unitMultiplier') or 1.0)
-                                if unit_multiplier > 0 and unit_multiplier < 1.0:
-                                    if p_varejo > (p_venda * (1 / unit_multiplier) * 0.5): 
-                                        p_varejo = p_varejo * unit_multiplier
-                                    else:
-                                        p_varejo = p_varejo * unit_multiplier
-                                        p_venda = p_venda * unit_multiplier
+                                p_venda, p_varejo, peso_peca_kg = preco_da_peca_vtex(p_venda, p_varejo, unit_multiplier, item.get('measurementUnit', ''))
 
                                 condicao = "1 UN"
                                 marca = str(p.get('brand', 'OUTROS')).upper()
@@ -158,9 +155,9 @@ async def motor_extracao_covabra_full():
                                     "Marca": marca,
                                     "Preço Varejo": round(p_varejo, 2),
                                     "Preço Atacado": round(p_venda, 2),
-                                    "Qtd_Valor": qv,
-                                    "Medida": med,
-                                    "Unidade": unidade_venda, "Condição": condicao,
+                                    "Qtd_Valor": f"{peso_peca_kg:g}" if peso_peca_kg else qv,
+                                    "Medida": "KG" if peso_peca_kg else med,
+                                    "Unidade": "KG" if peso_peca_kg else unidade_venda, "Condição": condicao,
                                     "Data_Hora": agora,
                                     "Link_Imagem": img_url,
                                     "Link_PDP": link_pdp

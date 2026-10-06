@@ -3,7 +3,7 @@ import { View, StyleSheet, Image } from 'react-native';
 import { Card, Text, Title, IconButton } from 'react-native-paper';
 import { Product } from '../types';
 import { useShoppingListStore } from './useShoppingListStore';
-import { getUnidadesPack } from '../precos';
+import { getUnidadesPack, vendidoPorPeso, descreverPeso } from '../precos';
 
 type MarketName = 
   | 'Assaí Atacadista'
@@ -66,12 +66,13 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
   // Extrai a informação de peso/volume da melhor oferta
   let weightInfo = '';
   if (bestOffer && bestOffer.Qtd_Valor && bestOffer.Medida) {
-    // Se o produto é pesável e nós forçamos o preço para KG, forçamos a badge para 1 KG também
-    if (bestOffer.Unidade === 'KG' || (bestOffer.Medida === 'KG' && bestOffer.Qtd_Valor === '1')) {
-      weightInfo = '1 KG';
+    // Vendido por peso: o preço exibido é por kg; se o mercado vende em peças, mostra o tamanho da peça
+    if (vendidoPorPeso(bestOffer) || (bestOffer.Medida === 'KG' && bestOffer.Qtd_Valor === '1')) {
+      const pesoPeca = getUnidadesPack(bestOffer);
+      weightInfo = vendidoPorPeso(bestOffer) && pesoPeca !== 1 ? `Peça ${descreverPeso(pesoPeca)}` : '1 KG';
     } 
     // Pack vendido com o EAN da unidade (ex: Red Bull 4 latas): o preço exibido já é por unidade
-    else if (getUnidadesPack(bestOffer) > 1) {
+    else if (!vendidoPorPeso(bestOffer) && getUnidadesPack(bestOffer) > 1) {
       weightInfo = `Pack c/ ${getUnidadesPack(bestOffer)}`;
     }
     // Caso contrário, só monta a badge se não for um item genérico "1 UN"
@@ -101,21 +102,15 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
   const originalPrice = (product as any).Maior_Preco || maxOfferPrice;
   const currentPrice = product.Menor_Preco || 0;
 
-  // --- LÓGICA DE CONVERSÃO PARA KG (PESÁVEIS) ---
-  let displayOriginalPrice = originalPrice;
-  let displayCurrentPrice = currentPrice;
+  // A API já manda o menor preço por kg (itens por peso) ou por unidade (packs), e maxOfferPrice usa a
+  // mesma conta: aqui só escolhe o sufixo
+  const displayOriginalPrice = originalPrice;
+  const displayCurrentPrice = currentPrice;
   let priceSuffix = ' un';
 
-  if (bestOffer?.Unidade === 'KG') {
-    const qtd = parseFloat(bestOffer.Qtd_Valor || '1');
-    const factor = bestOffer.Medida === 'G' ? (qtd / 1000) : (bestOffer.Medida === 'KG' ? qtd : 1);
-    
-    if (factor > 0) {
-      displayCurrentPrice = currentPrice / factor;
-      displayOriginalPrice = originalPrice / factor;
-    }
+  if (vendidoPorPeso(bestOffer)) {
     priceSuffix = ' / kg';
-  } else if (bestOffer?.Medida === 'KG' && bestOffer?.Qtd_Valor === '1') {
+  } else if(bestOffer?.Medida === 'KG' && bestOffer?.Qtd_Valor === '1') {
     priceSuffix = ' / kg';
   } else if (bestOffer?.Unidade && bestOffer.Unidade !== 'UN') {
     priceSuffix = ` / ${bestOffer.Unidade.toLowerCase()}`;

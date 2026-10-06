@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import ean_e_valido, setup_logging, read_json_file, normalizar_para_cache
+from utils import ean_e_valido, setup_logging, read_json_file, normalizar_para_cache, preco_da_peca_vtex
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -119,13 +119,10 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                     if p_v <= 0 or p_v < p_a: p_v = p_a
 
                     # --- CORREÇÃO DE UNIT MULTIPLIER (HORTIFRUTI VTEX) --- #
+                    # Item vendido por kg: a VTEX manda o preço POR KG e o peso da peça (unitMultiplier).
+                    # Grava o preço da peça + o peso dela (o pipeline usa "preço de Qtd_Valor kg").
                     unit_multiplier = float(sku_p.get('unitMultiplier') or 1.0)
-                    if unit_multiplier > 0 and unit_multiplier < 1.0:
-                        if p_v > (p_a * (1 / unit_multiplier) * 0.5): 
-                            p_v = p_v * unit_multiplier
-                        else:
-                            p_v = p_v * unit_multiplier
-                            p_a = p_a * unit_multiplier
+                    p_a, p_v, peso_peca_kg = preco_da_peca_vtex(p_a, p_v, unit_multiplier, sku_p.get('measurementUnit', ''))
 
                     nome_limpo, qv, med = nome_cru, "1", "UN"
 
@@ -165,7 +162,7 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                         "Produto": nome_limpo, "Marca": str(item.get('brand', 'OUTROS')).upper(),
                         "Preço Varejo": round(p_v, 2),
                         "Preço Atacado": round(p_a, 2),
-                        "Qtd_Valor": qv, "Medida": med, "Unidade": unidade_venda,
+                        "Qtd_Valor": f"{peso_peca_kg:g}" if peso_peca_kg else qv, "Medida": "KG" if peso_peca_kg else med, "Unidade": "KG" if peso_peca_kg else unidade_venda,
                         "Condição": "MEU CARREFOUR (CPF)" if p_a < p_v else "1 UN", 
                         "Data_Hora": agora, "Link_Imagem": link_foto,
                         "Link_PDP": link_pdp

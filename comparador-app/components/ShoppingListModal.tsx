@@ -3,7 +3,10 @@ import { View, StyleSheet, ScrollView, Modal, Image, TouchableOpacity } from 're
 import { Text, IconButton, Divider, Button, Chip, Checkbox } from 'react-native-paper';
 import { useShoppingListStore } from './useShoppingListStore';
 import { Product } from '../types';
-import { getPrecoEfetivo, getAvisoCondicao, melhorCombinacao } from '../precos';
+import { getPrecoEfetivo, getAvisoCondicao, melhorCombinacao, vendidoPorPeso } from '../precos';
+
+// "2x" para unidades, "2 kg" para itens vendidos por peso
+const rotuloQuantidade = (quantidade: number, oferta: any) => (vendidoPorPeso(oferta) ? `${quantidade} kg` : `${quantidade}x`);
 
 interface Props {
   visible: boolean;
@@ -244,7 +247,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
             <Text style={[styles.listProductName, isChecked && { textDecorationLine: 'line-through', color: '#888' }]} numberOfLines={2}>{item.Produto_Ouro}</Text>
             <Text style={styles.listBrand}>{item.Marca}</Text>
             <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#E5293E', marginTop: 4 }}>
-              {item.quantity}x R$ {getBestPrice(offer, item.quantity).toFixed(2).replace('.', ',')} 
+              {rotuloQuantidade(item.quantity, offer)} R$ {getBestPrice(offer, item.quantity).toFixed(2).replace('.', ',')}{vendidoPorPeso(offer) ? '/kg' : ''} 
               <Text style={{ fontSize: 12, color: '#666', fontWeight: 'normal' }}> (Total: R$ {(getBestPrice(offer, item.quantity) * item.quantity).toFixed(2).replace('.', ',')})</Text>
             </Text>
             {getAvisoCondicao(offer, item.quantity) && (
@@ -379,7 +382,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                           {items.map((item, idx) => (
                               <TouchableOpacity key={`cheap-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
-                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {rotuloQuantidade(item.product.quantity, item.offer)} {item.product.Produto_Ouro}</Text>
                                   <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                                 </View>
                               </TouchableOpacity>
@@ -427,7 +430,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                           {items.map((item, idx) => (
                               <TouchableOpacity key={`dupla-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
-                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {rotuloQuantidade(item.product.quantity, item.offer)} {item.product.Produto_Ouro}</Text>
                                   <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                                 </View>
                               </TouchableOpacity>
@@ -472,7 +475,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                           {items.map((item, idx) => (
                               <TouchableOpacity key={`cust-${mkt}-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
-                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {rotuloQuantidade(item.product.quantity, item.offer)} {item.product.Produto_Ouro}</Text>
                                   <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                                 </View>
                               </TouchableOpacity>
@@ -535,7 +538,7 @@ export const ShoppingListModal = ({ visible, onDismiss, allProducts = [], onProd
                             {rank.foundItems.map((item, idx) => (
                               <TouchableOpacity key={`found-${idx}`} onPress={() => onProductPress && onProductPress(item.product)} activeOpacity={0.7}>
                                 <View style={styles.expandedItemRow}>
-                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {item.product.quantity}x {item.product.Produto_Ouro}</Text>
+                                  <Text style={styles.expandedItemName} numberOfLines={1}>• {rotuloQuantidade(item.product.quantity, item.offer)} {item.product.Produto_Ouro}</Text>
                                   <Text style={styles.expandedItemPrice}>R$ {(getBestPrice(item.offer, item.product.quantity) * item.product.quantity).toFixed(2).replace('.', ',')}</Text>
                                 </View>
                               </TouchableOpacity>

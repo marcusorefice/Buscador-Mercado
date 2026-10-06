@@ -6,12 +6,27 @@ export const getQtdMinimaAtacado = (oferta?: Oferta | null): number | null => {
   return match ? parseInt(match[1], 10) : null;
 };
 
-// Quantas unidades do produto vêm na oferta. Alguns mercados vendem um pack com o EAN da unidade
-// (ex: Red Bull "4 LATAS"); o passo 4 grava isso em Qtd_Valor com Medida "UN".
+// Item vendido por peso (preço por kg)?
+export const vendidoPorPeso = (oferta?: Oferta | null): boolean => (oferta?.Unidade || '').toUpperCase() === 'KG';
+
+// Quanto do produto vem na embalagem da oferta:
+//  - pack vendido com o EAN da unidade (Red Bull "4 LATAS"): 4 unidades
+//  - item vendido por peso: o peso da peça em kg (queijo no Oba: peça de 0,2 kg)
+// O preço da oferta dividido por isso é o preço comparável (por unidade ou por kg).
 export const getUnidadesPack = (oferta?: Oferta | null): number => {
-  if (!oferta || oferta.Medida !== 'UN' || !/^\d+$/.test(oferta.Qtd_Valor || '')) return 1;
+  if (!oferta) return 1;
+  const qtd = parseFloat(oferta.Qtd_Valor || '');
+  if (vendidoPorPeso(oferta) && qtd > 0) {
+    if (oferta.Medida === 'KG') return qtd;
+    if (oferta.Medida === 'G') return qtd / 1000;
+  }
+  if (oferta.Medida !== 'UN' || !/^\d+$/.test(oferta.Qtd_Valor || '')) return 1;
   return Math.max(1, parseInt(oferta.Qtd_Valor as string, 10));
 };
+
+// "~200 g" / "~1,8 kg" para mostrar o tamanho da peça de um item vendido por peso
+export const descreverPeso = (kg: number): string =>
+  kg < 1 ? `~${Math.round(kg * 1000)} g` : `~${kg.toFixed(kg % 1 ? 1 : 0).replace('.', ',')} kg`;
 
 // Preço de UMA embalagem do mercado (a unidade ou o pack inteiro) comprando `embalagens` delas.
 // O preço de atacado só vale se a quantidade atingir o mínimo exigido pelo mercado.
@@ -91,6 +106,11 @@ export const melhorCombinacao = <T extends ItemDaLista>(itens: T[], maxMercados 
 export const getAvisoCondicao = (oferta?: Oferta | null, quantidade = 1): string | null => {
   if (!oferta) return null;
   const unidades = getUnidadesPack(oferta);
+  if (vendidoPorPeso(oferta) && unidades !== 1) {
+    const pecas = Math.ceil(Math.max(1, quantidade) / unidades);
+    const preco = precoPorEmbalagem(oferta, pecas).toFixed(2).replace('.', ',');
+    return `Vendido em peça de ${descreverPeso(unidades)} (R$ ${preco} cada) · ${pecas} peça${pecas > 1 ? 's' : ''}`;
+  }
   if (unidades > 1) {
     const embalagens = Math.ceil(Math.max(1, quantidade) / unidades);
     const preco = precoPorEmbalagem(oferta, embalagens).toFixed(2).replace('.', ',');
