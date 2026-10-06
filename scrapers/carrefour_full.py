@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import ean_eh_valido, setup_logging, read_json_file, normalizar_para_cache, CacheEanPdp
+from utils import ean_e_valido, setup_logging, read_json_file, normalizar_para_cache, CacheEanPdp
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -39,7 +39,7 @@ def extrair_ean_pela_foto(url_imagem):
     if not url_imagem or not isinstance(url_imagem, str):
         return None
     match = re.search(r'(789\d{10}|790\d{10})', url_imagem)
-    if match and ean_eh_valido(match.group(1)):
+    if match and ean_e_valido(match.group(1)):
         return match.group(1)
     return None
 

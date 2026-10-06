@@ -183,13 +183,13 @@ class TestEanErradoDoMercado(unittest.TestCase):
 
 class TestCombo(unittest.TestCase):
     def test_combo_de_produtos_diferentes(self):
-        self.assertTrue(cp.eh_combo("PACK 24 CERVEJAS BUDWEISER LATA 269ML + ENTRECOTE FILÉ"))
-        self.assertTrue(cp.eh_combo("PACK HEINZ 1 KETCHUP 397G + 1 MAIONESE 390G"))
+        self.assertTrue(cp.e_combo("PACK 24 CERVEJAS BUDWEISER LATA 269ML + ENTRECOTE FILÉ"))
+        self.assertTrue(cp.e_combo("PACK HEINZ 1 KETCHUP 397G + 1 MAIONESE 390G"))
 
     def test_nao_e_combo(self):
         for nome in ("ACHOCOLATADO TODDY 370G GRÁTIS + 1 COPO", "ESPONJA ESFRELUX LV+PG- UN",
                      "BEBIDA YOPRO 23G PROTEÍNA+5G BCAAS", "BEBIDA PRATS LARANJA PRO+ 300ML", "CERVEJA BUDWEISER LATA 269ML"):
-            self.assertFalse(cp.eh_combo(nome), nome)
+            self.assertFalse(cp.e_combo(nome), nome)
 
 
 class TestRevisao(unittest.TestCase):

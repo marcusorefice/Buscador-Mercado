@@ -9,7 +9,7 @@ from collections import defaultdict
 
 ARQUIVO_PENDENTES = os.path.join(RAIZ, "data", "pendentes_ia.json")
 
-def ean_eh_valido(ean_str):
+def ean_e_valido(ean_str):
     ean_str = str(ean_str).strip()
     if not ean_str.isdigit(): return False
     if len(ean_str) not in (8, 12, 13, 14): return False
@@ -42,8 +42,8 @@ def main():
         
         # Considera "sem EAN" se for N/A, vazio, None, nan, ou se não for válido matematicamente.
         # O script 4_resolver_pendentes só tenta buscar na internet itens sem EAN,
-        # ou seja, aqueles que ean_eh_valido retorna False e não começam com INT_.
-        if ean in ("N/A", "", "None", "nan") or (not ean.startswith('INT_') and not ean_eh_valido(ean)):
+        # ou seja, aqueles que ean_e_valido retorna False e não começam com INT_.
+        if ean in ("N/A", "", "None", "nan") or (not ean.startswith('INT_') and not ean_e_valido(ean)):
             sem_ean_por_mercado[mercado] += 1
             total_sem_ean += 1
             

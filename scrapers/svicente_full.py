@@ -5,7 +5,7 @@ import re
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from datetime import datetime
-from utils import setup_logging, read_json_file, ean_eh_valido
+from utils import setup_logging, read_json_file, ean_e_valido
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -38,7 +38,7 @@ headers = {
 def extrair_ean_pela_foto(url_imagem):
     if not url_imagem or not isinstance(url_imagem, str): return None
     match = re.search(r'(789\d{10}|790\d{10})', url_imagem)
-    if match and ean_eh_valido(match.group(1)):
+    if match and ean_e_valido(match.group(1)):
         return match.group(1)
     return None
 

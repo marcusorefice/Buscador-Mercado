@@ -24,7 +24,7 @@ from datetime import datetime
 import psycopg2
 from dotenv import load_dotenv
 
-from utils import ler_json_seguro, salvar_json_atomico, ean_eh_valido
+from utils import ler_json_seguro, salvar_json_atomico, ean_e_valido
 from casamento_produtos import CasadorProdutos, nomes_conferem
 
 load_dotenv(os.path.join(RAIZ, ".env"))
@@ -39,7 +39,7 @@ def confere(resultado, nome, marca, casador):
     próprio EAN falso, e aí o item sempre "confere" consigo mesmo.)
     """
     ean = str(resultado.get("ean", ""))
-    if not ean_eh_valido(ean) or ean.startswith("INT_"):
+    if not ean_e_valido(ean) or ean.startswith("INT_"):
         return False
     encontrado = str(resultado.get("nome_encontrado") or "")
     if encontrado and encontrado != "N/A":

@@ -6,9 +6,9 @@ import logging
 import re
 
 from buscador_ean import tentar_recuperar_ean
-from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, parse_preco
+from utils import ean_e_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, parse_preco
 import statistics
-from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca, ean_do_mercado_errado, eh_combo
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca, ean_do_mercado_errado, e_combo
 from datetime import date
 import revisar_casamentos
 
@@ -34,10 +34,10 @@ DIAS_PARA_REPETIR_BUSCA = 30
 def id_produto_valido(ean):
     """EAN válido, grupo interno (INT_) ou variante criada pela Defesa Automática (ex: 7894900010015_LATA)."""
     ean = str(ean)
-    if ean_eh_valido(ean):
+    if ean_e_valido(ean):
         return True
     base, _, sufixo = ean.partition("_")
-    return bool(sufixo) and ean_eh_valido(base)
+    return bool(sufixo) and ean_e_valido(base)
 
 async def resolver_ean_novo(ean, itens_crus):
     from collections import Counter
@@ -161,8 +161,8 @@ def checar_conflito_anomalia(nome_base, nome_novo):
 
     # 2. Validação Flexível de Atacado / Diferença de Volume (Diferença de UN ou Peso)
     if m_base["unidades"] and m_novo["unidades"] and m_base["unidades"] != m_novo["unidades"]:
-        eh_fralda = "FRALDA" in nome_base_norm or "FRALDA" in nome_novo_norm
-        if eh_fralda and abs(m_base["unidades"] - m_novo["unidades"]) <= 6:
+        e_fralda = "FRALDA" in nome_base_norm or "FRALDA" in nome_novo_norm
+        if e_fralda and abs(m_base["unidades"] - m_novo["unidades"]) <= 6:
             return False
         return True
 
@@ -253,7 +253,7 @@ async def main():
         Sem nome para conferir, é rejeitado (era assim que números aleatórios viravam EAN).
         """
         ean = str((resultado or {}).get("ean", ""))
-        if not ean_eh_valido(ean) or ean.startswith("INT_"):
+        if not ean_e_valido(ean) or ean.startswith("INT_"):
             return False
         ean = equivalencias.get(ean, ean)
         if ean in biblioteca:
@@ -328,7 +328,7 @@ async def main():
             nome_item = item.get("Produto", item.get("nome_comum", ""))
             # Combo ("24 latas + entrecote") com o EAN de um produto unitário: é outro produto.
             # Vira um card próprio e não entra na comparação de preço do item avulso.
-            if eh_combo(nome_item) and not eh_combo(ref.get("nome_comum", "")):
+            if e_combo(nome_item) and not e_combo(ref.get("nome_comum", "")):
                 item["EAN_Original"] = ean
                 item["EAN"] = "N/A"
                 item["Combo"] = True
@@ -465,7 +465,7 @@ async def main():
                 
             # Casamento de nomes com a biblioteca (marca + medida + palavras-chave)
             # Combo nunca é casado com um produto avulso pelo nome
-            casamento = None if (item.get("Combo") or eh_combo(nome)) else casador.casar(nome, marca_bruta)
+            casamento = None if (item.get("Combo") or e_combo(nome)) else casador.casar(nome, marca_bruta)
             if casamento and casamento["tipo"] in ("confirmado", "auto"):
                 progresso_ean["atual"] += 1
                 contagem_casamento[casamento["tipo"]] += 1

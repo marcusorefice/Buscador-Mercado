@@ -124,7 +124,7 @@ RE_PACK_X = re.compile(r"(?<![A-Z0-9])(\d+)\s*X(?!\s*[A-Z])|(?<![A-Z0-9])X\s*(\d
 # "C/12", "COM 6" sem palavra depois (fardos e caixas: "CERVEJA SKOL LATA 350ML C/12")
 RE_PACK_COM = re.compile(r"(?<![A-Z0-9])(?:C/|COM)\s*(\d+)(?![\d.])(?!\s*[A-Z])")  # não pode vir palavra depois ("C/ 3 SABORES")
 
-def eh_obrigatorio(token):
+def e_obrigatorio(token):
     return token in ATRIBUTOS_OBRIGATORIOS or token.startswith("SEM_")
 
 def normalizar_marca(marca):
@@ -190,7 +190,7 @@ class Assinatura:
             if p in STOPWORDS or (len(p) < 2 and not p.isdigit()) or p in palavras_marca:
                 continue
             tokens.add(p)
-        self.atributos = {t for t in tokens if eh_obrigatorio(t) or any(t in g for g in GRUPOS_EXCLUSIVOS)}
+        self.atributos = {t for t in tokens if e_obrigatorio(t) or any(t in g for g in GRUPOS_EXCLUSIVOS)}
         self.tokens = frozenset(tokens)
         medida_txt = f"{self.medida[1]:g}{self.medida[0]}" if self.medida else "-"
         self.chave = f"{self.marca or '-'}|{' '.join(sorted(self.tokens))}|{medida_txt}|{self.pack or 1}"
@@ -214,7 +214,7 @@ def compativel(a: Assinatura, b: Assinatura):
             return False, "medida diferente"
     if (a.pack or 1) != (b.pack or 1):
         return False, "pack diferente"
-    if {t for t in a.atributos if eh_obrigatorio(t)} != {t for t in b.atributos if eh_obrigatorio(t)}:
+    if {t for t in a.atributos if e_obrigatorio(t)} != {t for t in b.atributos if e_obrigatorio(t)}:
         return False, "atributo (zero/diet/light/integral...) diferente"
     for grupo in GRUPOS_EXCLUSIVOS:
         ga, gb = a.atributos & grupo, b.atributos & grupo
@@ -363,7 +363,7 @@ def nomes_conferem(casador: CasadorProdutos, nome_item, marca_item, nome_ref, ma
 RE_COMBO = re.compile(r"\+\s*\d*\s*[A-Z]{3,}")
 RE_BRINDE = re.compile(r"GRATIS|BRINDE")
 
-def eh_combo(nome):
+def e_combo(nome):
     texto = sem_acentos(str(nome or "")).upper()
     return bool(RE_COMBO.search(texto)) and not RE_BRINDE.search(texto)
 
@@ -439,7 +439,7 @@ def gerar_id_interno(a: Assinatura):
 # EQUIVALÊNCIAS: o mesmo produto cadastrado com mais de um EAN
 # ==========================================
 
-def _eh_ean_real(ean):
+def _e_ean_real(ean):
     return not ean.startswith("INT_") and "_" not in ean
 
 def equivalencias_automaticas(casador: CasadorProdutos, nao_equivalentes=()):
@@ -450,7 +450,7 @@ def equivalencias_automaticas(casador: CasadorProdutos, nao_equivalentes=()):
     bloqueados = {frozenset(par) for par in nao_equivalentes}
     grupos = defaultdict(list)
     for ean, a in casador.assinaturas.items():
-        if _eh_ean_real(ean):
+        if _e_ean_real(ean):
             grupos[a.chave].append(ean)
     mapa = {}
     for eans in grupos.values():
@@ -468,10 +468,10 @@ def sugerir_duplicatas(casador: CasadorProdutos, ja_resolvidos=()):
     resolvidos = {frozenset(par) for par in ja_resolvidos}
     sugestoes = {}
     for ean, a in casador.assinaturas.items():
-        if not _eh_ean_real(ean):
+        if not _e_ean_real(ean):
             continue
         for score, outro in casador.candidatos(a, limite=3):
-            if outro == ean or not _eh_ean_real(outro) or score < LIMIAR_AUTO:
+            if outro == ean or not _e_ean_real(outro) or score < LIMIAR_AUTO:
                 continue
             par = frozenset((ean, outro))
             if par in resolvidos or casador.assinaturas[outro].chave == a.chave:

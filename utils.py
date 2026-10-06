@@ -201,7 +201,7 @@ def extrair_tags_inteligentes(produto):
             
     return sorted(list(set(tags_limpas)))
 
-def ean_eh_valido(ean_str):
+def ean_e_valido(ean_str):
     """
     Função centralizada para validação rigorosa de EAN.
     Bloqueia EANs falsos, códigos internos de supermercado e valida o dígito verificador.
