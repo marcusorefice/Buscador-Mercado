@@ -28,6 +28,20 @@ def _alias_atual(client):
     except typesense.exceptions.ObjectNotFound:
         return None
 
+def _eans_com_oferta():
+    """EANs que têm oferta no banco agora. None se não der para consultar (aí indexa a biblioteca toda)."""
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        return None
+    try:
+        import psycopg2
+        with psycopg2.connect(url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT ean FROM ofertas_atuais")
+            return {r[0] for r in cur.fetchall()}
+    except Exception as e:
+        print(f"⚠️ Não foi possível ler as ofertas do banco ({e}); indexando a biblioteca inteira.")
+        return None
+
 def sincronizar_com_typesense():
     print("Iniciando sincronização com o motor de buscas Typesense...")
     # 1. Conecta ao servidor Typesense usando a chave Admin
@@ -52,8 +66,12 @@ def sincronizar_com_typesense():
         with open(caminho, 'r', encoding='utf-8') as f:
             biblioteca = json.load(f)
 
+        # Só produtos que aparecem no app (têm oferta): senão o autocomplete sugere algo que a busca não acha
+        com_oferta = _eans_com_oferta()
         documentos = []
         for ean, item in biblioteca.items():
+            if com_oferta is not None and ean not in com_oferta:
+                continue
             documentos.append({
                 'id': ean, # EAN atua como ID único
                 'nome_comum': item['nome_comum'],

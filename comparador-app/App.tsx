@@ -19,9 +19,8 @@ const API_URL = __DEV__
   ? 'https://badness-impale-suitably.ngrok-free.dev' // ngrok: Ignora o Firewall do Windows e atualiza na hora!
   : 'https://buscador-mercado.onrender.com';         // Render: App Oficial da Nuvem
 
-// --- CONFIGURAÇÃO TYPESENSE (BUSCA INSTANTÂNEA) ---
-const TYPESENSE_HOST = 'http://34.16.54.234:8108'; // Substitua pelo seu IP/URL do Typesense
-const TYPESENSE_SEARCH_KEY = '***REMOVIDO***'; // ⚠️ Use apenas a Search-Only API Key aqui!
+// As sugestões da busca (Typesense) vêm pela API em /autocompletar: o Android bloqueia HTTP sem
+// criptografia nos APKs, então o app não fala direto com o servidor do Typesense.
 
 const theme = {
   ...DefaultTheme,
@@ -185,27 +184,23 @@ export default function App() {
     
     if (autocompleteTimeoutRef.current) clearTimeout(autocompleteTimeoutRef.current);
 
-    // Sugestões instantâneas via Typesense
+    // Sugestões instantâneas (Typesense, via API)
     if (text.length > 0) {
       autocompleteTimeoutRef.current = setTimeout(async () => {
         try {
-          const response = await axios.get(`${TYPESENSE_HOST}/collections/produtos/documents/search`, {
-            params: {
-              q: text,
-              query_by: 'nome_comum,marca,tags', // Campos onde o Typesense vai buscar
-              per_page: 6,
-              prefix: true // Importante: Habilita busca parcial (ex: "cerv" acha "cerveja")
-            },
-            headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_SEARCH_KEY }
+          const response = await axios.get<{ sugestoes: string[] }>(`${API_URL}/autocompletar`, {
+            params: { q: text },
+            headers: { 'ngrok-skip-browser-warning': 'true' },
+            timeout: 5000,
           });
-          const hits = response.data.hits || [];
-          // Remove possíveis EANs com nomes repetidos e extrai os títulos
-          const suggestions = Array.from(new Set(hits.map((h: any) => h.document.nome_comum)));
-          setTextSuggestions(suggestions as string[]);
+          // Ignora a resposta se a pessoa já mudou o texto enquanto ela chegava
+          if (searchQueryRef.current === text) {
+            setTextSuggestions(response.data.sugestoes || []);
+          }
         } catch (e) {
-          console.error("Falha no Typesense:", e);
+          console.error("Falha no autocomplete:", e);
         }
-      }, 40); // Debounce quase instantâneo de 40ms
+      }, 250); // espera a pessoa parar de digitar por 250ms
     } else {
       setTextSuggestions([]);
     }

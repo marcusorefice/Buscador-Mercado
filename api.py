@@ -18,6 +18,10 @@ load_dotenv()
 DB_URL = os.getenv("DATABASE_URL")
 # Webhook do Discord para sugestões/bugs (fica só no servidor, nunca no app)
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+# Typesense (autocomplete da busca). O app não fala direto com ele: o Android bloqueia HTTP sem
+# criptografia nos APKs, então a API (HTTPS) faz a consulta e devolve só as sugestões.
+TYPESENSE_URL = f'{os.getenv("TYPESENSE_PROTOCOL", "http")}://{os.getenv("TYPESENSE_HOST", "34.16.54.234")}:{os.getenv("TYPESENSE_PORT", "8108")}'
+TYPESENSE_SEARCH_KEY = os.getenv("TYPESENSE_SEARCH_KEY")
 
 LIMITE_PRODUTOS = 200
 # Com 3 ou mais ofertas, a que estiver acima de FATOR_OUTLIER x a mediana do produto (ou abaixo de mediana / FATOR)
@@ -341,6 +345,29 @@ class SugestaoRequest(BaseModel):
     imagem_nome: Optional[str] = "print.jpg"
 
 MAX_IMAGEM_BYTES = 8 * 1024 * 1024  # limite de anexo do Discord
+
+@app.get("/autocompletar")
+def autocompletar(q: str = Query(..., min_length=1, max_length=100)):
+    """Sugestões de nome de produto enquanto a pessoa digita (Typesense)."""
+    if not TYPESENSE_SEARCH_KEY:
+        raise HTTPException(status_code=503, detail="Autocomplete não configurado.")
+    try:
+        resp = httpx.get(
+            f"{TYPESENSE_URL}/collections/produtos/documents/search",
+            params={"q": q, "query_by": "nome_comum,marca,tags", "per_page": 8, "prefix": "true"},
+            headers={"X-TYPESENSE-API-KEY": TYPESENSE_SEARCH_KEY},
+            timeout=3,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
+        print(f"Erro no Typesense: {e}")
+        raise HTTPException(status_code=502, detail="Autocomplete indisponível.")
+    sugestoes = []
+    for hit in resp.json().get("hits", []):
+        nome = hit.get("document", {}).get("nome_comum")
+        if nome and nome not in sugestoes:
+            sugestoes.append(nome)
+    return {"sugestoes": sugestoes[:6]}
 
 @app.post("/sugestoes")
 def enviar_sugestao(sugestao: SugestaoRequest):
