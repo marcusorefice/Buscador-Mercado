@@ -7,6 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from psycopg2.extras import execute_batch, execute_values
 from sincronizar_typesense import sincronizar_com_typesense
+from ofertas_sql import atualizar_visoes
 from utils import parse_preco, normalizar_data_iso, read_json_file
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -377,6 +378,16 @@ def main():
             logger.warning(f"⚠️ Aviso: Não foi possível deletar o arquivo temporário: {e}")
     else:
         logger.warning("Arquivo 'itens_prontos_para_comparar.json' nao encontrado. Voce rodou o passo 4?")
+
+    # --- RECALCULA AS OFERTAS VÁLIDAS E O RESUMO DE PREÇOS QUE O APP LÊ (ver ofertas_sql.py) ---
+    try:
+        with conn_pg.cursor() as cursor_visoes:
+            atualizar_visoes(cursor_visoes)
+        conn_pg.commit()
+        logger.info("📊 Resumo de preços do app recalculado.")
+    except Exception as e:
+        conn_pg.rollback()
+        logger.error(f"⚠️ Erro ao recalcular o resumo de preços (o app continua com o anterior): {e}")
 
     conn_pg.close()
     conn_sl.close()

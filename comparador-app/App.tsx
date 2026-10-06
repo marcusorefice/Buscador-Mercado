@@ -100,10 +100,14 @@ export default function App() {
   const [sortBy, setSortBy] = useState<Ordenacao>('relevance');
   // Termos mais buscados por todos os usuários (vêm da API) para os chips da tela inicial
   const buscasPopularesRef = useRef<string[]>([]);
+  const ultimoPedidoProdutosRef = useRef(0);
   const [selectedMarket, setSelectedMarket] = useState('Todos os Mercados');
   const [isMarketModalVisible, setMarketModalVisible] = useState(false);
 
   const fetchProducts = useCallback(async (queryOverride?: string, isRefresh = false) => {
+    // Enquanto a pessoa digita saem várias buscas; só a última pode mexer na tela
+    const pedido = ++ultimoPedidoProdutosRef.current;
+    const pedidoAtual = () => pedido === ultimoPedidoProdutosRef.current;
     if (isRefresh) {
       setRefreshing(true);
     } else {
@@ -125,6 +129,8 @@ export default function App() {
         }
       });
       
+      if (!pedidoAtual()) return;
+
       // --- O SCANNER MÁGICO (TRADUTOR DE CÓDIGO DE BARRAS) ---
       // Se a pessoa escaneou o EAN e não achou no nosso banco (pode estar salvo como INT_)
       if (response.data.length === 0 && /^\d{8,14}$/.test(currentQuery)) {
@@ -139,7 +145,7 @@ export default function App() {
                 params: { q: fallbackQuery, sort_by: sortBy, ...(selectedMarket !== 'Todos os Mercados' && { market: selectedMarket }) },
                 headers: { 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' }
               });
-              if (fallbackRes.data.length > 0) {
+              if (fallbackRes.data.length > 0 && pedidoAtual()) {
                 setProducts(fallbackRes.data);
                 setLoading(false);
                 setRefreshing(false);
@@ -160,10 +166,12 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
-      setError('Não foi possível carregar os produtos.');
+      if (pedidoAtual()) setError('Não foi possível carregar os produtos.');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (pedidoAtual()) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [sortBy, selectedMarket]);
 
