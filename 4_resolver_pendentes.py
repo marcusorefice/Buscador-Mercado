@@ -8,7 +8,7 @@ import re
 from buscador_ean import tentar_recuperar_ean
 from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, parse_preco
 import statistics
-from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca, ean_do_mercado_errado
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca, ean_do_mercado_errado, eh_combo
 from datetime import date
 import revisar_casamentos
 
@@ -316,8 +316,9 @@ async def main():
         return min(precos) if precos else 0.0
 
     eans_descartados = 0
+    combos_separados = 0
     for ean, lista_itens in list(itens_por_ean.items()):
-        if ean not in biblioteca or len(lista_itens) < 2:
+        if ean not in biblioteca:
             continue
         ref = biblioteca[ean]
         precos = [preco_item(i) for i in lista_itens]
@@ -325,6 +326,15 @@ async def main():
         for idx, item in enumerate(lista_itens):
             outros = [x for j, x in enumerate(precos) if j != idx and x > 0]
             nome_item = item.get("Produto", item.get("nome_comum", ""))
+            # Combo ("24 latas + entrecote") com o EAN de um produto unitário: é outro produto.
+            # Vira um card próprio e não entra na comparação de preço do item avulso.
+            if eh_combo(nome_item) and not eh_combo(ref.get("nome_comum", "")):
+                item["EAN_Original"] = ean
+                item["EAN"] = "N/A"
+                item["Combo"] = True
+                itens_sem_ean.append(item)
+                combos_separados += 1
+                continue
             if outros and ean_do_mercado_errado(casador, nome_item, ref.get("nome_comum", ""), ref.get("marca"), precos[idx], statistics.median(outros)):
                 logger.warning(f"🚫 EAN do mercado descartado: '{nome_item}' ({item.get('Mercado')}) usa o EAN {ean} de '{ref.get('nome_comum')}'")
                 item["EAN_Original"] = ean
@@ -337,6 +347,8 @@ async def main():
     itens_por_ean = {k: v for k, v in itens_por_ean.items() if v}
     if eans_descartados:
         logger.info(f"🚫 {eans_descartados} itens com EAN de outro produto no cadastro do mercado foram tratados como sem EAN.")
+    if combos_separados:
+        logger.info(f"🎁 {combos_separados} combos cadastrados com o EAN de um produto avulso viraram produtos próprios.")
 
     # --- LOOP DE VALIDAÇÃO DA DEFESA AUTOMÁTICA ---
     itens_filtrados_por_ean = {}
@@ -452,7 +464,8 @@ async def main():
                 return item
                 
             # Casamento de nomes com a biblioteca (marca + medida + palavras-chave)
-            casamento = casador.casar(nome, marca_bruta)
+            # Combo nunca é casado com um produto avulso pelo nome
+            casamento = None if (item.get("Combo") or eh_combo(nome)) else casador.casar(nome, marca_bruta)
             if casamento and casamento["tipo"] in ("confirmado", "auto"):
                 progresso_ean["atual"] += 1
                 contagem_casamento[casamento["tipo"]] += 1

@@ -20,6 +20,12 @@ DB_URL = os.getenv("DATABASE_URL")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 LIMITE_PRODUTOS = 200
+# Com 3 ou mais ofertas, a que estiver acima de FATOR_OUTLIER x a mediana do produto (ou abaixo de mediana / FATOR)
+# é descartada: quase sempre é kit, combo, pack não detectado ou cadastro errado do mercado.
+FATOR_OUTLIER = 2.5
+# Peso do "de/por" de um mercado só no ranking da tela inicial. O foco do app é comparar mercados, e o
+# preço "de" informado pelo site às vezes é inflado; 0.5 = metade do peso de uma economia entre mercados.
+PESO_DE_POR = 0.5
 
 _pool: Optional[ThreadedConnectionPool] = None
 _pool_lock = threading.Lock()
@@ -115,6 +121,46 @@ SQL_PRECO_EFETIVO = f'''
     END) / ({SQL_UNIDADES_PACK})
 '''
 
+COLUNAS_OFERTA = """p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
+                   v.mercado, v.nome_original, v.preco_varejo, v.preco_atacado,
+                   v.qtd_valor, v.medida, v.unidade, v.condicao, v.data_atualizacao, v.link_pdp,
+                   v.preco_efetivo"""
+
+def _sql_ofertas_validas(eans_candidatos_sql):
+    """
+    CTEs que produzem `validas`: as ofertas dos produtos candidatos, já sem as que fogem da curva.
+    A mediana é calculada com TODAS as ofertas do produto (de todos os mercados), mesmo quando há filtro.
+    """
+    return f'''
+        base AS (
+            SELECT o.*, NULLIF({SQL_PRECO_EFETIVO}, 0) AS preco_efetivo,
+                   o.preco_varejo / ({SQL_UNIDADES_PACK}) AS preco_varejo_unidade
+            FROM ofertas_atuais o
+            WHERE o.ean IN ({eans_candidatos_sql})
+        ),
+        unidade_principal AS (
+            -- Preço por KG e por unidade não se comparam: vale a unidade da maioria das ofertas do produto
+            SELECT DISTINCT ON (ean) ean, unidade_norm
+            FROM (SELECT ean, COALESCE(NULLIF(UPPER(unidade), ''), 'UN') AS unidade_norm, COUNT(*) AS qtd
+                  FROM base WHERE preco_efetivo IS NOT NULL GROUP BY 1, 2) c
+            ORDER BY ean, qtd DESC, (unidade_norm = 'UN') DESC
+        ),
+        mesma_unidade AS (
+            SELECT b.* FROM base b JOIN unidade_principal u ON u.ean = b.ean
+            WHERE b.preco_efetivo IS NOT NULL AND COALESCE(NULLIF(UPPER(b.unidade), ''), 'UN') = u.unidade_norm
+        ),
+        medianas AS (
+            SELECT ean, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY preco_efetivo) AS mediana, COUNT(*) AS n
+            FROM mesma_unidade
+            GROUP BY ean
+        ),
+        validas AS (
+            SELECT b.*, m.n AS ofertas_do_produto
+            FROM mesma_unidade b JOIN medianas m ON m.ean = b.ean
+            WHERE m.n < 3 OR b.preco_efetivo BETWEEN m.mediana / {FATOR_OUTLIER} AND m.mediana * {FATOR_OUTLIER}
+        )
+    '''
+
 def _montar_produtos(rows):
     """Agrupa as linhas (produto x oferta) por EAN, mantendo a ordem em que os EANs chegaram."""
     agrupados = {}
@@ -185,34 +231,40 @@ def get_produtos(
 
     where_sql = (' WHERE ' + ' AND '.join(where_clauses)) if where_clauses else ''
 
-    # "discount" = economia real: diferença entre o mercado mais caro e o mais barato para o MESMO produto.
-    # Quando só há um mercado (ex: filtro por mercado), usa o "de/por" da própria oferta.
+    filtro_mercado = market and market.lower() != "todos os mercados"
+
+    # "discount" = quanto a oferta mais barata está abaixo da MEDIANA das outras do mesmo produto (já sem as
+    # fora da curva). Com só 2 ofertas e diferença acima de 2x não dá para saber qual está errada, então o
+    # produto não é promovido. Num mercado só, usa o "de/por" da oferta com peso menor (PESO_DE_POR).
     if sort_by == "price":
         order_sql = "menor_preco ASC NULLS LAST, ean"
     else:
-        order_sql = '''
+        order_sql = f'''
             CASE
-                WHEN qtd_ofertas > 1 AND maior_preco > 0 THEN (maior_preco - menor_preco) / maior_preco
-                WHEN maior_varejo > 0 AND menor_preco IS NOT NULL THEN GREATEST(maior_varejo - menor_preco, 0) / maior_varejo
+                WHEN qtd_ofertas = 2 AND maior_preco > menor_preco * 2 THEN 0
+                WHEN qtd_ofertas > 1 AND mediana_outros > 0 THEN GREATEST(mediana_outros - menor_preco, 0) / mediana_outros
+                WHEN maior_varejo > 0 AND menor_preco IS NOT NULL THEN {PESO_DE_POR} * GREATEST(maior_varejo - menor_preco, 0) / maior_varejo
                 ELSE 0
             END DESC, menor_preco ASC NULLS LAST, ean
         '''
 
     # 1º calcula o ranking e corta em 200 DENTRO do banco; 2º busca as ofertas só desses produtos.
+    candidatos = f"SELECT p.ean FROM produtos p JOIN ofertas_atuais o ON p.ean = o.ean {where_sql}"
     query_ranking = f'''
-        WITH filtradas AS (
-            SELECT o.ean, o.mercado, o.preco_varejo / ({SQL_UNIDADES_PACK}) AS preco_varejo, NULLIF({SQL_PRECO_EFETIVO}, 0) AS preco_efetivo
-            FROM produtos p
-            JOIN ofertas_atuais o ON p.ean = o.ean
-            {where_sql}
+        WITH {_sql_ofertas_validas(candidatos)},
+        ordenadas AS (
+            SELECT v.*, ROW_NUMBER() OVER (PARTITION BY ean ORDER BY preco_efetivo) AS posicao
+            FROM validas v
+            {"WHERE mercado = %s" if filtro_mercado else ""}
         ),
         agregadas AS (
             SELECT ean,
                    MIN(preco_efetivo) AS menor_preco,
                    MAX(preco_efetivo) AS maior_preco,
-                   MAX(preco_varejo) AS maior_varejo,
+                   PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY preco_efetivo) FILTER (WHERE posicao > 1) AS mediana_outros,
+                   MAX(preco_varejo_unidade) AS maior_varejo,
                    COUNT(*) AS qtd_ofertas
-            FROM filtradas
+            FROM ordenadas
             GROUP BY ean
         )
         SELECT ean FROM agregadas
@@ -221,26 +273,18 @@ def get_produtos(
     '''
 
     with get_db_cursor() as cursor:
-        cursor.execute(query_ranking, params)
+        cursor.execute(query_ranking, params + ([market] if filtro_mercado else []))
         eans_ordenados = [r["ean"] for r in cursor.fetchall()]
         if not eans_ordenados:
             return []
 
-        # Busca as ofertas só dos produtos do ranking, respeitando o mesmo filtro de mercado
-        filtro_mercado = ''
-        params_ofertas = [eans_ordenados]
-        if market and market.lower() != "todos os mercados":
-            filtro_mercado = ' AND o.mercado = %s'
-            params_ofertas.append(market)
+        # Ofertas válidas só dos produtos do ranking, respeitando o mesmo filtro de mercado
         cursor.execute(f'''
-            SELECT p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
-                   o.mercado, o.nome_original, o.preco_varejo, o.preco_atacado,
-                   o.qtd_valor, o.medida, o.unidade, o.condicao, o.data_atualizacao, o.link_pdp,
-                   {SQL_PRECO_EFETIVO} AS preco_efetivo
-            FROM produtos p
-            JOIN ofertas_atuais o ON p.ean = o.ean
-            WHERE p.ean = ANY(%s){filtro_mercado}
-        ''', params_ofertas)
+            WITH {_sql_ofertas_validas("SELECT unnest(%s::text[])")}
+            SELECT {COLUNAS_OFERTA}
+            FROM validas v JOIN produtos p ON p.ean = v.ean
+            {"WHERE v.mercado = %s" if filtro_mercado else ""}
+        ''', [eans_ordenados] + ([market] if filtro_mercado else []))
         rows = cursor.fetchall()
 
     posicao = {ean: i for i, ean in enumerate(eans_ordenados)}
@@ -255,13 +299,9 @@ def get_produtos_lote(eans: str = Query(..., description="EANs separados por ví
         return []
     with get_db_cursor() as cursor:
         cursor.execute(f'''
-            SELECT p.ean, p.nome_comum, p.categoria, p.marca, p.imagem, p.tags,
-                   o.mercado, o.nome_original, o.preco_varejo, o.preco_atacado,
-                   o.qtd_valor, o.medida, o.unidade, o.condicao, o.data_atualizacao, o.link_pdp,
-                   {SQL_PRECO_EFETIVO} AS preco_efetivo
-            FROM produtos p
-            JOIN ofertas_atuais o ON p.ean = o.ean
-            WHERE p.ean = ANY(%s)
+            WITH {_sql_ofertas_validas("SELECT unnest(%s::text[])")}
+            SELECT {COLUNAS_OFERTA}
+            FROM validas v JOIN produtos p ON p.ean = v.ean
         ''', (lista,))
         rows = cursor.fetchall()
     return _montar_produtos(rows)

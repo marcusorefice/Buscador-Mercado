@@ -358,6 +358,15 @@ def nomes_conferem(casador: CasadorProdutos, nome_item, marca_item, nome_ref, ma
     ok, _ = compativel(a, b)
     return ok and casador.pontuar(a, b) >= limiar
 
+# Combo de produtos diferentes: "PACK 24 CERVEJAS ... + ENTRECOTE", "KETCHUP 397G + 1 MAIONESE".
+# Não pega "LV+ PG-", "PROTEÍNA+5G", "PRO+" (sem outro produto depois do +) nem brinde ("+ 1 COPO GRÁTIS").
+RE_COMBO = re.compile(r"\+\s*\d*\s*[A-Z]{3,}")
+RE_BRINDE = re.compile(r"GRATIS|BRINDE")
+
+def eh_combo(nome):
+    texto = sem_acentos(str(nome or "")).upper()
+    return bool(RE_COMBO.search(texto)) and not RE_BRINDE.search(texto)
+
 def ean_do_mercado_errado(casador: CasadorProdutos, nome_item, nome_produto, marca_produto, preco_item, preco_referencia):
     """
     O mercado cadastrou o EAN de outro produto? (ex: Atacadão vende "MINI BOLO KIM 35G" com o EAN da
