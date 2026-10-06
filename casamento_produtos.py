@@ -120,7 +120,7 @@ RE_PACK = re.compile(
     r"(?<![A-Z0-9])(?:C/|COM|CX|PCT|PACK|PACOTE|LEVE|FARDO|FD)?\s*(\d+)\s*"
     r"(?:UN|UND|UNID|UNIDADES?|ROLOS?|SACHES?|SACH|CAPSULAS?|CAPS|LATAS?|GARRAFAS?|FRALDAS?|TABLETES?|PCS?|PECAS?|SAQUINHOS?|ENVELOPES?|BARRAS?)(?![A-Z])"
 )
-RE_PACK_X = re.compile(r"(?<![A-Z0-9])(\d+)\s*X(?![A-Z])|(?<![A-Z0-9])X\s*(\d+)(?![A-Z0-9])")
+RE_PACK_X = re.compile(r"(?<![A-Z0-9])(\d+)\s*X(?!\s*[A-Z])|(?<![A-Z0-9])X\s*(\d+)(?![A-Z0-9])")  # "5X DESTILADA" não é pack
 # "C/12", "COM 6" sem palavra depois (fardos e caixas: "CERVEJA SKOL LATA 350ML C/12")
 RE_PACK_COM = re.compile(r"(?<![A-Z0-9])(?:C/|COM)\s*(\d+)(?![\d.])(?!\s*[A-Z])")  # não pode vir palavra depois ("C/ 3 SABORES")
 
@@ -384,15 +384,37 @@ def unidades_por_pack(nome_oferta, marca_oferta, nome_produto, marca_produto):
     if pack_oferta <= pack_produto or pack_oferta % pack_produto:
         return 1
     unidades = pack_oferta // pack_produto
-    # A medida de cada unidade tem que ser a mesma: "250ML 4 LATAS" (por unidade) ou
-    # "4X250ML" (que vira 1000ML no total) para um produto de 250ml
-    if oferta.medida and produto.medida:
-        mesmo_tipo = oferta.medida[0] == produto.medida[0]
-        por_unidade = abs(oferta.medida[1] - produto.medida[1]) <= produto.medida[1] * 0.02
-        total = abs(oferta.medida[1] - produto.medida[1] * unidades) <= produto.medida[1] * unidades * 0.02
-        if not (mesmo_tipo and (por_unidade or total)):
-            return 1
-    return unidades
+    # Conservador: na dúvida, NÃO é pack (dividir o preço por engano é pior do que não dividir).
+    # - packs de verdade são pequenos; números grandes costumam ser código de referência ("REF.7202 UN")
+    if unidades > MAX_UNIDADES_PACK:
+        return 1
+    # - o número não pode fazer parte do nome do produto (marca/modelo: "Cachaça 51", "Atum 88", "Melitta 103")
+    if str(pack_oferta) in produto.palavras or str(pack_oferta) in produto.tokens:
+        return 1
+    # - os dois nomes precisam ter medida (ml/g/kg/L). Sem ela não dá para saber se "50 UN" é o próprio
+    #   produto (guardanapo com 50 folhas, cotonete com 75 hastes) ou um pack dele
+    if not (oferta.medida and produto.medida):
+        return 1
+    # - a medida de cada unidade tem que ser a mesma: "250ML 4 LATAS" (por unidade) ou
+    #   "4X250ML" (que vira 1000ML no total) para um produto de 250ml
+    mesmo_tipo = oferta.medida[0] == produto.medida[0]
+    por_unidade = abs(oferta.medida[1] - produto.medida[1]) <= produto.medida[1] * 0.02
+    total = abs(oferta.medida[1] - produto.medida[1] * unidades) <= produto.medida[1] * unidades * 0.02
+    if not mesmo_tipo or "+" in str(nome_oferta):   # "+" = combo de produtos diferentes
+        return 1
+    if total:
+        return unidades
+    # Mesma medida dos dois lados só é pack quando o nome fala em várias embalagens ("250ML 4 LATAS").
+    # Sem isso, "CALDO 32.5G 5 UN" é a própria caixa de 32.5g (o "5 UN" são os sachês dentro dela).
+    # (só embalagens de bebida: nelas a medida do nome é sempre a de cada unidade; "PACK 141G 6 UN" de
+    # biscoito costuma ser o próprio multipack)
+    if por_unidade and RE_EMBALAGEM_BEBIDA.search(sem_acentos(str(nome_oferta)).upper()):
+        return unidades
+    return 1
+
+RE_EMBALAGEM_BEBIDA = re.compile(r"\b(LATAS?|GARRAFAS?|LONG\s*NECKS?)\b")
+
+MAX_UNIDADES_PACK = 48
 
 def gerar_id_interno(a: Assinatura):
     """ID estável e legível: o mesmo nome gera sempre o mesmo ID em todas as rodadas."""
