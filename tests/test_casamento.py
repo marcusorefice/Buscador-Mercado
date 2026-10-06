@@ -164,6 +164,23 @@ class TestPack(unittest.TestCase):
         self.assertEqual(Assinatura("BISCOITO C/ 3 SABORES", "X").pack, None)
 
 
+class TestEanErradoDoMercado(unittest.TestCase):
+    def setUp(self):
+        self.casador = CasadorProdutos(biblioteca_exemplo())
+
+    def test_produto_sem_relacao_e_preco_destoante(self):
+        self.assertTrue(cp.ean_do_mercado_errado(self.casador, "MINI BOLO KIM CHOCOLATE COM BAUNILHA 35G",
+                                                 "Escova Dental Colgate Slim Soft Black 4 Unidades", "Colgate", 0.99, 33.14))
+
+    def test_nome_escrito_diferente_nao_e_erro(self):
+        self.assertFalse(cp.ean_do_mercado_errado(self.casador, "PÃO HOT DOG WICK BOLD 200G",
+                                                  "Pão de Cachorro Quente Wickbold 200g", "Wickbold", 6.49, 7.10))
+
+    def test_sem_prova_de_preco_nao_acusa(self):
+        self.assertFalse(cp.ean_do_mercado_errado(self.casador, "MINI BOLO KIM CHOCOLATE COM BAUNILHA 35G",
+                                                  "Escova Dental Colgate Slim Soft Black 4 Unidades", "Colgate", 29.0, 33.14))
+
+
 class TestRevisao(unittest.TestCase):
     def test_exportar_e_importar_decisoes(self):
         import revisar_casamentos as rc

@@ -6,8 +6,9 @@ import logging
 import re
 
 from buscador_ean import tentar_recuperar_ean
-from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError
-from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca
+from utils import ean_eh_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, parse_preco
+import statistics
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca, ean_do_mercado_errado
 from datetime import date
 import revisar_casamentos
 
@@ -304,6 +305,38 @@ async def main():
         if ean not in itens_por_ean:
             itens_por_ean[ean] = []
         itens_por_ean[ean].append(item)
+
+    # --- EAN ERRADO NO CADASTRO DO MERCADO ---
+    # Ex: o Atacadão vende "MINI BOLO KIM 35G" com o EAN da escova Colgate. Quando o nome não tem nada
+    # a ver com o produto do EAN e o preço destoa dos outros mercados, o EAN do mercado é descartado e o
+    # item segue como "sem EAN" (casamento por nome ou grupo INT_).
+    def preco_item(item):
+        precos = [parse_preco(item.get("Preço Atacado", item.get("Preco_Atacado"))), parse_preco(item.get("Preço Varejo", item.get("Preco_Varejo")))]
+        precos = [x for x in precos if x > 0]
+        return min(precos) if precos else 0.0
+
+    eans_descartados = 0
+    for ean, lista_itens in list(itens_por_ean.items()):
+        if ean not in biblioteca or len(lista_itens) < 2:
+            continue
+        ref = biblioteca[ean]
+        precos = [preco_item(i) for i in lista_itens]
+        manter = []
+        for idx, item in enumerate(lista_itens):
+            outros = [x for j, x in enumerate(precos) if j != idx and x > 0]
+            nome_item = item.get("Produto", item.get("nome_comum", ""))
+            if outros and ean_do_mercado_errado(casador, nome_item, ref.get("nome_comum", ""), ref.get("marca"), precos[idx], statistics.median(outros)):
+                logger.warning(f"🚫 EAN do mercado descartado: '{nome_item}' ({item.get('Mercado')}) usa o EAN {ean} de '{ref.get('nome_comum')}'")
+                item["EAN_Original"] = ean
+                item["EAN"] = "N/A"
+                itens_sem_ean.append(item)
+                eans_descartados += 1
+            else:
+                manter.append(item)
+        itens_por_ean[ean] = manter
+    itens_por_ean = {k: v for k, v in itens_por_ean.items() if v}
+    if eans_descartados:
+        logger.info(f"🚫 {eans_descartados} itens com EAN de outro produto no cadastro do mercado foram tratados como sem EAN.")
 
     # --- LOOP DE VALIDAÇÃO DA DEFESA AUTOMÁTICA ---
     itens_filtrados_por_ean = {}

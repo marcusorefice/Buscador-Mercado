@@ -358,6 +358,22 @@ def nomes_conferem(casador: CasadorProdutos, nome_item, marca_item, nome_ref, ma
     ok, _ = compativel(a, b)
     return ok and casador.pontuar(a, b) >= limiar
 
+def ean_do_mercado_errado(casador: CasadorProdutos, nome_item, nome_produto, marca_produto, preco_item, preco_referencia):
+    """
+    O mercado cadastrou o EAN de outro produto? (ex: Atacadão vende "MINI BOLO KIM 35G" com o EAN da
+    escova Colgate). Só acusa com duas provas juntas, para não pegar nomes apenas escritos diferente:
+      - o nome não tem nada a ver (sem a marca do produto e quase nenhuma palavra em comum), e
+      - o preço destoa mais de 3x do preço do produto nos outros mercados.
+    """
+    a, b = Assinatura(nome_item, None), Assinatura(nome_produto, marca_produto)
+    if not a.tokens or not b.tokens or preco_item <= 0 or preco_referencia <= 0:
+        return False
+    if b.marca and (set(b.marca.split()) <= a.palavras or b.marca.replace(" ", "") in "".join(a.palavras)):
+        return False
+    if casador.pontuar(a, b) >= 0.1:
+        return False
+    return max(preco_item, preco_referencia) / min(preco_item, preco_referencia) > 3
+
 def unidades_por_pack(nome_oferta, marca_oferta, nome_produto, marca_produto):
     """
     Quantas unidades do produto vêm nesta oferta. Ex: o produto é "Red Bull 250ml" e o Carrefour
