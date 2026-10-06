@@ -34,6 +34,187 @@ IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
 USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
 RATE_LIMIT_DELAY = TECHNICAL_DEPS.get("rate_limit_delay", 0.3)
 
+def montar_item(p, agora):
+    """
+    Converte um produto da API do Pão de Açúcar (página de ofertas ou preço ao vivo) para o formato
+    do pipeline. Usado pelo scraper diário e pelo completo. Retorna None se o item deve ser ignorado.
+    """
+    nome_bruto = str(p.get('name', '')).upper().strip()
+    if not nome_bruto: return None
+    ean = str(p.get('ean', 'N/A')).strip()
+
+    # --- LÓGICA DE EXTRAÇÃO DE EAN (MELHOR ESFORÇO) ---
+    # A API de ofertas raramente fornece o EAN. Esta lógica tenta encontrá-lo em vários campos.
+    ean = ""
+    # 1. Tenta o campo 'ean'
+    ean = str(p.get('ean', '')).strip()
+    # 2. Tenta o campo 'gtin' se o 'ean' falhar
+    if not ean or len(ean) < 13:
+        ean = str(p.get('gtin', '')).strip()
+    # 3. Tenta o campo 'sku', mas apenas se tiver 13 dígitos (formato EAN-13)
+    if not ean or len(ean) < 13:
+        sku = str(p.get('sku', '')).strip()
+        if len(sku) == 13 and sku.isdigit():
+            ean = sku
+    # 4. Define o valor final como 'N/A' se nada for encontrado
+    if not ean or ean == '0': ean = 'N/A'
+
+    # Extração da URL da página de detalhes do produto (PDP)
+    link_pdp_rel = p.get('urlDetails', '') or p.get('url', '')
+    if link_pdp_rel:
+        if link_pdp_rel.startswith('http'):
+            link_pdp = link_pdp_rel
+        elif link_pdp_rel.startswith('/'):
+            link_pdp = f"{BASE_URL_CONFIG}{link_pdp_rel}"
+        else:
+            link_pdp = f"{BASE_URL_CONFIG}/{link_pdp_rel}"
+    else:
+        link_pdp = ""
+
+    # Extração de Preços via sellInfos
+    sell_infos = p.get('sellInfos') or [{}]
+    sell_info = sell_infos[0] if sell_infos else {}
+
+    # Fallback para os campos antigos caso a API omita o sellInfos em algum item
+    p_varejo_bruto = sell_info.get('sellPrice') or p.get('priceFrom')
+    p_venda_bruto = sell_info.get('currentPrice') or p.get('price')
+
+    p_varejo = float(p_varejo_bruto) if p_varejo_bruto else 0.0
+    p_venda = float(p_venda_bruto) if p_venda_bruto else 0.0
+
+    if p_varejo <= 0 and p_venda > 0: p_varejo = p_venda
+    if p_venda <= 0 and p_varejo > 0: p_venda = p_varejo
+
+    p_atacado = p_venda
+
+    if p_venda <= 0: return None
+
+    # Resgate de preços especiais (Cliente Mais) ocultos na raiz do item
+    preco_cliente_mais = p.get('clienteMaisPrice') or p.get('promotionalPrice')
+    if preco_cliente_mais:
+        try:
+            cm_val = float(preco_cliente_mais)
+            if 0 < cm_val < p_atacado:
+                p_atacado = cm_val
+        except: pass
+
+    # Captura as categorias da API
+    categorias_api = p.get('categories') or []
+    cat_site = "GERAL"
+    subcategoria = "N/A"
+    tipo_produto = "N/A"
+
+    if categorias_api and isinstance(categorias_api, list) and categorias_api[0]:
+        partes_cat = categorias_api[0].strip('/').split('/')
+        cat_site = partes_cat[0].upper() if len(partes_cat) > 0 else "GERAL"
+        if len(partes_cat) > 1: subcategoria = partes_cat[1]
+        if len(partes_cat) > 2: tipo_produto = partes_cat[2]
+    else:
+        if p.get('departmentName'):
+            cat_site = str(p.get('departmentName')).upper()
+        elif p.get('categoryName'):
+            cat_site = str(p.get('categoryName')).upper()
+
+    # VERIFICAÇÃO DE CATEGORIA (Adicione um log aqui para saber o que está sendo pulado)
+
+    # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
+    full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
+    categoria = cat_site
+
+    # --- LÓGICA DE CONDIÇÕES ---
+    condicoes = []
+
+    # 1. Promoções de Quantidade (Leve 4 Pague 2)
+    # O campo pode estar em productPromotion (singular) ou productPromotions (lista)
+    promos = p.get('productPromotions') or []
+    if not promos and p.get('productPromotion'):
+        promos = [p.get('productPromotion')]
+
+    for pr in promos:
+        buy = pr.get('promotionQuantityBuy')
+        pay = pr.get('promotionQuantityPayFor')
+        if buy and pay and buy > pay:
+            condicoes.append(f"LEVE {buy} PAGUE {pay}")
+            # Calcula o preço unitário aplicando o desconto sobre o preço cheio
+            preco_com_desconto = (p_varejo * pay) / buy
+            if preco_com_desconto < p_atacado:
+                p_atacado = preco_com_desconto
+
+        # Busca preços de desconto direto na promoção (Ex: unitPrice do Cliente Mais)
+        promo_price = pr.get('unitPrice') or pr.get('promotionPrice') or pr.get('price') or pr.get('discountPrice')
+        if promo_price:
+            try:
+                promo_price_val = float(promo_price)
+                if 0 < promo_price_val < p_atacado:
+                    p_atacado = promo_price_val
+            except: pass
+
+        # Busca descontos percentuais explícitos
+        discount_percent = pr.get('promotionPercentOff') or pr.get('discountPercentage') or pr.get('discountValue')
+        if discount_percent and not promo_price:
+            try:
+                pct = float(discount_percent)
+                if pct > 0:
+                    preco_com_desconto = p_varejo * (1 - (pct / 100))
+                    if 0 < preco_com_desconto < p_atacado:
+                        p_atacado = preco_com_desconto
+            except: pass
+
+    # 2. Cliente Mais (Se o preço no atacado ficou menor que o De/Por original)
+    if p_atacado < p_varejo or p_venda < p_varejo:
+        condicoes.append("CLIENTE MAIS (CPF)")
+
+    # 3. Fallback: 1un se não houver promo
+    txt_condicao = " | ".join(list(set(condicoes))) if condicoes else "1 UN"
+
+    # Imagem (prepend do domínio)
+    img_path = (p.get('productImages') or [None])[0]
+    # Adicionamos a barra / manualmente entre as chaves
+    img_url = f"{BASE_URL_CONFIG}/{img_path.lstrip('/')}" if img_path else ""
+
+    nome_limpo, qv, med = nome_bruto, "1", "UN"
+
+    unidade_venda = "UN"
+    if str(p.get('unit', '')).lower() == 'kg' or str(p.get('measurementUnit', '')).lower() == 'kg':
+        unidade_venda = "KG"
+        if qv == "1" and med == "UN":
+            qv, med = "1", "KG"
+
+    if nome_bruto.endswith(" KG"):
+        unidade_venda = "KG"
+        if qv == "1" and med == "UN":
+            qv, med = "1", "KG"
+
+    nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
+
+    # USAMOS O SKU OU NOME+MARCA PARA EVITAR APAGAR ITENS REPETIDOS
+    # O SKU, se disponível, é um identificador único mais confiável para evitar colisões
+    # e garantir a integridade dos dados durante a deduplicação.
+    sku = p.get('sku')
+    if sku:
+        id_unico = str(sku)
+    else:
+        id_unico = f"{nome_bruto}_{p.get('brand', 'PROPRIA')}"
+    return {
+        "ID_UNICO": id_unico, # Campo temporário para não perder dados
+        "EAN": ean,
+        "Mercado": NOME_MERCADO,
+        "Categoria": categoria,
+        "subcategoria": subcategoria,
+        "tipo_produto": tipo_produto,
+        "Produto": nome_limpo,
+        "Marca": str(p.get('brand', 'PRÓPRIA')).upper(),
+        "Preço Varejo": round(p_varejo, 2),
+        "Preço Atacado": round(p_atacado, 2),
+        "Qtd_Valor": qv,
+        "Medida": med,
+        "Unidade": unidade_venda,
+        "Condição": txt_condicao, "Data_Hora": agora,
+        "Link_Imagem": img_url,
+        "Link_PDP": link_pdp
+    }
+
+
 async def motor_extracao_paodeacucar():
     """
     Motor Sniper Linx - Bate na API de alta performance do Pão de Açúcar.
@@ -91,183 +272,12 @@ async def motor_extracao_paodeacucar():
 
                 for p in produtos:
                     try:
-                        nome_bruto = str(p.get('name', '')).upper().strip()
-                        if not nome_bruto: continue
-                        ean = str(p.get('ean', 'N/A')).strip()
-
-                        # --- LÓGICA DE EXTRAÇÃO DE EAN (MELHOR ESFORÇO) ---
-                        # A API de ofertas raramente fornece o EAN. Esta lógica tenta encontrá-lo em vários campos.
-                        ean = ""
-                        # 1. Tenta o campo 'ean'
-                        ean = str(p.get('ean', '')).strip()
-                        # 2. Tenta o campo 'gtin' se o 'ean' falhar
-                        if not ean or len(ean) < 13:
-                            ean = str(p.get('gtin', '')).strip()
-                        # 3. Tenta o campo 'sku', mas apenas se tiver 13 dígitos (formato EAN-13)
-                        if not ean or len(ean) < 13:
-                            sku = str(p.get('sku', '')).strip()
-                            if len(sku) == 13 and sku.isdigit():
-                                ean = sku
-                        # 4. Define o valor final como 'N/A' se nada for encontrado
-                        if not ean or ean == '0': ean = 'N/A'
-
-                        # Extração da URL da página de detalhes do produto (PDP)
-                        link_pdp_rel = p.get('urlDetails', '') or p.get('url', '')
-                        if link_pdp_rel:
-                            if link_pdp_rel.startswith('http'):
-                                link_pdp = link_pdp_rel
-                            elif link_pdp_rel.startswith('/'):
-                                link_pdp = f"{BASE_URL_CONFIG}{link_pdp_rel}"
-                            else:
-                                link_pdp = f"{BASE_URL_CONFIG}/{link_pdp_rel}"
-                        else:
-                            link_pdp = ""
-
-                        # Extração de Preços via sellInfos
-                        sell_infos = p.get('sellInfos', [{}])
-                        sell_info = sell_infos[0] if sell_infos else {}
-                        
-                        # Fallback para os campos antigos caso a API omita o sellInfos em algum item
-                        p_varejo_bruto = sell_info.get('sellPrice') or p.get('priceFrom')
-                        p_venda_bruto = sell_info.get('currentPrice') or p.get('price')
-                        
-                        p_varejo = float(p_varejo_bruto) if p_varejo_bruto else 0.0
-                        p_venda = float(p_venda_bruto) if p_venda_bruto else 0.0
-                        
-                        if p_varejo <= 0 and p_venda > 0: p_varejo = p_venda
-                        if p_venda <= 0 and p_varejo > 0: p_venda = p_varejo
-
-                        p_atacado = p_venda
-
-                        if p_venda <= 0: continue
-
-                        # Resgate de preços especiais (Cliente Mais) ocultos na raiz do item
-                        preco_cliente_mais = p.get('clienteMaisPrice') or p.get('promotionalPrice')
-                        if preco_cliente_mais:
-                            try:
-                                cm_val = float(preco_cliente_mais)
-                                if 0 < cm_val < p_atacado:
-                                    p_atacado = cm_val
-                            except: pass
-
-                        # Captura as categorias da API
-                        categorias_api = p.get('categories', [])
-                        cat_site = "GERAL"
-                        subcategoria = "N/A"
-                        tipo_produto = "N/A"
-
-                        if categorias_api and isinstance(categorias_api, list) and categorias_api[0]:
-                            partes_cat = categorias_api[0].strip('/').split('/')
-                            cat_site = partes_cat[0].upper() if len(partes_cat) > 0 else "GERAL"
-                            if len(partes_cat) > 1: subcategoria = partes_cat[1]
-                            if len(partes_cat) > 2: tipo_produto = partes_cat[2]
-                        else:
-                            if p.get('departmentName'):
-                                cat_site = str(p.get('departmentName')).upper()
-                            elif p.get('categoryName'):
-                                cat_site = str(p.get('categoryName')).upper()
-
-                        # VERIFICAÇÃO DE CATEGORIA (Adicione um log aqui para saber o que está sendo pulado)
-
-                        # Usa o contexto completo para uma categorização mais precisa, evitando erros da API de origem.
-                        full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
-                        categoria = cat_site
-                        
-                        # --- LÓGICA DE CONDIÇÕES ---
-                        condicoes = []
-                        
-                        # 1. Promoções de Quantidade (Leve 4 Pague 2)
-                        # O campo pode estar em productPromotion (singular) ou productPromotions (lista)
-                        promos = p.get('productPromotions', [])
-                        if not promos and p.get('productPromotion'):
-                            promos = [p.get('productPromotion')]
-
-                        for pr in promos:
-                            buy = pr.get('promotionQuantityBuy')
-                            pay = pr.get('promotionQuantityPayFor')
-                            if buy and pay and buy > pay:
-                                condicoes.append(f"LEVE {buy} PAGUE {pay}")
-                                # Calcula o preço unitário aplicando o desconto sobre o preço cheio
-                                preco_com_desconto = (p_varejo * pay) / buy
-                                if preco_com_desconto < p_atacado:
-                                    p_atacado = preco_com_desconto
-
-                            # Busca preços de desconto direto na promoção (Ex: unitPrice do Cliente Mais)
-                            promo_price = pr.get('unitPrice') or pr.get('promotionPrice') or pr.get('price') or pr.get('discountPrice')
-                            if promo_price:
-                                try:
-                                    promo_price_val = float(promo_price)
-                                    if 0 < promo_price_val < p_atacado:
-                                        p_atacado = promo_price_val
-                                except: pass
-                                    
-                            # Busca descontos percentuais explícitos
-                            discount_percent = pr.get('promotionPercentOff') or pr.get('discountPercentage') or pr.get('discountValue')
-                            if discount_percent and not promo_price:
-                                try:
-                                    pct = float(discount_percent)
-                                    if pct > 0:
-                                        preco_com_desconto = p_varejo * (1 - (pct / 100))
-                                        if 0 < preco_com_desconto < p_atacado:
-                                            p_atacado = preco_com_desconto
-                                except: pass
-
-                        # 2. Cliente Mais (Se o preço no atacado ficou menor que o De/Por original)
-                        if p_atacado < p_varejo or p_venda < p_varejo:
-                            condicoes.append("CLIENTE MAIS (CPF)")
-
-                        # 3. Fallback: 1un se não houver promo
-                        txt_condicao = " | ".join(list(set(condicoes))) if condicoes else "1 UN"
-
-                        # Imagem (prepend do domínio)
-                        img_path = p.get('productImages', [None])[0]
-                        # Adicionamos a barra / manualmente entre as chaves
-                        img_url = f"{BASE_URL_CONFIG}/{img_path.lstrip('/')}" if img_path else ""
-
-                        nome_limpo, qv, med = nome_bruto, "1", "UN"
-                        
-                        unidade_venda = "UN"
-                        if str(p.get('unit', '')).lower() == 'kg' or str(p.get('measurementUnit', '')).lower() == 'kg':
-                            unidade_venda = "KG"
-                            if qv == "1" and med == "UN":
-                                qv, med = "1", "KG"
-                                
-                        if nome_bruto.endswith(" KG"):
-                            unidade_venda = "KG"
-                            if qv == "1" and med == "UN":
-                                qv, med = "1", "KG"
-                                
-                        nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
-                        
-                        # USAMOS O SKU OU NOME+MARCA PARA EVITAR APAGAR ITENS REPETIDOS
-                        # O SKU, se disponível, é um identificador único mais confiável para evitar colisões
-                        # e garantir a integridade dos dados durante a deduplicação.
-                        sku = p.get('sku')
-                        if sku:
-                            id_unico = str(sku)
-                        else:
-                            id_unico = f"{nome_bruto}_{p.get('brand', 'PROPRIA')}"
-                        lista_final.append({
-                            "ID_UNICO": id_unico, # Campo temporário para não perder dados
-                            "EAN": ean,
-                            "Mercado": NOME_MERCADO,
-                            "Categoria": categoria,
-                            "subcategoria": subcategoria,
-                            "tipo_produto": tipo_produto,
-                            "Produto": nome_limpo,
-                            "Marca": str(p.get('brand', 'PRÓPRIA')).upper(),
-                            "Preço Varejo": round(p_varejo, 2),
-                            "Preço Atacado": round(p_atacado, 2),
-                            "Qtd_Valor": qv,
-                            "Medida": med,
-                            "Unidade": unidade_venda,
-                            "Condição": txt_condicao, "Data_Hora": agora,
-                            "Link_Imagem": img_url,
-                            "Link_PDP": link_pdp
-                        })
+                        item = montar_item(p, agora)
+                        if item:
+                            lista_final.append(item)
                     except Exception as e:
                         # Agora você sabe por que o item foi ignorado
-                        logger.warning(f"⚠️ Item ignorado por erro técnico: {nome_bruto} | Erro: {e}")
+                        logger.warning(f"⚠️ Item ignorado por erro técnico: {p.get('name')} | Erro: {e}")
                         continue
 
                 pagina_atual += 1

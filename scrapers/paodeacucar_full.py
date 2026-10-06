@@ -1,268 +1,190 @@
-import os
+"""
+Coleta do catálogo completo do Pão de Açúcar.
+
+O site deixou de trazer os produtos no HTML das páginas de categoria (os links /secoes/ dão 404 e a
+listagem por categoria da própria API também). O que funciona é a BUSCA do site, então:
+  1. pega a árvore de categorias do site e usa o nome de cada categoria (todos os níveis) como termo;
+  2. pagina a busca de cada termo (21 produtos por página) e junta os produtos pelo SKU;
+  3. consulta o preço ao vivo (de/por, promoções, Cliente Mais) em lotes, como o site faz;
+  4. converte cada produto com a mesma função do scraper diário (montar_item);
+  5. busca o EAN na página do produto, com cache entre coletas.
+"""
 import asyncio
 import json
 import re
 from datetime import datetime
+
 from curl_cffi.requests import AsyncSession
-from utils import setup_logging, read_json_file
+
+from utils import setup_logging, CacheEanPdp
+from scrapers.paodeacucar import (
+    NOME_MERCADO, BASE_URL_CONFIG, STORE_ID, IMPERSONATE, USER_AGENT, montar_item, fetch_ean_from_pdp,
+)
 
 logger = setup_logging()
 
-SPEC_FILE = os.path.join(os.path.dirname(__file__), '..', 'specs', 'paodeacucar_spec.json')
-CONFIG = read_json_file(SPEC_FILE)
+URL_BUSCA = "https://api.vendas.gpa.digital/pa/search/search"
+URL_PRECO_AO_VIVO = f"https://api.vendas.gpa.digital/pa/v3/products/ecom/skuLivePrice?storeId={STORE_ID}&sellType=null&sortBy=null&isClienteMais=true"
+POR_PAGINA = 21            # a busca ignora valores maiores
+LOTE_PRECO = 40            # mesmo tamanho de lote que o site usa
+MAX_PAGINAS_POR_TERMO = 50
+CONCORRENCIA = 6
+IS_TEST_MODE = False       # True: usa só alguns termos (teste rápido)
 
-NOME_MERCADO = CONFIG.get("market_name", "Pão de Açúcar")
-BASE_URL_CONFIG = CONFIG.get("base_url", "https://www.paodeacucar.com/").rstrip('/')
-TECHNICAL_DEPS = CONFIG.get("technical_dependencies", {})
-IMPERSONATE = TECHNICAL_DEPS.get("impersonation", "chrome120")
-USER_AGENT = TECHNICAL_DEPS.get("user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-CONCURRENCY = 15
+HEADERS = {
+    "User-Agent": USER_AGENT,
+    "accept": "application/json, text/plain, */*",
+    "content-type": "application/json",
+    "origin": BASE_URL_CONFIG,
+    "referer": f"{BASE_URL_CONFIG}/",
+}
 
-async def extract_links_from_home(session):
-    headers = {"User-Agent": USER_AGENT}
-    try:
-        res = await session.get(f"{BASE_URL_CONFIG}/", headers=headers, timeout=20)
-        match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text)
-        if not match:
-            logger.error("❌ NEXT DATA não encontrado na página inicial.")
-            return []
-            
-        data = json.loads(match.group(1))
-        
-        def extract_links(node):
-            links = []
-            if isinstance(node, dict):
-                link = node.get('link') or (node.get('attributes') and node.get('attributes').get('link'))
-                if link and isinstance(link, str) and ('/secoes/' in link or '/categoria/' in link or '/especial/' in link):
-                    links.append(link.split('?')[0]) # Remove query params for clean URLs
-                for k, v in node.items():
-                    links.extend(extract_links(v))
-            elif isinstance(node, list):
-                for item in node:
-                    links.extend(extract_links(item))
-            return links
 
-        links = extract_links(data)
-        unique_links = list(set(links))
-        return unique_links
-    except Exception as e:
-        logger.error(f"Erro ao extrair links da home: {e}")
+async def obter_termos(session):
+    """Nomes de todas as categorias do site, cada um com o nome do departamento (vira a Categoria do item)."""
+    res = await session.get(f"{BASE_URL_CONFIG}/categoria/bebidas-alcoolicas/vinhos-e-espumantes", timeout=30)
+    m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text)
+    if not m:
         return []
+    arvore = json.loads(m.group(1)).get("props", {}).get("initialProps", {}).get("layoutProps", {}).get("categories", [])
+    termos = {}
+
+    def percorrer(nos, departamento):
+        for no in nos or []:
+            nome = str(no.get("name", "")).strip()
+            dep = departamento or nome
+            if nome and nome.lower() not in termos:
+                termos[nome.lower()] = (nome, dep.upper())
+            percorrer(no.get("subCategory"), dep)
+
+    percorrer(arvore, None)
+    return list(termos.values())
+
+
+async def buscar_termo(session, termo, departamento, sem, produtos):
+    """Pagina a busca de um termo e guarda os produtos novos em `produtos` (chave: SKU)."""
+    pagina, total_paginas, novos = 1, 1, 0
+    while pagina <= min(total_paginas, MAX_PAGINAS_POR_TERMO):
+        payload = {"terms": termo, "page": pagina, "sortBy": "relevance", "resultsPerPage": POR_PAGINA,
+                   "allowRedirect": True, "storeId": STORE_ID, "department": "ecom", "customerPlus": True, "partner": "fallback"}
+        async with sem:
+            try:
+                res = await session.post(URL_BUSCA, json=payload, headers=HEADERS, timeout=30)
+                if res.status_code != 200:
+                    break
+                dados = res.json()
+            except Exception as e:
+                logger.warning(f"   [Pão de Açúcar] Falha na busca '{termo}' página {pagina}: {e}")
+                break
+        total_paginas = dados.get("totalPages") or 1
+        lista = dados.get("products") or []
+        if not lista:
+            break
+        for p in lista:
+            sku = str(p.get("sku") or "")
+            if sku and sku not in produtos:
+                produtos[sku] = {"busca": p, "departamento": departamento}
+                novos += 1
+        pagina += 1
+    return novos
+
+
+async def precos_ao_vivo(session, skus, sem):
+    """Preço ao vivo (de/por, promoções, Cliente Mais) dos SKUs, em lotes. Retorna {id_produto: dados}."""
+    resultado = {}
+
+    async def lote(parte):
+        async with sem:
+            for tentativa in range(3):
+                try:
+                    res = await session.post(URL_PRECO_AO_VIVO, json=parte, headers=HEADERS, timeout=30)
+                    if res.status_code == 200:
+                        for c in (res.json().get("content") or []):
+                            resultado[c.get("id")] = c
+                        return
+                except Exception:
+                    pass
+                await asyncio.sleep(1 + tentativa)
+
+    await asyncio.gather(*[lote(skus[i:i + LOTE_PRECO]) for i in range(0, len(skus), LOTE_PRECO)])
+    return resultado
+
+
+async def preencher_eans(session, itens):
+    """EAN pela página do produto, com cache entre coletas (o EAN de um produto não muda)."""
+    cache = CacheEanPdp(NOME_MERCADO)
+    a_buscar = []
+    for item in itens:
+        guardado = cache.buscar(item.get("Link_PDP"))
+        if guardado is None:
+            a_buscar.append(item)
+        elif guardado != "N/A":
+            item["EAN"] = guardado
+    logger.info(f"   🔍 EAN de {len(itens) - len(a_buscar)} produtos veio do cache; buscando {len(a_buscar)} páginas de produtos...")
+    sem_pdp = asyncio.Semaphore(20)
+    feitos = 0
+
+    async def um(item):
+        nonlocal feitos
+        r = await fetch_ean_from_pdp(session, item.get("Link_PDP"), sem_pdp)
+        feitos += 1
+        if feitos % 500 == 0:
+            logger.info(f"   ⏳ [Pão de Açúcar] Páginas de produto: {feitos}/{len(a_buscar)}")
+        return r
+
+    resultados = await asyncio.gather(*[um(i) for i in a_buscar])
+    for item, r in zip(a_buscar, resultados):
+        ean = r.get("ean", "N/A")
+        cache.guardar(item.get("Link_PDP"), ean)
+        if ean != "N/A":
+            item["EAN"] = ean
+    cache.salvar()
+
 
 async def motor_extracao_paodeacucar_full():
-    logger.info(f"🚀 Iniciando extração FULL CATALOG para {NOME_MERCADO}...")
-    lista_final = []
+    logger.info(f"🚀 Iniciando extração FULL CATALOG para {NOME_MERCADO} (via busca do site)...")
     agora = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    sem = asyncio.Semaphore(CONCORRENCIA)
 
-    headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"}
-    sem = asyncio.Semaphore(CONCURRENCY)
-
-    async with AsyncSession(impersonate=IMPERSONATE, headers=headers) as session:
-        logger.info("   Obtendo árvore de links da home...")
-        links = await extract_links_from_home(session)
-        logger.info(f"   Foram encontradas {len(links)} subcategorias/páginas especiais.")
-
-        if not links:
+    async with AsyncSession(impersonate=IMPERSONATE) as session:
+        termos = await obter_termos(session)
+        if not termos:
+            logger.error("   Não foi possível ler a árvore de categorias do site.")
             return []
+        if IS_TEST_MODE:
+            termos = termos[:15]
+        logger.info(f"   {len(termos)} termos de categoria para buscar...")
 
-        # Para cada link, vamos carregar a página e extrair os produtos
-        async def process_link(link_path):
-            produtos_categoria = []
-            url = f"{BASE_URL_CONFIG}{link_path}" if link_path.startswith('/') else link_path
-            
-            async with sem:
-                try:
-                    res = await session.get(url, timeout=30)
-                    if res.status_code != 200:
-                        return []
-                        
-                    match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', res.text)
-                    if not match:
-                        return []
-                        
-                    data = json.loads(match.group(1))
-                    props = data.get("props", {}).get("initialState", {})
-                    
-                    produtos_raw = []
-                    # Verifica diferentes possiveis caminhos para os produtos
-                    if "category" in props and "products" in props["category"]:
-                        produtos_raw = props["category"]["products"]
-                    elif "search" in props and "productList" in props["search"]:
-                        produtos_raw = props["search"]["productList"]
-                    elif "department" in props and "products" in props["department"]:
-                        produtos_raw = props["department"]["products"]
-                    elif "specialPage" in props and "products" in props["specialPage"]:
-                        produtos_raw = props["specialPage"]["products"]
-                    
-                    if not produtos_raw:
-                        return []
-                        
-                    for p in produtos_raw:
-                        try:
-                            nome_bruto = str(p.get('name', '')).upper().strip()
-                            if not nome_bruto: continue
+        produtos = {}
+        novos_por_termo = await asyncio.gather(*[buscar_termo(session, nome, dep, sem, produtos) for nome, dep in termos])
+        logger.info(f"   {len(produtos)} produtos únicos encontrados na busca ({sum(1 for n in novos_por_termo if n == 0)} termos sem produto novo).")
 
-                            # EAN Logic
-                            ean = ""
-                            ean = str(p.get('ean', '')).strip()
-                            if not ean or len(ean) < 13:
-                                ean = str(p.get('gtin', '')).strip()
-                            if not ean or len(ean) < 13:
-                                sku = str(p.get('sku', '')).strip()
-                                if len(sku) == 13 and sku.isdigit():
-                                    ean = sku
-                            if not ean or ean == '0': ean = 'N/A'
+        precos = await precos_ao_vivo(session, list(produtos.keys()), sem)
+        logger.info(f"   Preço ao vivo obtido para {len(precos)} produtos.")
 
-                            # Preços
-                            sell_infos = p.get('sellInfos', [{}])
-                            sell_info = sell_infos[0] if sell_infos else {}
-                            
-                            p_varejo_bruto = sell_info.get('sellPrice') or p.get('priceFrom')
-                            p_venda_bruto = sell_info.get('currentPrice') or p.get('price')
-                            
-                            p_varejo = float(p_varejo_bruto) if p_varejo_bruto else 0.0
-                            p_venda = float(p_venda_bruto) if p_venda_bruto else 0.0
-                            
-                            if p_varejo <= 0 and p_venda > 0: p_varejo = p_venda
-                            if p_venda <= 0 and p_varejo > 0: p_venda = p_varejo
-                            p_atacado = p_venda
+        itens = {}
+        for sku, info in produtos.items():
+            base = info["busca"]
+            dados = dict(base)
+            dados.update(precos.get(base.get("id")) or {})   # preço ao vivo tem de/por e promoções
+            dados.setdefault("departmentName", info["departamento"])
+            try:
+                item = montar_item(dados, agora)
+            except Exception as e:
+                logger.warning(f"   [Pão de Açúcar] Produto ignorado ({base.get('name')}): {e}")
+                continue
+            if not item:
+                continue
+            if not item.get("Categoria") or item["Categoria"] == "GERAL":
+                item["Categoria"] = info["departamento"]
+            itens[item.pop("ID_UNICO", sku)] = item
 
-                            if p_venda <= 0: continue
+        lista = list(itens.values())
+        await preencher_eans(session, lista)
 
-                            preco_cliente_mais = p.get('clienteMaisPrice') or p.get('promotionalPrice')
-                            if preco_cliente_mais:
-                                try:
-                                    cm_val = float(preco_cliente_mais)
-                                    if 0 < cm_val < p_atacado: p_atacado = cm_val
-                                except: pass
+    logger.info(f"🏆 SUCESSO! {len(lista)} produtos capturados do {NOME_MERCADO} Full Catalog.")
+    return lista
 
-                            # Categoria
-                            categorias_api = p.get('categories', [])
-                            cat_site = "GERAL"
-                            subcategoria = "N/A"
-                            tipo_produto = "N/A"
-
-                            if categorias_api and isinstance(categorias_api, list) and categorias_api[0]:
-                                partes_cat = categorias_api[0].strip('/').split('/')
-                                cat_site = partes_cat[0].upper() if len(partes_cat) > 0 else "GERAL"
-                                if len(partes_cat) > 1: subcategoria = partes_cat[1]
-                                if len(partes_cat) > 2: tipo_produto = partes_cat[2]
-                            else:
-                                if p.get('departmentName'):
-                                    cat_site = str(p.get('departmentName')).upper()
-                                elif p.get('categoryName'):
-                                    cat_site = str(p.get('categoryName')).upper()
-
-                            
-                            full_context = f"{nome_bruto} {cat_site} {subcategoria} {tipo_produto}"
-                            categoria = cat_site
-                            
-                            # Condições
-                            condicoes = []
-                            promos = p.get('productPromotions', [])
-                            if not promos and p.get('productPromotion'):
-                                promos = [p.get('productPromotion')]
-
-                            for pr in promos:
-                                buy = pr.get('promotionQuantityBuy')
-                                pay = pr.get('promotionQuantityPayFor')
-                                if buy and pay and buy > pay:
-                                    condicoes.append(f"LEVE {buy} PAGUE {pay}")
-                                    preco_com_desconto = (p_varejo * pay) / buy
-                                    if preco_com_desconto < p_atacado: p_atacado = preco_com_desconto
-
-                                promo_price = pr.get('unitPrice') or pr.get('promotionPrice') or pr.get('price') or pr.get('discountPrice')
-                                if promo_price:
-                                    try:
-                                        promo_price_val = float(promo_price)
-                                        if 0 < promo_price_val < p_atacado: p_atacado = promo_price_val
-                                    except: pass
-                                        
-                                discount_percent = pr.get('promotionPercentOff') or pr.get('discountPercentage') or pr.get('discountValue')
-                                if discount_percent and not promo_price:
-                                    try:
-                                        pct = float(discount_percent)
-                                        if pct > 0:
-                                            preco_com_desconto = p_varejo * (1 - (pct / 100))
-                                            if 0 < preco_com_desconto < p_atacado: p_atacado = preco_com_desconto
-                                    except: pass
-
-                            if p_atacado < p_varejo or p_venda < p_varejo:
-                                condicoes.append("CLIENTE MAIS (CPF)")
-
-                            txt_condicao = " | ".join(list(set(condicoes))) if condicoes else "1 UN"
-
-                            img_path = p.get('productImages', [None])[0]
-                            img_url = f"{BASE_URL_CONFIG}/{img_path.lstrip('/')}" if img_path else ""
-
-                            nome_limpo, qv, med = nome_bruto, "1", "UN"
-                            
-                            unidade_venda = "UN"
-                            if str(p.get('unit', '')).lower() == 'kg' or str(p.get('measurementUnit', '')).lower() == 'kg':
-                                unidade_venda = "KG"
-                                if qv == "1" and med == "UN":
-                                    qv, med = "1", "KG"
-                                    
-                            if nome_bruto.endswith(" KG"):
-                                unidade_venda = "KG"
-                                if qv == "1" and med == "UN":
-                                    qv, med = "1", "KG"
-                                    
-                            nome_limpo = re.sub(r'\s*KG$', '', nome_limpo, flags=re.IGNORECASE).strip()
-                            
-                            link_pdp_rel = p.get('urlDetails', '') or p.get('url', '')
-                            if link_pdp_rel:
-                                if link_pdp_rel.startswith('http'):
-                                    link_pdp = link_pdp_rel
-                                elif link_pdp_rel.startswith('/'):
-                                    link_pdp = f"{BASE_URL_CONFIG}{link_pdp_rel}"
-                                else:
-                                    link_pdp = f"{BASE_URL_CONFIG}/{link_pdp_rel}"
-                            else:
-                                link_pdp = ""
-
-                            produtos_categoria.append({
-                                "EAN": ean,
-                                "Mercado": NOME_MERCADO,
-                                "Categoria": categoria,
-                                "subcategoria": subcategoria,
-                                "tipo_produto": tipo_produto,
-                                "Produto": nome_limpo,
-                                "Marca": str(p.get('brand', 'PRÓPRIA')).upper(),
-                                "Preço Varejo": round(p_varejo, 2),
-                                "Preço Atacado": round(p_atacado, 2),
-                                "Qtd_Valor": qv,
-                                "Medida": med,
-                                "Unidade": unidade_venda,
-                                "Condição": txt_condicao, "Data_Hora": agora,
-                                "Link_Imagem": img_url,
-                                "Link_PDP": link_pdp,
-                                "ID_UNICO": p.get('sku') or f"{nome_bruto}_{p.get('brand', 'PROPRIA')}"
-                            })
-                        except Exception as e:
-                            continue
-                    return produtos_categoria
-                except Exception as e:
-                    return []
-
-        # Process batches of links to avoid overwhelming memory/connections
-        chunk_size = 50
-        for i in range(0, len(links), chunk_size):
-            chunk_links = links[i:i+chunk_size]
-            logger.info(f"   ⏳ Processando lote {i//chunk_size + 1}/{(len(links)-1)//chunk_size + 1} de {chunk_size} links...")
-            tarefas = [process_link(link) for link in chunk_links]
-            resultados = await asyncio.gather(*tarefas)
-            for res in resultados:
-                if res: lista_final.extend(res)
-            # await asyncio.sleep(0.5)
-
-    # Deduplication
-    produtos_unicos_dict = {v['ID_UNICO']: v for v in lista_final}
-    lista_unica = list(produtos_unicos_dict.values())
-    for item in lista_unica: item.pop("ID_UNICO", None)
-    
-    logger.info(f"🏆 SUCESSO! {len(lista_unica)} ofertas únicas capturadas do {NOME_MERCADO} Full Catalog.")
-    return lista_unica
 
 async def extrair_dados():
     return await motor_extracao_paodeacucar_full()
