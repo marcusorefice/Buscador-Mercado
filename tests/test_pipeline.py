@@ -130,7 +130,9 @@ class TestApiMontarProdutos(unittest.TestCase):
             dict(base, mercado="Caro", preco_varejo=10, preco_atacado=0, preco_efetivo=10),
             dict(base, mercado="Barato", preco_varejo=8, preco_atacado=7, preco_efetivo=7),
         ]
-        [produto] = api._montar_produtos(rows)
+        [bruto] = api._montar_produtos(rows)
+        # A API devolve dicionários sem revalidar; o formato precisa continuar batendo com o modelo
+        produto = api.ProdutoAgrupadoResponse(**bruto)
         self.assertEqual([o.Mercado for o in produto.Ofertas], ["Barato", "Caro"])
         self.assertEqual(produto.Menor_Preco, 7)
         self.assertEqual(produto.Tags, ["a", "b"])

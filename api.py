@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 import os
 import base64
 import re
@@ -115,6 +116,10 @@ def get_db_cursor():
     """Pega uma conexão do pool e devolve sempre, mesmo se der erro."""
     pool = _get_pool()
     conn = pool.getconn()
+    # Sem transação explícita: as consultas são leituras ou um INSERT só, e cada COMMIT seria mais uma
+    # ida e volta até o banco
+    if not conn.autocommit:
+        conn.autocommit = True
     try:
         with conn.cursor() as cursor:
             yield cursor
@@ -227,8 +232,14 @@ def _montar_produtos(rows):
         data["Ofertas"] = [o for _, o in pares]
         validos = [p for p in precos if p is not None]
         data["Menor_Preco"] = min(validos) if validos else 0.0
-        result.append(ProdutoAgrupadoResponse(**data))
+        result.append(data)
     return result
+
+def _resposta_json(produtos):
+    """Devolve a lista já montada sem a revalidação do FastAPI/pydantic (no plano gratuito do Render, com
+    CPU bem fraca, validar ~200 produtos e ~1200 ofertas a cada pedido custava quase 1 s). O formato
+    continua o de ProdutoAgrupadoResponse."""
+    return JSONResponse(content=produtos)
 
 @app.get("/produtos", response_model=List[ProdutoAgrupadoResponse])
 def get_produtos(
@@ -308,40 +319,42 @@ def get_produtos(
     else:
         order_sql = f"{economia_sql} DESC, menor_preco ASC NULLS LAST, a.ean"
 
-    # 1º calcula o ranking e corta em 200 DENTRO do banco; 2º busca as ofertas só desses produtos.
+    # Calcula o ranking e corta em 200 DENTRO do banco, já trazendo as ofertas desses produtos.
     query_ranking = f'''
         WITH agregadas AS ({agregadas_sql}),
         popularidade AS (
             SELECT ean, SUM(vezes) AS vezes FROM visualizacoes_dia
             WHERE dia >= CURRENT_DATE - {DIAS_POPULARIDADE} GROUP BY ean
         )
-        SELECT a.ean FROM agregadas a
-        LEFT JOIN popularidade pop ON pop.ean = a.ean
-        LEFT JOIN produtos prod ON prod.ean = a.ean
-        {filtro_relevancia}
-        ORDER BY {order_sql}
-        LIMIT {LIMITE_PRODUTOS}
+        ,
+        ranking AS (
+            -- Corta nos 200 primeiros (top-N, rápido) e só então numera, na ordem em que vieram
+            SELECT ean, ROW_NUMBER() OVER () AS posicao FROM (
+                SELECT a.ean
+                FROM agregadas a
+                LEFT JOIN popularidade pop ON pop.ean = a.ean
+                LEFT JOIN produtos prod ON prod.ean = a.ean
+                {filtro_relevancia}
+                ORDER BY {order_sql}
+                LIMIT {LIMITE_PRODUTOS}
+            ) primeiros
+        )
+        -- Ofertas válidas só dos produtos do ranking, respeitando o mesmo filtro de mercado
+        SELECT {COLUNAS_OFERTA}
+        FROM ranking r
+        JOIN ofertas_validas v ON v.ean = r.ean
+        JOIN produtos p ON p.ean = v.ean
+        {"WHERE v.mercado = %s" if filtro_mercado else ""}
+        ORDER BY r.posicao
     '''
 
+    # Uma consulta só: o banco (São Paulo) fica longe do servidor da API e cada ida e volta custa ~0,2 s
     with get_db_cursor() as cursor:
         _garantir_tabelas_interesse(cursor)
         _garantir_visoes(cursor)
-        cursor.execute(query_ranking, params)
-        eans_ordenados = [r["ean"] for r in cursor.fetchall()]
-        if not eans_ordenados:
-            return []
-
-        # Ofertas válidas só dos produtos do ranking, respeitando o mesmo filtro de mercado
-        cursor.execute(f'''
-            SELECT {COLUNAS_OFERTA}
-            FROM ofertas_validas v JOIN produtos p ON p.ean = v.ean
-            WHERE v.ean = ANY(%s) {"AND v.mercado = %s" if filtro_mercado else ""}
-        ''', [eans_ordenados] + ([market] if filtro_mercado else []))
+        cursor.execute(query_ranking, params + ([market] if filtro_mercado else []))
         rows = cursor.fetchall()
-
-    posicao = {ean: i for i, ean in enumerate(eans_ordenados)}
-    rows.sort(key=lambda r: posicao[r["ean"]])
-    return _montar_produtos(rows)
+    return _resposta_json(_montar_produtos(rows))
 
 @app.get("/produtos/lote", response_model=List[ProdutoAgrupadoResponse])
 def get_produtos_lote(eans: str = Query(..., description="EANs separados por vírgula (máx. 200)")):
@@ -357,7 +370,7 @@ def get_produtos_lote(eans: str = Query(..., description="EANs separados por ví
             WHERE v.ean = ANY(%s)
         ''', (lista,))
         rows = cursor.fetchall()
-    return _montar_produtos(rows)
+    return _resposta_json(_montar_produtos(rows))
 
 @app.get("/buscas-populares")
 def buscas_populares(limite: int = Query(8, ge=1, le=20)):
