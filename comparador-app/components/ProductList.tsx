@@ -7,11 +7,12 @@ interface ProductListProps {
   products: Product[];
   refreshing: boolean;
   onRefresh: () => void;
+  onEndReached?: () => void;
   ListEmptyComponent: React.ComponentType<any> | React.ReactElement | null | undefined;
   onProductPress: (product: Product) => void;
 }
 
-export const ProductList = memo(({ products, refreshing, onRefresh, ListEmptyComponent, onProductPress }: ProductListProps) => {
+export const ProductList = memo(({ products, refreshing, onRefresh, onEndReached, ListEmptyComponent, onProductPress }: ProductListProps) => {
   const renderItem = useCallback(({ item }: { item: Product }) => (
     <ProductCard product={item} onPress={onProductPress} />
   ), [onProductPress]);
@@ -27,6 +28,8 @@ export const ProductList = memo(({ products, refreshing, onRefresh, ListEmptyCom
       showsVerticalScrollIndicator={false}
       onRefresh={onRefresh}
       refreshing={refreshing}
+      onEndReached={onEndReached}
+      onEndReachedThreshold={0.6}
       ListEmptyComponent={ListEmptyComponent}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="on-drag"

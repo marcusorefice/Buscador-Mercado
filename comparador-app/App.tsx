@@ -22,6 +22,9 @@ const API_URL = __DEV__
 // As sugestões da busca (Typesense) vêm pela API em /autocompletar: o Android bloqueia HTTP sem
 // criptografia nos APKs, então o app não fala direto com o servidor do Typesense.
 
+// Quantos produtos vêm por vez; o resto carrega conforme a pessoa rola a lista
+const TAMANHO_PAGINA = 40;
+
 const theme = {
   ...DefaultTheme,
   colors: {
@@ -85,6 +88,11 @@ export default function App() {
   const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
   const [dynamicTags, setDynamicTags] = useState<string[]>(['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó']);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const productsRef = useRef<Product[]>([]);
+  const temMaisRef = useRef(false);
+  const carregandoMaisRef = useRef(false);
+  const queryCarregadaRef = useRef('');
+  const sugestoesCacheRef = useRef<Map<string, string[]>>(new Map());
   const autocompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -104,6 +112,8 @@ export default function App() {
   const [selectedMarket, setSelectedMarket] = useState('Todos os Mercados');
   const [isMarketModalVisible, setMarketModalVisible] = useState(false);
 
+  productsRef.current = products;
+
   const fetchProducts = useCallback(async (queryOverride?: string, isRefresh = false) => {
     // Enquanto a pessoa digita saem várias buscas; só a última pode mexer na tela
     const pedido = ++ultimoPedidoProdutosRef.current;
@@ -116,7 +126,7 @@ export default function App() {
     setError(null);
     try {
       const currentQuery = queryOverride !== undefined ? queryOverride : searchQueryRef.current;
-      const params: any = { q: currentQuery, sort_by: sortBy };
+      const params: any = { q: currentQuery, sort_by: sortBy, limite: TAMANHO_PAGINA };
       if (selectedMarket !== 'Todos os Mercados') {
         params.market = selectedMarket;
       }
@@ -142,11 +152,12 @@ export default function App() {
             if (translatedName) {
               const fallbackQuery = `${translatedName} ${translatedBrand}`.trim();
               const fallbackRes = await axios.get<Product[]>(`${API_URL}/produtos`, {
-                params: { q: fallbackQuery, sort_by: sortBy, ...(selectedMarket !== 'Todos os Mercados' && { market: selectedMarket }) },
+                params: { q: fallbackQuery, sort_by: sortBy, limite: TAMANHO_PAGINA, ...(selectedMarket !== 'Todos os Mercados' && { market: selectedMarket }) },
                 headers: { 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' }
               });
               if (fallbackRes.data.length > 0 && pedidoAtual()) {
                 setProducts(fallbackRes.data);
+                temMaisRef.current = false;
                 setLoading(false);
                 setRefreshing(false);
                 return;
@@ -159,6 +170,8 @@ export default function App() {
       }
 
       setProducts(response.data);
+      temMaisRef.current = response.data.length >= TAMANHO_PAGINA;
+      queryCarregadaRef.current = currentQuery;
 
       // Otimização Extrema (Offline-first): Salva em cache se for a busca inicial padrão
       if (!currentQuery && selectedMarket === 'Todos os Mercados' && sortBy === 'relevance') {
@@ -207,6 +220,42 @@ export default function App() {
     fetchProducts();
   }, [fetchProducts]);
 
+  // Cancela a busca anterior se o usuário continuar digitando e busca sozinho após uma pausa curta
+  const agendarBusca = (text: string) => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      fetchProducts(text);
+    }, 300);
+  };
+
+  const carregarMais = async () => {
+    if (!temMaisRef.current || carregandoMaisRef.current || loading) return;
+    const pedido = ultimoPedidoProdutosRef.current;
+    const consulta = queryCarregadaRef.current;
+    carregandoMaisRef.current = true;
+    try {
+      const params: any = { q: consulta, sort_by: sortBy, limite: TAMANHO_PAGINA, offset: productsRef.current.length };
+      if (selectedMarket !== 'Todos os Mercados') params.market = selectedMarket;
+      const response = await axios.get<Product[]>(`${API_URL}/produtos`, {
+        params,
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+      });
+      // Se começou outra busca enquanto isso, esta página não vale mais
+      if (pedido !== ultimoPedidoProdutosRef.current) return;
+      temMaisRef.current = response.data.length >= TAMANHO_PAGINA;
+      setProducts(atuais => {
+        const jaTem = new Set(atuais.map(p => p.EAN));
+        return [...atuais, ...response.data.filter(p => !jaTem.has(p.EAN))];
+      });
+    } catch (e) {
+      // Falhou: deixa tentar de novo na próxima rolagem
+    } finally {
+      carregandoMaisRef.current = false;
+    }
+  };
+
   const handleSearchChange = (text: string) => {
     setSearchQuery(text);
     searchQueryRef.current = text;
@@ -216,6 +265,12 @@ export default function App() {
 
     // Sugestões instantâneas (Typesense, via API)
     if (text.length > 0) {
+      const chave = text.trim().toLowerCase();
+      const guardadas = sugestoesCacheRef.current.get(chave);
+      if (guardadas) {
+        setTextSuggestions(guardadas);
+        return agendarBusca(text);
+      }
       autocompleteTimeoutRef.current = setTimeout(async () => {
         try {
           const response = await axios.get<{ sugestoes: string[] }>(`${API_URL}/autocompletar`, {
@@ -224,25 +279,19 @@ export default function App() {
             timeout: 5000,
           });
           // Ignora a resposta se a pessoa já mudou o texto enquanto ela chegava
+          sugestoesCacheRef.current.set(chave, response.data.sugestoes || []);
           if (searchQueryRef.current === text) {
             setTextSuggestions(response.data.sugestoes || []);
           }
         } catch (e) {
           console.error("Falha no autocomplete:", e);
         }
-      }, 250); // espera a pessoa parar de digitar por 250ms
+      }, 120); // espera a pessoa parar de digitar por 120ms
     } else {
       setTextSuggestions([]);
     }
 
-    // Cancela a busca anterior se o usuário continuar digitando
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
-    // Aguarda 500ms após o usuário parar de digitar para buscar automaticamente
-    searchTimeoutRef.current = setTimeout(() => {
-      fetchProducts(text);
-    }, 500);
+    agendarBusca(text);
   };
 
   const saveSearchToHistory = async (query: string) => {
@@ -467,6 +516,7 @@ export default function App() {
                 products={products}
                 refreshing={refreshing}
                 onRefresh={handleRefresh}
+                onEndReached={carregarMais}
                 onProductPress={handleProductPress}
                 ListEmptyComponent={listEmptyComponent}
               />
