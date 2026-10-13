@@ -135,6 +135,8 @@ export default function App() {
   const [cepDigitado, setCepDigitado] = useState('');
   // Busca que a pessoa pediu: só entra no histórico (e nos atalhos) se achar produtos
   const buscaPendenteRef = useRef('');
+  // Quando a API corrige um erro de digitação (ex: heinekem -> heineken), guardamos os dois para avisar a pessoa
+  const [buscaCorrigida, setBuscaCorrigida] = useState<{ digitada: string; corrigida: string } | null>(null);
 
   productsRef.current = products;
 
@@ -151,6 +153,8 @@ export default function App() {
     try {
       const currentQuery = queryOverride !== undefined ? queryOverride : searchQueryRef.current;
       const params: any = { q: currentQuery, sort_by: sortBy, limite: TAMANHO_PAGINA };
+      // Só buscas confirmadas (Enter, atalho, sugestão) contam para os "mais buscados"; o que sai enquanto digita não
+      if (buscaPendenteRef.current && buscaPendenteRef.current === currentQuery.trim().toLowerCase()) params.registrar = true;
       if (selectedMarket !== 'Todos os Mercados') {
         params.market = selectedMarket;
       }
@@ -193,14 +197,18 @@ export default function App() {
         }
       }
 
+      const cabecalho = response.headers?.['x-busca-corrigida'];
+      const corrigida = cabecalho ? decodeURIComponent(String(cabecalho)) : '';
+      setBuscaCorrigida(corrigida ? { digitada: currentQuery.trim(), corrigida } : null);
+
       setProducts(response.data);
       temMaisRef.current = response.data.length >= TAMANHO_PAGINA;
-      queryCarregadaRef.current = currentQuery;
+      queryCarregadaRef.current = corrigida || currentQuery; // as próximas páginas usam a busca já corrigida
 
       if (response.data.length > 0 && buscaPendenteRef.current && buscaPendenteRef.current === currentQuery.trim().toLowerCase()) {
         const achada = buscaPendenteRef.current;
         buscaPendenteRef.current = '';
-        guardarNoHistorico(achada);
+        guardarNoHistorico(corrigida || achada); // erro de digitação não vira atalho
       }
 
       // Otimização Extrema (Offline-first): Salva em cache se for a busca inicial padrão
@@ -561,6 +569,14 @@ export default function App() {
           </View>
 
           <View style={styles.mainContent}>
+            {buscaCorrigida && (
+              <View style={styles.correcaoBanner}>
+                <Text style={styles.correcaoTexto}>
+                  Mostrando resultados para <Text style={{ fontWeight: 'bold' }}>“{buscaCorrigida.corrigida}”</Text>
+                  {'  '}(você digitou “{buscaCorrigida.digitada}”)
+                </Text>
+              </View>
+            )}
             {loading && products.length === 0 ? (
               <ScrollView contentContainerStyle={styles.skeletonContainer} showsVerticalScrollIndicator={false}>
                 {[1, 2, 3, 4, 5, 6].map((key) => (
@@ -828,6 +844,8 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  correcaoBanner: { backgroundColor: '#FFF4E5', paddingVertical: 8, paddingHorizontal: 14 },
+  correcaoTexto: { fontSize: 13, color: '#8A5300' },
   vazioContainer: { padding: 24, alignItems: 'center' },
   vazioTitulo: { fontSize: 17, fontWeight: 'bold', color: '#333', textAlign: 'center', marginBottom: 8 },
   vazioDica: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 20, marginBottom: 16 },

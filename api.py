@@ -2,6 +2,7 @@ from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from urllib.parse import quote
 import os
 import base64
 import re
@@ -58,6 +59,8 @@ class _CacheTTL:
 
 _cache_produtos = _CacheTTL(ttl=120, maximo=100)
 _cache_autocomplete = _CacheTTL(ttl=600, maximo=1000)
+_cache_correcoes = _CacheTTL(ttl=600, maximo=1000)  # (busca, filtros...) -> busca corrigida usada na resposta
+_cache_correcoes_busca = {}  # busca digitada -> busca corrigida pelo Typesense (ou None)
 # Conexão reaproveitada com o Typesense: evita abrir uma conexão TCP nova a cada letra digitada
 _http_typesense = httpx.Client(timeout=3)
 
@@ -86,6 +89,50 @@ def _tipo_principal(q):
         if chave in TIPOS_PRINCIPAIS:
             return TIPOS_PRINCIPAIS[chave]
     return None
+
+def _regex_python(padrao):
+    """Os regex de TIPOS_PRINCIPAIS são do Postgres, onde início e fim de palavra são "m" e "M" com barra; no Python é "b" com barra."""
+    return re.sub(r"\\[mM]", r"\\b", padrao)
+
+def _ordenar_sugestoes(q, nomes):
+    """Sugestões do autocomplete: primeiro o que COMEÇA com o termo, depois o que tem o termo como palavra
+    e só no fim o que casou por marca/tag ("leite" não deve abrir com "Desodorante Leite de Rosas"). Para
+    termos genéricos, o tipo mais comum (leite longa vida...) vem na frente."""
+    termo = _normalizar_termo(q)
+    principal = _tipo_principal(q)
+
+    def pontos(nome):
+        n = _normalizar_termo(nome)
+        if n.startswith(termo):
+            p = 0
+        elif f" {termo}" in f" {n}":
+            p = 1
+        else:
+            p = 2
+        if principal and re.search(_regex_python(principal[0]), nome, re.I) and not re.search(_regex_python(principal[1]), nome, re.I):
+            p -= 0.5
+        return p
+
+    # No mesmo grupo, nome mais curto primeiro (o produto básico antes de "Pack ... + ... + ...")
+    return sorted(nomes, key=lambda nome: (pontos(nome), len(nome)))
+
+# Cada letra sem acento vira uma lista com as versões acentuadas, para a busca achar "feijao" e "feijão" do
+# mesmo jeito. Fazer isso no termo (e não converter a coluna inteira no banco) mantém a busca rápida.
+_VARIANTES_ACENTO = {
+    "a": "aáàâãä", "e": "eéèêë", "i": "iíìîï", "o": "oóòôõö", "u": "uúùûü", "c": "cç",
+}
+
+def _padrao_sem_acento(palavra):
+    """Regex (Postgres, sem diferenciar maiúsculas) que casa a palavra com ou sem acento."""
+    partes = []
+    for letra in _normalizar_termo(palavra):
+        if letra in _VARIANTES_ACENTO:
+            partes.append(f"[{_VARIANTES_ACENTO[letra]}]")
+        elif letra.isalnum():
+            partes.append(letra)
+        else:
+            partes.append("\\" + letra)  # pontuação (+, ., -...) vira literal
+    return "".join(partes)
 
 _pool: Optional[ThreadedConnectionPool] = None
 _pool_lock = threading.Lock()
@@ -197,6 +244,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Busca-Corrigida"],  # o app (na web) precisa ler este cabeçalho
 )
 
 class OfertaResponse(BaseModel):
@@ -284,33 +332,18 @@ def _montar_produtos(rows):
         result.append(data)
     return result
 
-def _resposta_json(produtos):
+def _resposta_json(produtos, busca_corrigida=None):
     """Devolve a lista já montada sem a revalidação do FastAPI/pydantic (no plano gratuito do Render, com
     CPU bem fraca, validar ~200 produtos e ~1200 ofertas a cada pedido custava quase 1 s). O formato
     continua o de ProdutoAgrupadoResponse."""
-    return JSONResponse(content=produtos)
+    headers = {"X-Busca-Corrigida": quote(busca_corrigida)} if busca_corrigida else None
+    return JSONResponse(content=produtos, headers=headers)
 
-@app.get("/produtos", response_model=List[ProdutoAgrupadoResponse])
-def get_produtos(
-    background_tasks: BackgroundTasks,
-    q: str = Query(None, description="Busca por nome do produto ou marca"),
-    sort_by: str = Query("discount", description="Ordenação: relevance (em alta), discount ou price"),
-    market: str = Query(None, description="Filtrar por mercado específico"),
-    limite: int = Query(LIMITE_PRODUTOS, ge=1, le=LIMITE_PRODUTOS, description="Produtos por página"),
-    offset: int = Query(0, ge=0, le=10000, description="Quantos produtos pular (paginação)")
-):
-    chave_cache = (q or "", sort_by, market or "", limite, offset)
-    em_cache = _cache_produtos.get(chave_cache)
-    if em_cache is not None:
-        if q and not q.isdigit():
-            background_tasks.add_task(_registrar_busca, q)
-        return _resposta_json(em_cache)
-
+def _consultar_produtos(q, sort_by, market, limite, offset):
+    """Monta e roda a consulta de produtos (ranking, página e ofertas) e devolve a lista pronta."""
     params_texto = []
     where_clauses = []
     e_busca_ean = bool(q) and q.isdigit() and len(q) >= 8
-    if q and not e_busca_ean:
-        background_tasks.add_task(_registrar_busca, q)
 
     if q:
         # Se a busca for um número longo, trata como busca exata por EAN (usado pelo scanner e pelo modal de detalhes)
@@ -320,9 +353,13 @@ def get_produtos(
             params_texto.extend([q, q + r"\_%"])
         else:
             # Permite múltiplas palavras-chave
+            # Com ou sem acento: "feijao" e "feijão" acham os mesmos produtos
             for termo in q.split():
-                where_clauses.append('(p.nome_comum ILIKE %s OR o.nome_original ILIKE %s OR p.marca ILIKE %s OR p.tags ILIKE %s)')
-                params_texto.extend([f"%{termo}%"] * 4)
+                padrao = _padrao_sem_acento(termo)
+                if not padrao:
+                    continue
+                where_clauses.append('(p.nome_comum ~* %s OR o.nome_original ~* %s OR p.marca ~* %s OR p.tags ~* %s)')
+                params_texto.extend([padrao] * 4)
 
     filtro_mercado = bool(market) and market.lower() != "todos os mercados"
     candidatos = ""
@@ -417,9 +454,85 @@ def get_produtos(
         _garantir_visoes(cursor)
         cursor.execute(query_ranking, params + ([market] if filtro_mercado else []))
         rows = cursor.fetchall()
-    produtos = _montar_produtos(rows)
+    return _montar_produtos(rows)
+
+def _corrigir_busca(q):
+    """Busca sem resultado: o Typesense tolera erro de digitação e diz como seria a busca certa
+    ("cerveja heinekem" -> "cerveja heineken"). Devolve None se não achar nada parecido."""
+    if not TYPESENSE_SEARCH_KEY:
+        return None
+    chave = q.strip().lower()
+    if chave in _cache_correcoes_busca:
+        return _cache_correcoes_busca[chave]
+    corrigida = None
+    try:
+        resp = _http_typesense.get(
+            f"{TYPESENSE_URL}/collections/produtos/documents/search",
+            params={"q": q, "query_by": "nome_comum,marca", "per_page": 1, "num_typos": 2, "drop_tokens_threshold": 0},
+            headers={"X-TYPESENSE-API-KEY": TYPESENSE_SEARCH_KEY},
+        )
+        resp.raise_for_status()
+        hits = resp.json().get("hits", [])
+        if hits:
+            destaques = hits[0].get("highlight", {})
+            palavras = []
+            for campo in ("nome_comum", "marca"):
+                for palavra in (destaques.get(campo) or {}).get("matched_tokens", []):
+                    palavra = palavra.lower()
+                    if palavra not in palavras:
+                        palavras.append(palavra)
+                if palavras:
+                    break
+            candidata = " ".join(palavras)
+            if candidata and candidata != chave:
+                corrigida = candidata
+    except (httpx.HTTPError, ValueError) as e:
+        print(f"Erro ao corrigir busca no Typesense: {e}")
+        return None  # falha momentânea: não guarda, tenta de novo na próxima
+    if len(_cache_correcoes_busca) >= 1000:
+        _cache_correcoes_busca.clear()
+    _cache_correcoes_busca[chave] = corrigida
+    return corrigida
+
+def _registrar_se_achou(background_tasks, termo, produtos, confirmada):
+    """Só conta a busca (chips "mais buscados") se a pessoa a confirmou (Enter, atalho ou sugestão; o app avisa
+    com registrar=true) e se achou produtos. Enquanto digita, o app pesquisa a cada pausa ("lei", "leit"...) e
+    isso não pode virar atalho."""
+    if confirmada and termo and produtos:
+        background_tasks.add_task(_registrar_busca, termo)
+
+@app.get("/produtos", response_model=List[ProdutoAgrupadoResponse])
+def get_produtos(
+    background_tasks: BackgroundTasks,
+    q: str = Query(None, description="Busca por nome do produto ou marca"),
+    sort_by: str = Query("discount", description="Ordenação: relevance (em alta), discount ou price"),
+    market: str = Query(None, description="Filtrar por mercado específico"),
+    limite: int = Query(LIMITE_PRODUTOS, ge=1, le=LIMITE_PRODUTOS, description="Produtos por página"),
+    offset: int = Query(0, ge=0, le=10000, description="Quantos produtos pular (paginação)"),
+    registrar: bool = Query(False, description="A pessoa confirmou esta busca: conta para os mais buscados")
+):
+    chave_cache = (q or "", sort_by, market or "", limite, offset)
+    em_cache = _cache_produtos.get(chave_cache)
+    if em_cache is not None:
+        corrigida = _cache_correcoes.get(chave_cache)
+        _registrar_se_achou(background_tasks, corrigida or q, em_cache, registrar)
+        return _resposta_json(em_cache, corrigida)
+
+    produtos = _consultar_produtos(q, sort_by, market, limite, offset)
+    corrigida = None
+    e_busca_ean = bool(q) and q.isdigit() and len(q) >= 8
+    if not produtos and q and not e_busca_ean and offset == 0:
+        # Nada achado: tenta de novo com a busca corrigida pelo Typesense (erro de digitação)
+        nova = _corrigir_busca(q)
+        if nova:
+            produtos = _consultar_produtos(nova, sort_by, market, limite, offset)
+            if produtos:
+                corrigida = nova
     _cache_produtos.set(chave_cache, produtos)
-    return _resposta_json(produtos)
+    if corrigida:
+        _cache_correcoes.set(chave_cache, corrigida)
+    _registrar_se_achou(background_tasks, corrigida or q, produtos, registrar)
+    return _resposta_json(produtos, corrigida)
 
 @app.get("/produtos/lote", response_model=List[ProdutoAgrupadoResponse])
 def get_produtos_lote(eans: str = Query(..., description="EANs separados por vírgula (máx. 200)")):
@@ -491,20 +604,26 @@ def autocompletar(q: str = Query(..., min_length=1, max_length=100)):
     if em_cache is not None:
         return {"sugestoes": em_cache}
     try:
-        resp = _http_typesense.get(
-            f"{TYPESENSE_URL}/collections/produtos/documents/search",
-            params={"q": q, "query_by": "nome_comum,marca,tags", "per_page": 8, "prefix": "true"},
-            headers={"X-TYPESENSE-API-KEY": TYPESENSE_SEARCH_KEY},
-        )
-        resp.raise_for_status()
+        # Primeiro só pelo nome do produto ("leite" não deve abrir com "Desodorante Leite de Rosas"); marca e tags
+        # só entram se o nome não bastar. Traz bastante coisa e reordena aqui (o que começa com o termo vem antes).
+        nomes = []
+        for query_by, por_pagina in (("nome_comum", 50), ("nome_comum,marca,tags", 20)):
+            resp = _http_typesense.get(
+                f"{TYPESENSE_URL}/collections/produtos/documents/search",
+                params={"q": q, "query_by": query_by, "per_page": por_pagina, "prefix": "true"},
+                headers={"X-TYPESENSE-API-KEY": TYPESENSE_SEARCH_KEY},
+            )
+            resp.raise_for_status()
+            for hit in resp.json().get("hits", []):
+                nome = hit.get("document", {}).get("nome_comum")
+                if nome and nome not in nomes:
+                    nomes.append(nome)
+            if len(nomes) >= 6:
+                break
     except httpx.HTTPError as e:
         print(f"Erro no Typesense: {e}")
         raise HTTPException(status_code=502, detail="Autocomplete indisponível.")
-    sugestoes = []
-    for hit in resp.json().get("hits", []):
-        nome = hit.get("document", {}).get("nome_comum")
-        if nome and nome not in sugestoes:
-            sugestoes.append(nome)
+    sugestoes = _ordenar_sugestoes(q, nomes)
     _cache_autocomplete.set(chave, sugestoes[:6])
     return {"sugestoes": sugestoes[:6]}
 
