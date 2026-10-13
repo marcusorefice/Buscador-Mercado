@@ -7,6 +7,7 @@ import { ProductList } from './components/ProductList';
 import { ProductDetailsModal } from './components/ProductDetailsModal';
 import { ShoppingListModal } from './components/ShoppingListModal';
 import { useShoppingListStore } from './components/useShoppingListStore';
+import { usePreferenciasStore, formatarCep, CEP_PADRAO } from './components/usePreferenciasStore';
 import { Product } from './types';
 import { SkeletonCard } from './components/SkeletonCard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -54,11 +55,11 @@ const MARKETS = [
 
 type Ordenacao = 'relevance' | 'discount' | 'price';
 
-// O botão de ordenação alterna entre as três, nessa ordem
-const ORDENACOES: Record<Ordenacao, { titulo: string; icone: string; proxima: Ordenacao }> = {
-  relevance: { titulo: 'Em Alta', icone: 'fire', proxima: 'discount' },
-  discount: { titulo: 'Maiores Descontos', icone: 'percent', proxima: 'price' },
-  price: { titulo: 'Menores Preços', icone: 'currency-usd', proxima: 'relevance' },
+// O botão de ordenação abre um menu com todas as opções
+const ORDENACOES: Record<Ordenacao, { titulo: string; icone: string; descricao: string }> = {
+  relevance: { titulo: 'Em Alta', icone: 'fire', descricao: 'Os produtos mais procurados primeiro' },
+  discount: { titulo: 'Maiores Descontos', icone: 'percent', descricao: 'Maior queda de preço primeiro' },
+  price: { titulo: 'Menores Preços', icone: 'currency-usd', descricao: 'Do mais barato para o mais caro' },
 };
 
 const TAGS_PADRAO = ['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó'];
@@ -127,6 +128,13 @@ export default function App() {
   const ultimoPedidoProdutosRef = useRef(0);
   const [selectedMarket, setSelectedMarket] = useState('Todos os Mercados');
   const [isMarketModalVisible, setMarketModalVisible] = useState(false);
+  const [isSortModalVisible, setSortModalVisible] = useState(false);
+  const [isSettingsVisible, setSettingsVisible] = useState(false);
+  const cepSalvo = usePreferenciasStore(state => state.cep);
+  const setCepSalvo = usePreferenciasStore(state => state.setCep);
+  const [cepDigitado, setCepDigitado] = useState('');
+  // Busca que a pessoa pediu: só entra no histórico (e nos atalhos) se achar produtos
+  const buscaPendenteRef = useRef('');
 
   productsRef.current = products;
 
@@ -188,6 +196,12 @@ export default function App() {
       setProducts(response.data);
       temMaisRef.current = response.data.length >= TAMANHO_PAGINA;
       queryCarregadaRef.current = currentQuery;
+
+      if (response.data.length > 0 && buscaPendenteRef.current && buscaPendenteRef.current === currentQuery.trim().toLowerCase()) {
+        const achada = buscaPendenteRef.current;
+        buscaPendenteRef.current = '';
+        guardarNoHistorico(achada);
+      }
 
       // Otimização Extrema (Offline-first): Salva em cache se for a busca inicial padrão
       if (!currentQuery && selectedMarket === 'Todos os Mercados' && sortBy === 'relevance') {
@@ -310,9 +324,12 @@ export default function App() {
     agendarBusca(text);
   };
 
-  const saveSearchToHistory = async (query: string) => {
+  const saveSearchToHistory = (query: string) => {
     if (!query || query.trim().length < 3) return;
-    const q = query.trim().toLowerCase();
+    buscaPendenteRef.current = query.trim().toLowerCase();
+  };
+
+  const guardarNoHistorico = async (q: string) => {
     try {
       const history = await AsyncStorage.getItem('@search_history');
       let parsed: Record<string, number> = history ? JSON.parse(history) : {};
@@ -372,12 +389,38 @@ export default function App() {
 
   const listEmptyComponent = useMemo(() => {
     if (loading) return null;
+    const termo = searchQuery.trim();
+    const comFiltro = selectedMarket !== 'Todos os Mercados';
+    const alternativas = dynamicTags.slice(0, 5);
     return (
-      <View style={styles.centerContainer}>
-        <Text style={{ color: '#666' }}>Nenhum produto encontrado para a busca atual.</Text>
+      <View style={styles.vazioContainer}>
+        <Text style={styles.vazioTitulo}>
+          {termo ? `Nada encontrado para “${termo}”` : 'Nenhum produto encontrado'}
+        </Text>
+        <Text style={styles.vazioDica}>
+          {comFiltro
+            ? `Você está filtrando só por ${selectedMarket}. Tente ver todos os mercados.`
+            : 'Confira a digitação ou tente uma palavra mais simples, como a marca ou o tipo do produto.'}
+        </Text>
+        {comFiltro && (
+          <Button mode="contained" buttonColor="#E5293E" style={styles.vazioBotao} onPress={() => setSelectedMarket('Todos os Mercados')}>
+            Ver todos os mercados
+          </Button>
+        )}
+        {termo !== '' && (
+          <Button mode="outlined" textColor="#E5293E" style={styles.vazioBotao} onPress={returnHome}>
+            Limpar busca
+          </Button>
+        )}
+        <Text style={styles.vazioSub}>Que tal buscar por:</Text>
+        <View style={styles.vazioChips}>
+          {alternativas.map(tag => (
+            <Chip key={tag} compact onPress={() => handleTagPress(tag)} style={styles.vazioChip}>#{tag}</Chip>
+          ))}
+        </View>
       </View>
     );
-  }, [loading]);
+  }, [loading, searchQuery, selectedMarket, dynamicTags, sortBy]);
 
   const handleProductPress = useCallback((item: Product) => {
     setSelectedProduct(item);
@@ -502,7 +545,7 @@ export default function App() {
             <View style={styles.filtersRow}>
               <Chip
                 icon={ORDENACOES[sortBy].icone}
-                onPress={() => setSortBy(prev => ORDENACOES[prev].proxima)}
+                onPress={() => setSortModalVisible(true)}
                 style={styles.filterChip}
               >
                 {ORDENACOES[sortBy].titulo}
@@ -597,6 +640,71 @@ export default function App() {
             </View>
           </Modal>
 
+          <Modal visible={isSortModalVisible} animationType="slide" transparent={true} onRequestClose={() => setSortModalVisible(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Ordenar por</Text>
+                  <IconButton icon="close" onPress={() => setSortModalVisible(false)} />
+                </View>
+                {(Object.keys(ORDENACOES) as Ordenacao[]).map(chave => (
+                  <TouchableOpacity
+                    key={chave}
+                    style={[styles.marketOption, sortBy === chave && styles.marketOptionSelected]}
+                    onPress={() => { setSortBy(chave); setSortModalVisible(false); }}
+                  >
+                    <Text style={[styles.marketOptionText, sortBy === chave && styles.marketOptionTextSelected]}>
+                      {ORDENACOES[chave].titulo}
+                    </Text>
+                    <Text style={styles.sortDescricao}>{ORDENACOES[chave].descricao}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </Modal>
+
+          {/* --- CONFIGURAÇÕES --- */}
+          <Modal visible={isSettingsVisible} animationType="slide" transparent={true} onRequestClose={() => setSettingsVisible(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>⚙️ Configurações</Text>
+                  <IconButton icon="close" onPress={() => setSettingsVisible(false)} />
+                </View>
+                <View style={{ padding: 20 }}>
+                  <Text style={styles.configRotulo}>Seu CEP</Text>
+                  <Text style={styles.configAjuda}>
+                    Alguns mercados (como o Atacadão) mostram preços diferentes conforme o CEP. Informe o seu para copiá-lo e colar no site do mercado.
+                  </Text>
+                  <TextInput
+                    mode="outlined"
+                    label="CEP"
+                    placeholder={CEP_PADRAO}
+                    value={cepDigitado}
+                    onChangeText={t => setCepDigitado(formatarCep(t))}
+                    keyboardType="number-pad"
+                    maxLength={9}
+                    style={{ backgroundColor: '#fff', marginBottom: 15 }}
+                    activeOutlineColor="#E5293E"
+                  />
+                  <Button
+                    mode="contained"
+                    buttonColor="#E5293E"
+                    disabled={cepDigitado !== '' && cepDigitado.length !== 9}
+                    onPress={() => { setCepSalvo(cepDigitado); setSettingsVisible(false); }}
+                  >
+                    Salvar
+                  </Button>
+                  {cepSalvo !== '' && (
+                    <Button textColor="#888" style={{ marginTop: 8 }} onPress={() => { setCepSalvo(''); setCepDigitado(''); }}>
+                      Voltar ao CEP padrão ({CEP_PADRAO})
+                    </Button>
+                  )}
+                </View>
+              </View>
+            </View>
+          </Modal>
+
           {/* --- MODAL DA CÂMERA DE LEITURA DE EAN --- */}
           <Modal visible={isScanning} animationType="slide" transparent={false} onRequestClose={() => setIsScanning(false)}>
             <SafeAreaView style={{ flex: 1, backgroundColor: 'black' }} edges={['top', 'bottom']}>
@@ -648,7 +756,7 @@ export default function App() {
                     <IconButton icon="lightbulb-on-outline" size={24} iconColor="#555" style={{ margin: 0, marginRight: 10 }} />
                     <Text style={styles.sidebarItemText}>Enviar Sugestão</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.sidebarItem} onPress={() => setSidebarVisible(false)}>
+                  <TouchableOpacity style={styles.sidebarItem} onPress={() => { setSidebarVisible(false); setCepDigitado(cepSalvo); setSettingsVisible(true); }}>
                     <IconButton icon="cog-outline" size={24} iconColor="#555" style={{ margin: 0, marginRight: 10 }} />
                     <Text style={styles.sidebarItemText}>Configurações</Text>
                   </TouchableOpacity>
@@ -720,6 +828,16 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  vazioContainer: { padding: 24, alignItems: 'center' },
+  vazioTitulo: { fontSize: 17, fontWeight: 'bold', color: '#333', textAlign: 'center', marginBottom: 8 },
+  vazioDica: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 20, marginBottom: 16 },
+  vazioBotao: { alignSelf: 'stretch', marginBottom: 8 },
+  vazioSub: { fontSize: 13, color: '#888', marginTop: 16, marginBottom: 8 },
+  vazioChips: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
+  vazioChip: { backgroundColor: '#fde8ea' },
+  sortDescricao: { fontSize: 12, color: '#888', marginTop: 2 },
+  configRotulo: { fontSize: 16, fontWeight: 'bold', color: '#333', marginBottom: 4 },
+  configAjuda: { fontSize: 13, color: '#666', lineHeight: 19, marginBottom: 14 },
   safeAreaWrapper: {
     flex: 1,
     backgroundColor: '#E5293E',

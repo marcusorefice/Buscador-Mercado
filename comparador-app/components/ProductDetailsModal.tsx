@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { useShoppingListStore } from './useShoppingListStore';
 import * as Clipboard from 'expo-clipboard';
+import { usePreferenciasStore, CEP_PADRAO } from './usePreferenciasStore';
 
 interface ProductDetailsModalProps {
   visible: boolean;
@@ -18,8 +19,19 @@ interface ProductDetailsModalProps {
 // Cidade atendida hoje. Os preços de alguns mercados dependem da loja/região, e o site deles
 // só mostra o valor certo depois de informar o CEP (não dá para passar isso pelo link).
 const CIDADE = 'Jundiaí';
-const CEP_PADRAO = '13214-900';
 const MERCADOS_POR_REGIAO = ['Atacadão'];
+
+// "há 3 h", "há 2 dias"... a partir de "2026-10-12 15:34:01"; stale = mais de 2 dias sem atualizar
+const idadeDaOferta = (dataStr?: string): { texto: string; velha: boolean } | null => {
+  if (!dataStr) return null;
+  const t = new Date(dataStr.replace(' ', 'T')).getTime();
+  if (isNaN(t)) return null;
+  const horas = Math.max(0, (Date.now() - t) / 3600000);
+  if (horas < 1) return { texto: 'agora há pouco', velha: false };
+  if (horas < 24) return { texto: `há ${Math.floor(horas)} h`, velha: false };
+  const dias = Math.floor(horas / 24);
+  return { texto: `há ${dias} ${dias === 1 ? 'dia' : 'dias'}`, velha: dias >= 2 };
+};
 
 const formatPrice = (value: number) => {
   return value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -32,6 +44,8 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const [selectedOfferIndex, setSelectedOfferIndex] = React.useState<number>(0);
   const [history, setHistory] = React.useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
+  const cepUsuario = usePreferenciasStore(state => state.cep);
+  const cepAviso = cepUsuario || CEP_PADRAO;
   const [cepCopiado, setCepCopiado] = React.useState(false);
   const [eanCopiado, setEanCopiado] = React.useState(false);
 
@@ -181,16 +195,16 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   };
 
   const copiarCep = async () => {
-    await Clipboard.setStringAsync(CEP_PADRAO);
+    await Clipboard.setStringAsync(cepAviso);
     setCepCopiado(true);
     setTimeout(() => setCepCopiado(false), 2500);
   };
 
   const mercadoPorRegiao = !!activeOffer && MERCADOS_POR_REGIAO.includes(activeOffer.Mercado);
 
-  const abrirLinkDoProduto = (link?: string) => {
+  const abrirLinkDoProduto = (link?: string, mercado?: string) => {
     if (link && link !== "") {
-      if (mercadoPorRegiao) copiarCep();
+      if (MERCADOS_POR_REGIAO.includes(mercado ?? activeOffer?.Mercado ?? '')) copiarCep();
       Linking.openURL(link).catch(() => {
         Alert.alert("Erro", "Não foi possível abrir o link do mercado.");
       });
@@ -285,7 +299,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
               {mercadoPorRegiao && (
                 <TouchableOpacity style={styles.regionNotice} onPress={copiarCep} activeOpacity={0.7}>
                   <Text style={styles.regionNoticeText}>
-                    📍 Preço de {CIDADE}. No site, informe o CEP <Text style={{ fontWeight: 'bold' }}>{CEP_PADRAO}</Text> ou o seu
+                    📍 Preço de {CIDADE}. No site, informe o CEP <Text style={{ fontWeight: 'bold' }}>{cepAviso}</Text>{cepUsuario ? '' : ' ou o seu'}
                   </Text>
                   <Text style={styles.regionNoticeCopy}>{cepCopiado ? '✓ copiado' : '📋 copiar'}</Text>
                 </TouchableOpacity>
@@ -340,6 +354,8 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                 offerVarejo = offerVarejo / unitFactor;
               }
 
+              const idade = idadeDaOferta(oferta.Data_Atualizacao);
+
               const content = (
                 <View style={[styles.offerRow, isSelected && styles.offerRowSelected]}>
                   <View style={styles.marketInfo}>
@@ -354,6 +370,16 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                       {oferta.Condicao && (
                         <Text style={[styles.conditionText, oferta.Condicao === '1 UN' && { color: '#888' }]}>{oferta.Condicao}</Text>
                       )}
+                      {idade && (
+                        <Text style={[styles.offerAge, idade.velha && styles.offerAgeOld]}>
+                          {idade.velha ? '⚠ ' : ''}atualizado {idade.texto}
+                        </Text>
+                      )}
+                      {oferta.Link_PDP ? (
+                        <TouchableOpacity onPress={() => abrirLinkDoProduto(oferta.Link_PDP, oferta.Mercado)} hitSlop={8}>
+                          <Text style={styles.offerLink}>Ir ao site ↗</Text>
+                        </TouchableOpacity>
+                      ) : null}
                     </View>
                   </View>
                   <View style={styles.priceInfo}>
@@ -556,6 +582,20 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 4,
     textAlign: 'right',
+  },
+  offerAge: {
+    fontSize: 10,
+    color: '#999',
+  },
+  offerAgeOld: {
+    color: '#E67E22',
+    fontWeight: 'bold',
+  },
+  offerLink: {
+    fontSize: 11,
+    color: '#E5293E',
+    fontWeight: 'bold',
+    marginTop: 2,
   },
   regionNotice: {
     flexDirection: 'row',
