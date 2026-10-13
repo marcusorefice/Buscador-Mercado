@@ -15,6 +15,12 @@ interface ProductDetailsModalProps {
   apiUrl: string;
 }
 
+// Cidade atendida hoje. Os preços de alguns mercados dependem da loja/região, e o site deles
+// só mostra o valor certo depois de informar o CEP (não dá para passar isso pelo link).
+const CIDADE = 'Jundiaí';
+const CEP_PADRAO = '13214-900';
+const MERCADOS_POR_REGIAO = ['Atacadão'];
+
 const formatPrice = (value: number) => {
   return value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
@@ -26,6 +32,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const [selectedOfferIndex, setSelectedOfferIndex] = React.useState<number>(0);
   const [history, setHistory] = React.useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
+  const [cepCopiado, setCepCopiado] = React.useState(false);
 
   React.useEffect(() => {
     setImageError(false);
@@ -170,8 +177,17 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
     ToastAndroid.show('EAN copiado!', ToastAndroid.SHORT);
   };
 
+  const copiarCep = async () => {
+    await Clipboard.setStringAsync(CEP_PADRAO);
+    setCepCopiado(true);
+    setTimeout(() => setCepCopiado(false), 2500);
+  };
+
+  const mercadoPorRegiao = !!activeOffer && MERCADOS_POR_REGIAO.includes(activeOffer.Mercado);
+
   const abrirLinkDoProduto = (link?: string) => {
     if (link && link !== "") {
+      if (mercadoPorRegiao) copiarCep();
       Linking.openURL(link).catch(() => {
         Alert.alert("Erro", "Não foi possível abrir o link do mercado.");
       });
@@ -261,6 +277,15 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                     {`-${discountPercent}%`}
                   </Chip>
                 </View>
+              )}
+
+              {mercadoPorRegiao && (
+                <TouchableOpacity style={styles.regionNotice} onPress={copiarCep} activeOpacity={0.7}>
+                  <Text style={styles.regionNoticeText}>
+                    📍 Preço de {CIDADE}. No site, informe o CEP <Text style={{ fontWeight: 'bold' }}>{CEP_PADRAO}</Text> ou o seu
+                  </Text>
+                  <Text style={styles.regionNoticeCopy}>{cepCopiado ? '✓ copiado' : '📋 copiar'}</Text>
+                </TouchableOpacity>
               )}
 
               <Button 
@@ -528,6 +553,27 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 4,
     textAlign: 'right',
+  },
+  regionNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFF4E5',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginTop: 12,
+    gap: 8,
+  },
+  regionNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#8A5300',
+  },
+  regionNoticeCopy: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#E5293E',
   },
   addToListButtonModal: {
     marginTop: 16,

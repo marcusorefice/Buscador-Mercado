@@ -15,7 +15,7 @@ import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
-const API_URL = __DEV__ 
+const API_URL = __DEV__ && Platform.OS !== 'web' // na web (navegador) usa sempre o Render
   ? 'https://badness-impale-suitably.ngrok-free.dev' // ngrok: Ignora o Firewall do Windows e atualiza na hora!
   : 'https://buscador-mercado.onrender.com';         // Render: App Oficial da Nuvem
 
@@ -96,6 +96,21 @@ export default function App() {
   const autocompleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  // Posição real da barra de busca, medida na tela. As sugestões abrem logo abaixo dela,
+  // em vez de usar um "top" fixo que só batia em um tamanho de tela.
+  const conteudoRef = useRef<View>(null);
+  const buscaRef = useRef<View>(null);
+  const [posSugestoes, setPosSugestoes] = useState<{ top: number; left: number; width: number } | null>(null);
+  const medirBusca = useCallback(() => {
+    const busca = buscaRef.current;
+    const conteudo = conteudoRef.current;
+    if (!busca || !conteudo) return;
+    busca.measureLayout(
+      conteudo as any,
+      (x, y, width, height) => setPosSugestoes({ top: y + height + 4, left: x, width }),
+      () => {}
+    );
+  }, []);
   const [textSuggestions, setTextSuggestions] = useState<string[]>([]);
   
   const [isScanning, setIsScanning] = useState(false);
@@ -418,6 +433,7 @@ export default function App() {
         <SafeAreaView style={styles.safeAreaWrapper} edges={['top', 'left', 'right']}>
           <StatusBar barStyle="light-content" backgroundColor="#E5293E" />
           
+          <View ref={conteudoRef} style={{ flex: 1 }} collapsable={false}>
           <View style={styles.header}>
             <View style={styles.headerTop}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -441,7 +457,7 @@ export default function App() {
               </View>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', zIndex: 20 }}>
-              <View style={{ flex: 1, position: 'relative' }}>
+              <View ref={buscaRef} onLayout={medirBusca} collapsable={false} style={{ flex: 1, position: 'relative' }}>
                 <Searchbar
                   placeholder="Ex: Cerveja Heineken, Fralda..."
                   onChangeText={handleSearchChange}
@@ -449,7 +465,7 @@ export default function App() {
                   onSubmitEditing={onSearchSubmit}
                   onIconPress={onSearchSubmit}
                   onClearIconPress={clearSearchText}
-                  onFocus={() => setIsSearchFocused(true)}
+                  onFocus={() => { medirBusca(); setIsSearchFocused(true); }}
                   onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
                   style={styles.searchbar}
                   inputStyle={styles.searchInput}
@@ -524,8 +540,8 @@ export default function App() {
           </View>
 
           {/* Overlay de Autocomplete Movido para a Raiz (Resolve o bug de rolagem no Android) */}
-          {isSearchFocused && textSuggestions.length > 0 && (
-            <View style={[styles.autocompleteOverlay, { top: Platform.OS === 'ios' ? 110 : 118, left: 16, right: 68 }]}>
+          {isSearchFocused && textSuggestions.length > 0 && posSugestoes && (
+            <View style={[styles.autocompleteOverlay, posSugestoes]}>
               <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled={true}>
                 {textSuggestions.map(s => (
                   <TouchableOpacity key={s} style={styles.autocompleteItem} onPress={() => handleTextSuggestionPress(s)}>
@@ -536,6 +552,7 @@ export default function App() {
               </ScrollView>
             </View>
           )}
+          </View>
 
           <ProductDetailsModal
             visible={isModalVisible}
@@ -884,4 +901,4 @@ const styles = StyleSheet.create({
   sidebarItemText: { fontSize: 16, color: '#333', fontWeight: '500' },
   sidebarFooter: { padding: 20, borderTopWidth: 1, borderTopColor: '#eee', alignItems: 'center' },
   versionText: { color: '#999', fontSize: 12, fontWeight: 'bold' },
-});
+});
