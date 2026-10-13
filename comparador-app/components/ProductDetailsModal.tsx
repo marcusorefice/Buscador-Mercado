@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Modal, Image, ScrollView, ActivityIndicator, TouchableOpacity, ToastAndroid, Linking, Alert } from 'react-native';
+import { View, StyleSheet, Modal, Image, ScrollView, ActivityIndicator, TouchableOpacity, ToastAndroid, Linking, Alert, Platform } from 'react-native';
 import { Text, Title, IconButton, Divider, Chip, Button } from 'react-native-paper';
 import { Product } from '../types';
 import { getMarketLogo } from './ProductCard';
@@ -33,6 +33,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const [history, setHistory] = React.useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
   const [cepCopiado, setCepCopiado] = React.useState(false);
+  const [eanCopiado, setEanCopiado] = React.useState(false);
 
   React.useEffect(() => {
     setImageError(false);
@@ -174,7 +175,9 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   // Função que copia para a área de transferência
   const copyToClipboard = async () => {
     await Clipboard.setStringAsync(eanStr);
-    ToastAndroid.show('EAN copiado!', ToastAndroid.SHORT);
+    if (Platform.OS === 'android') ToastAndroid.show('EAN copiado!', ToastAndroid.SHORT);
+    setEanCopiado(true);
+    setTimeout(() => setEanCopiado(false), 2000);
   };
 
   const copiarCep = async () => {
@@ -230,7 +233,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                 onPress={copyToClipboard} 
                 activeOpacity={0.6}
               >
-                <Text style={styles.eanText}>EAN: {eanStr}</Text>
+                <Text style={styles.eanText}>{eanCopiado ? 'EAN copiado ✓' : `EAN: ${eanStr}`}</Text>
                 <IconButton 
                   icon="content-copy" 
                   size={12} 

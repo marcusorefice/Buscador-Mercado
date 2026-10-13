@@ -15,9 +15,10 @@ import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
 
 // --- CONFIGURAÇÃO DE AMBIENTE ---
-const API_URL = __DEV__ && Platform.OS !== 'web' // na web (navegador) usa sempre o Render
+// EXPO_PUBLIC_API_URL (arquivo .env do app) sobrescreve tudo, ex.: API local ou outro túnel
+const API_URL = process.env.EXPO_PUBLIC_API_URL || (__DEV__ && Platform.OS !== 'web' // na web (navegador) usa sempre o Render
   ? 'https://badness-impale-suitably.ngrok-free.dev' // ngrok: Ignora o Firewall do Windows e atualiza na hora!
-  : 'https://buscador-mercado.onrender.com';         // Render: App Oficial da Nuvem
+  : 'https://buscador-mercado.onrender.com');        // Render: App Oficial da Nuvem
 
 // As sugestões da busca (Typesense) vêm pela API em /autocompletar: o Android bloqueia HTTP sem
 // criptografia nos APKs, então o app não fala direto com o servidor do Typesense.
