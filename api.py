@@ -11,6 +11,7 @@ import threading
 import time
 import uvicorn
 import httpx
+import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 from typing import List, Optional
@@ -18,6 +19,7 @@ from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager, contextmanager
 from dotenv import load_dotenv
 from ofertas_sql import criar_visoes, sql_agregados
+from unidades import preco_por_unidade
 
 load_dotenv()
 
@@ -142,7 +144,11 @@ def _get_pool() -> ThreadedConnectionPool:
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                _pool = ThreadedConnectionPool(1, 10, DB_URL, cursor_factory=RealDictCursor)
+                # keepalives: o Supabase derruba conexões ociosas; assim o sistema percebe a queda em segundos
+                _pool = ThreadedConnectionPool(
+                    1, 10, DB_URL, cursor_factory=RealDictCursor,
+                    keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+                )
     return _pool
 
 # --- Interesse dos usuários (buscas e produtos abertos), usado no ranking "Em alta" ---
@@ -216,15 +222,32 @@ def get_db_cursor():
     # ida e volta até o banco
     if not conn.autocommit:
         conn.autocommit = True
+    descartar = False
     try:
         with conn.cursor() as cursor:
             yield cursor
         conn.commit()
-    except Exception:
-        conn.rollback()
+    except Exception as e:
+        # Conexão que caiu (o Supabase fecha as ociosas) NÃO pode voltar ao pool: senão todo pedido seguinte
+        # pega a mesma conexão morta e falha até a API reiniciar
+        descartar = isinstance(e, (psycopg2.OperationalError, psycopg2.InterfaceError)) or conn.closed != 0
+        if not descartar:
+            try:
+                conn.rollback()
+            except Exception:
+                descartar = True
         raise
     finally:
-        pool.putconn(conn)
+        pool.putconn(conn, close=descartar)
+
+
+def _com_reconexao(funcao, *args):
+    """Roda uma consulta e, se a conexão tiver caído, tenta uma vez de novo com uma conexão nova."""
+    try:
+        return funcao(*args)
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+        print(f"Conexão com o banco caiu ({e}); tentando de novo.")
+        return funcao(*args)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -258,6 +281,8 @@ class OfertaResponse(BaseModel):
     Condicao: str
     Data_Atualizacao: str
     Link_PDP: Optional[str] = ""
+    Preco_Unitario: Optional[float] = None  # preço por kg ou litro, quando dá para saber pelo nome do produto
+    Unidade_Ref: Optional[str] = None       # "kg" ou "L"
 
 @app.get("/")
 def read_root():
@@ -271,6 +296,8 @@ class ProdutoAgrupadoResponse(BaseModel):
     Imagem: str
     Tags: List[str]
     Menor_Preco: float
+    Preco_Unitario: Optional[float] = None
+    Unidade_Ref: Optional[str] = None
     Ofertas: List[OfertaResponse]
 
 @app.get("/debug")
@@ -327,8 +354,17 @@ def _montar_produtos(rows):
         # Ordena as ofertas do mais barato para o mais caro (ofertas sem preço vão para o fim)
         pares = sorted(zip(precos, data["Ofertas"]), key=lambda x: x[0] if x[0] is not None else float("inf"))
         data["Ofertas"] = [o for _, o in pares]
+        # Preço por kg ou litro (tirado do nome do produto, que é o mesmo em todos os mercados). Oferta já
+        # vendida por peso (Unidade KG) tem o preço por kg como preço normal e não precisa disso.
+        for preco, oferta in pares:
+            simples = oferta["Unidade"] != "KG" and oferta["Qtd_Valor"] in ("1", "")  # pack/peso já têm tratamento próprio
+            unitario = preco_por_unidade(preco, data["Produto_Ouro"]) if simples else None
+            if unitario:
+                oferta["Preco_Unitario"], oferta["Unidade_Ref"] = unitario
         validos = [p for p in precos if p is not None]
         data["Menor_Preco"] = min(validos) if validos else 0.0
+        if data["Ofertas"] and "Preco_Unitario" in data["Ofertas"][0]:
+            data["Preco_Unitario"], data["Unidade_Ref"] = data["Ofertas"][0]["Preco_Unitario"], data["Ofertas"][0]["Unidade_Ref"]
         result.append(data)
     return result
 
@@ -518,14 +554,14 @@ def get_produtos(
         _registrar_se_achou(background_tasks, corrigida or q, em_cache, registrar)
         return _resposta_json(em_cache, corrigida)
 
-    produtos = _consultar_produtos(q, sort_by, market, limite, offset)
+    produtos = _com_reconexao(_consultar_produtos, q, sort_by, market, limite, offset)
     corrigida = None
     e_busca_ean = bool(q) and q.isdigit() and len(q) >= 8
     if not produtos and q and not e_busca_ean and offset == 0:
         # Nada achado: tenta de novo com a busca corrigida pelo Typesense (erro de digitação)
         nova = _corrigir_busca(q)
         if nova:
-            produtos = _consultar_produtos(nova, sort_by, market, limite, offset)
+            produtos = _com_reconexao(_consultar_produtos, nova, sort_by, market, limite, offset)
             if produtos:
                 corrigida = nova
     _cache_produtos.set(chave_cache, produtos)

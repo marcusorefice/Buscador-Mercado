@@ -3,7 +3,7 @@ import { View, StyleSheet, Image } from 'react-native';
 import { Card, Text, Title, IconButton } from 'react-native-paper';
 import { Product } from '../types';
 import { useShoppingListStore } from './useShoppingListStore';
-import { getUnidadesPack, vendidoPorPeso, descreverPeso } from '../precos';
+import { getUnidadesPack, vendidoPorPeso, descreverPeso, getPrecoCondicional } from '../precos';
 
 type MarketName = 
   | 'Assaí Atacadista'
@@ -98,6 +98,18 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
       })
       .reduce((max, oferta) => Math.max(max, precoUnitarioMaximo(oferta)), 0) || 0;
   }, [product.Ofertas, product.Menor_Preco, bestOffer]);
+
+  // Preço com CPF/clube/compra mínima abaixo do menor preço normal: aparece à parte ("pode sair por...")
+  const melhorCondicional = React.useMemo(() => {
+    let melhor: { preco: number; condicao: string; mercado: string } | null = null;
+    for (const oferta of product.Ofertas || []) {
+      const condicional = getPrecoCondicional(oferta);
+      if (condicional && condicional.preco < (product.Menor_Preco || Infinity) - 0.005 && (!melhor || condicional.preco < melhor.preco)) {
+        melhor = { ...condicional, mercado: oferta.Mercado };
+      }
+    }
+    return melhor;
+  }, [product.Ofertas, product.Menor_Preco]);
 
   const originalPrice = (product as any).Maior_Preco || maxOfferPrice;
   const currentPrice = product.Menor_Preco || 0;
@@ -201,6 +213,14 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
                 <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(displayCurrentPrice)}
                 <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}>{priceSuffix}</Text>
               </Text>
+              {product.Preco_Unitario ? (
+                <Text style={styles.unitPrice}>R$ {formatPrice(product.Preco_Unitario)} / {product.Unidade_Ref}</Text>
+              ) : null}
+              {melhorCondicional ? (
+                <Text style={styles.conditionalPrice} numberOfLines={2}>
+                  Pode sair R$ {formatPrice(melhorCondicional.preco)} {melhorCondicional.condicao} no {melhorCondicional.mercado}
+                </Text>
+              ) : null}
             </View>
           </View>
 
@@ -230,6 +250,8 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
 });
 
 const styles = StyleSheet.create({
+  unitPrice: { fontSize: 11, color: '#777', marginTop: 1 },
+  conditionalPrice: { fontSize: 11, color: '#b26a00', marginTop: 2 },
   card: {
     width: '49%',
     marginVertical: 6,

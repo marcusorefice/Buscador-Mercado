@@ -8,6 +8,7 @@ import axios from 'axios';
 import { useShoppingListStore } from './useShoppingListStore';
 import * as Clipboard from 'expo-clipboard';
 import { usePreferenciasStore, CEP_PADRAO } from './usePreferenciasStore';
+import { getPrecoCondicional } from '../precos';
 
 interface ProductDetailsModalProps {
   visible: boolean;
@@ -143,9 +144,11 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
     ? productToRender.Ofertas[selectedOfferIndex] || productToRender.Ofertas[0] 
     : null;
     
-  // Lógica de Desconto Dinâmica baseada na oferta selecionada
+  // Lógica de Desconto Dinâmica baseada na oferta selecionada.
+  // Preço com CPF/clube/compra mínima não é o preço principal: aparece embaixo, à parte.
+  const condicionalAtivo = getPrecoCondicional(activeOffer);
   const originalPrice = activeOffer?.Preco_Varejo || 0;
-  const currentPrice = activeOffer && activeOffer.Preco_Atacado > 0 && activeOffer.Preco_Atacado < originalPrice 
+  const currentPrice = activeOffer && !condicionalAtivo && activeOffer.Preco_Atacado > 0 && activeOffer.Preco_Atacado < originalPrice 
     ? activeOffer.Preco_Atacado 
     : originalPrice;
 
@@ -287,6 +290,15 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                 )}
               </View>
               
+              {activeOffer?.Preco_Unitario ? (
+                <Text style={styles.unitPriceMain}>R$ {formatPrice(activeOffer.Preco_Unitario)} / {activeOffer.Unidade_Ref}</Text>
+              ) : null}
+              {condicionalAtivo ? (
+                <Text style={styles.conditionalPriceMain}>
+                  Pode sair R$ {formatPrice(condicionalAtivo.preco)}{priceSuffix} {condicionalAtivo.condicao}
+                </Text>
+              ) : null}
+
               {hasDiscount && (
                 <View style={styles.discountInfoContainer}>
                   <Text style={styles.originalPrice}>De R$ {formatPrice(displayOriginalPrice)}</Text>
@@ -355,6 +367,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
               }
 
               const idade = idadeDaOferta(oferta.Data_Atualizacao);
+              const condicional = getPrecoCondicional(oferta);
 
               const content = (
                 <View style={[styles.offerRow, isSelected && styles.offerRowSelected]}>
@@ -383,7 +396,7 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                     </View>
                   </View>
                   <View style={styles.priceInfo}>
-                    {oferta.Preco_Atacado > 0 && oferta.Preco_Atacado < (oferta.Preco_Varejo || 999999) ? (
+                    {!condicional && oferta.Preco_Atacado > 0 && oferta.Preco_Atacado < (oferta.Preco_Varejo || 999999) ? (
                       <>
                         <Text style={styles.priceText}>
                           <Text style={styles.currencySymbol}>R$ </Text>{formatPrice(offerAtacado)}
@@ -399,6 +412,12 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
                         <Text style={{ fontSize: 12, color: '#888', fontWeight: 'normal' }}>{offerSuffix}</Text>
                       </Text>
                     )}
+                    {condicional ? (
+                      <Text style={styles.conditionalPriceRow}>R$ {formatPrice(condicional.preco)} {condicional.condicao}</Text>
+                    ) : null}
+                    {oferta.Preco_Unitario ? (
+                      <Text style={styles.unitPriceRow}>R$ {formatPrice(oferta.Preco_Unitario)} / {oferta.Unidade_Ref}</Text>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -583,6 +602,10 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'right',
   },
+  unitPriceMain: { fontSize: 13, color: '#777', marginTop: 2 },
+  unitPriceRow: { fontSize: 11, color: '#777', marginTop: 2 },
+  conditionalPriceMain: { fontSize: 13, color: '#b26a00', marginTop: 4 },
+  conditionalPriceRow: { fontSize: 11, color: '#b26a00', marginTop: 2, maxWidth: 140, textAlign: 'right' },
   offerAge: {
     fontSize: 10,
     color: '#999',

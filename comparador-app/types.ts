@@ -9,6 +9,8 @@ export interface Oferta {
   Qtd_Valor?: string;
   Medida?: string;
   Unidade?: string;
+  Preco_Unitario?: number; // preço por kg ou litro, quando a API consegue saber
+  Unidade_Ref?: string; // 'kg' ou 'L'
 }
 export interface Product {
   EAN: string;
@@ -18,6 +20,8 @@ export interface Product {
   Imagem: string;
   Tags: string[];
   Menor_Preco: number;
+  Preco_Unitario?: number;
+  Unidade_Ref?: string;
   Ofertas: Oferta[];
   weight?: string;
   volume?: string;
