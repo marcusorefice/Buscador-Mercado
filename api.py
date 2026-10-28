@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from urllib.parse import quote
 import os
+import secrets
 import base64
 import re
 import unicodedata
@@ -29,8 +30,16 @@ DB_URL = os.getenv("DATABASE_URL")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 # Typesense (autocomplete da busca). O app não fala direto com ele: o Android bloqueia HTTP sem
 # criptografia nos APKs, então a API (HTTPS) faz a consulta e devolve só as sugestões.
-TYPESENSE_URL = f'{os.getenv("TYPESENSE_PROTOCOL", "http")}://{os.getenv("TYPESENSE_HOST", "34.16.54.234")}:{os.getenv("TYPESENSE_PORT", "8108")}'
+TYPESENSE_HOST = os.getenv("TYPESENSE_HOST")
+TYPESENSE_URL = f'{os.getenv("TYPESENSE_PROTOCOL", "http")}://{TYPESENSE_HOST}:{os.getenv("TYPESENSE_PORT", "8108")}'
 TYPESENSE_SEARCH_KEY = os.getenv("TYPESENSE_SEARCH_KEY")
+# Sem servidor e chave configurados o autocomplete e a correção de busca ficam desligados (o app segue funcionando)
+TYPESENSE_HABILITADO = bool(TYPESENSE_HOST and TYPESENSE_SEARCH_KEY)
+# Senha do /debug. Sem ela configurada o /debug fica desligado (responde 404).
+DEBUG_TOKEN = os.getenv("DEBUG_TOKEN")
+# Sites que podem chamar a API pelo navegador, separados por vírgula (ex: http://localhost:8081 ao testar a web).
+# O app Android não usa CORS, então o padrão é não liberar nenhum.
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 
 LIMITE_PRODUTOS = 200
 # Peso do "de/por" de um mercado só no ranking da tela inicial. O foco do app é comparar mercados, e o
@@ -41,6 +50,36 @@ DIAS_POPULARIDADE = 30
 MIN_MERCADOS_EM_ALTA = 3
 # Categorias que não são de compra do dia a dia: no "Em alta" pesam menos (até terem buscas de verdade)
 RE_CATEGORIAS_FORA_DA_LISTA = "BAZAR|UTILIDADE|CASA|DECORA|ELETR|PAPELARIA|BRINQUED|AUTOMOTIV|FERRAMENT|FLORICULT|INFORMATIC"
+
+# Limite de pedidos por janela de tempo, em memória: vale por processo e zera quando o Render reinicia
+class _LimiteDePedidos:
+    def __init__(self, maximo, janela_segundos, maximo_de_chaves=10000):
+        self.maximo, self.janela, self.maximo_de_chaves = maximo, janela_segundos, maximo_de_chaves
+        self._pedidos = {}
+        self._lock = threading.Lock()
+
+    def permitir(self, chave, agora=None):
+        agora = time.monotonic() if agora is None else agora
+        with self._lock:
+            recentes = [t for t in self._pedidos.get(chave, []) if agora - t < self.janela]
+            permitido = len(recentes) < self.maximo
+            if permitido:
+                recentes.append(agora)
+            self._pedidos[chave] = recentes
+            if len(self._pedidos) > self.maximo_de_chaves:
+                self._pedidos.pop(next(iter(self._pedidos)), None)
+            return permitido
+
+# /sugestoes manda mensagem para o Discord: poucas por pessoa e um teto geral, que vale mesmo se alguém variar o IP
+_limite_sugestoes_por_ip = _LimiteDePedidos(maximo=5, janela_segundos=3600)
+_limite_sugestoes_geral = _LimiteDePedidos(maximo=30, janela_segundos=3600)
+
+def _ip_do_cliente(request: Request):
+    # Atrás do proxy do Render o IP real vem no X-Forwarded-For; o último valor é o que o próprio proxy anotou
+    encaminhado = request.headers.get("x-forwarded-for")
+    if encaminhado:
+        return encaminhado.split(",")[-1].strip()
+    return request.client.host if request.client else "desconhecido"
 
 # Cache em memória das respostas (os dados só mudam quando o passo 5 roda, então poucos minutos não fazem
 # diferença, e a mesma busca - "leite", "arroz" - se repete muito entre usuários)
@@ -264,8 +303,8 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
     expose_headers=["X-Busca-Corrigida"],  # o app (na web) precisa ler este cabeçalho
 )
@@ -301,7 +340,10 @@ class ProdutoAgrupadoResponse(BaseModel):
     Ofertas: List[OfertaResponse]
 
 @app.get("/debug")
-def debug_connection():
+def debug_connection(x_debug_token: Optional[str] = Header(None)):
+    # Para quem não tem a senha o /debug nem existe
+    if not DEBUG_TOKEN or not x_debug_token or not secrets.compare_digest(x_debug_token, DEBUG_TOKEN):
+        raise HTTPException(status_code=404)
     try:
         with get_db_cursor() as cursor:
             cursor.execute("SELECT COUNT(*) as qtd FROM ofertas_atuais")
@@ -495,7 +537,7 @@ def _consultar_produtos(q, sort_by, market, limite, offset):
 def _corrigir_busca(q):
     """Busca sem resultado: o Typesense tolera erro de digitação e diz como seria a busca certa
     ("cerveja heinekem" -> "cerveja heineken"). Devolve None se não achar nada parecido."""
-    if not TYPESENSE_SEARCH_KEY:
+    if not TYPESENSE_HABILITADO:
         return None
     chave = q.strip().lower()
     if chave in _cache_correcoes_busca:
@@ -633,7 +675,7 @@ MAX_IMAGEM_BYTES = 8 * 1024 * 1024  # limite de anexo do Discord
 @app.get("/autocompletar")
 def autocompletar(q: str = Query(..., min_length=1, max_length=100)):
     """Sugestões de nome de produto enquanto a pessoa digita (Typesense)."""
-    if not TYPESENSE_SEARCH_KEY:
+    if not TYPESENSE_HABILITADO:
         raise HTTPException(status_code=503, detail="Autocomplete não configurado.")
     chave = _normalizar_termo(q)
     em_cache = _cache_autocomplete.get(chave)
@@ -664,10 +706,12 @@ def autocompletar(q: str = Query(..., min_length=1, max_length=100)):
     return {"sugestoes": sugestoes[:6]}
 
 @app.post("/sugestoes")
-def enviar_sugestao(sugestao: SugestaoRequest):
+def enviar_sugestao(sugestao: SugestaoRequest, request: Request):
     """Repassa a sugestão do app para o Discord. A URL do webhook nunca sai do servidor."""
     if not DISCORD_WEBHOOK_URL:
         raise HTTPException(status_code=503, detail="Envio de sugestões não configurado.")
+    if not _limite_sugestoes_por_ip.permitir(_ip_do_cliente(request)) or not _limite_sugestoes_geral.permitir("geral"):
+        raise HTTPException(status_code=429, detail="Muitas sugestões enviadas. Tente de novo mais tarde.")
 
     data = {"content": f"💡 **Nova Sugestão / Bug:**\n{sugestao.texto}"}
     files = None

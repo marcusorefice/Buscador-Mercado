@@ -12,9 +12,12 @@ def _criar_cliente():
     api_key = os.getenv("TYPESENSE_ADMIN_KEY")
     if not api_key:
         raise RuntimeError("TYPESENSE_ADMIN_KEY não definida no .env")
+    host = os.getenv("TYPESENSE_HOST")
+    if not host:
+        raise RuntimeError("TYPESENSE_HOST não definida no .env")
     return typesense.Client({
         'nodes': [{
-            'host': os.getenv("TYPESENSE_HOST", "34.16.54.234"),
+            'host': host,
             'port': os.getenv("TYPESENSE_PORT", "8108"),
             'protocol': os.getenv("TYPESENSE_PROTOCOL", "http")
         }],
