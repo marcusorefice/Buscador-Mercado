@@ -44,7 +44,7 @@ const MARKETS = [
   'Boa Supermercados',
   'Carrefour',
   'Covabra',
-  'Dom Olívio',
+  'Dom Olivio', // sem acento: é o nome que a API grava, e o filtro compara o texto exato
   'Oba Hortifruti',
   'Pão de Açúcar',
   'São Vicente'
