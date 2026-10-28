@@ -6,6 +6,10 @@ export const getQtdMinimaAtacado = (oferta?: Oferta | null): number | null => {
   return match ? parseInt(match[1], 10) : null;
 };
 
+// Preço de atacado que exige algo da pessoa: compra mínima ("A PARTIR DE 3 UN", "LEVE 3 PAGUE 2") ou cadastro
+// (CPF, clube, cartão do mercado). Espelha RE_CONDICAO_ESPECIAL em ofertas_sql.py: se mudar um, mude o outro.
+const CONDICAO_ESPECIAL = /PARTIR DE|LEVE |CPF|CLUBE|CART[AÃ]O|CLIENTE|MEU |MINHA /i;
+
 // Item vendido por peso (preço por kg)?
 export const vendidoPorPeso = (oferta?: Oferta | null): boolean => (oferta?.Unidade || '').toUpperCase() === 'KG';
 
@@ -29,14 +33,15 @@ export const descreverPeso = (kg: number): string =>
   kg < 1 ? `~${Math.round(kg * 1000)} g` : `~${kg.toFixed(kg % 1 ? 1 : 0).replace('.', ',')} kg`;
 
 // Preço de UMA embalagem do mercado (a unidade ou o pack inteiro) comprando `embalagens` delas.
-// O preço de atacado só vale se a quantidade atingir o mínimo exigido pelo mercado.
+// O preço de atacado só vale se a quantidade atingir o mínimo exigido pelo mercado. O de CPF/clube/cartão
+// nunca entra aqui (nem todo mundo tem o cadastro): aparece à parte, com getPrecoCondicional.
 const precoPorEmbalagem = (oferta: Oferta, embalagens: number): number => {
   const pv = oferta.Preco_Varejo || 0;
   const pa = oferta.Preco_Atacado || 0;
   if (pa > 0 && pv > 0) {
     if (pa < pv) {
       const minimo = getQtdMinimaAtacado(oferta);
-      if (minimo && embalagens < minimo) return pv;
+      if (minimo ? embalagens < minimo : CONDICAO_ESPECIAL.test(oferta.Condicao || '')) return pv;
     }
     return Math.min(pa, pv);
   }
@@ -51,6 +56,17 @@ export const getPrecoEfetivo = (oferta?: Oferta | null, quantidade = 1): number 
   const unidades = getUnidadesPack(oferta);
   const embalagens = Math.ceil(qtd / unidades);
   return (precoPorEmbalagem(oferta, embalagens) * embalagens) / qtd;
+};
+
+// Preço com condição especial (por unidade ou por kg, como o menor preço) e o que é preciso para ter.
+// null quando a oferta não tem um, ou quando o preço menor vale para qualquer pessoa.
+export const getPrecoCondicional = (oferta?: Oferta | null): { preco: number; condicao: string } | null => {
+  if (!oferta) return null;
+  const pv = oferta.Preco_Varejo || 0;
+  const pa = oferta.Preco_Atacado || 0;
+  if (!(pa > 0 && pv > 0 && pa < pv && CONDICAO_ESPECIAL.test(oferta.Condicao || ''))) return null;
+  const minimo = getQtdMinimaAtacado(oferta);
+  return { preco: pa / getUnidadesPack(oferta), condicao: minimo ? `levando ${minimo} un` : `com ${oferta.Condicao}` };
 };
 
 type ItemDaLista = { quantity: number; Ofertas?: Oferta[] };
@@ -126,8 +142,8 @@ export const getAvisoCondicao = (oferta?: Oferta | null, quantidade = 1): string
       : `Levando ${minimo} un sai R$ ${pa.toFixed(2).replace('.', ',')} cada`;
   }
   const condicao = (oferta.Condicao || '').toUpperCase();
-  if (pa > 0 && pa < pv && /CPF|CLUBE|CART[AÃ]O|MEU /.test(condicao)) {
-    return `Preço com ${oferta.Condicao}`;
+  if (pa > 0 && pa < pv && CONDICAO_ESPECIAL.test(condicao)) {
+    return `Com ${oferta.Condicao} sai R$ ${pa.toFixed(2).replace('.', ',')} cada`;
   }
   return null;
 };

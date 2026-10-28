@@ -27,10 +27,19 @@ SQL_UNIDADES_PACK = '''
     END
 '''
 
-# Preço efetivo POR UNIDADE: o menor valor > 0 entre varejo e atacado, dividido pelas unidades do pack
+# Preço de atacado que exige algo da pessoa: compra mínima ("A PARTIR DE 3 UN", "LEVE 3 PAGUE 2") ou cadastro
+# (CPF, clube, cartão do mercado). Se mudar, confira CONDICAO_ESPECIAL em comparador-app/precos.ts.
+RE_CONDICAO_ESPECIAL = 'PARTIR DE|LEVE |CPF|CLUBE|CART[AÃ]O|CLIENTE|MEU |MINHA '
+
+# Preço efetivo POR UNIDADE: o que qualquer pessoa paga levando 1. É o menor valor > 0 entre varejo e atacado,
+# mas o atacado com condição especial fica de fora (o app mostra à parte: "com CPF sai R$ X").
+# Dividido pelas unidades do pack.
 SQL_PRECO_EFETIVO = f'''
     (CASE
-        WHEN o.preco_atacado > 0 AND o.preco_varejo > 0 THEN LEAST(o.preco_atacado, o.preco_varejo)
+        WHEN o.preco_atacado > 0 AND o.preco_varejo > 0 THEN
+            CASE WHEN o.preco_atacado < o.preco_varejo AND o.condicao ~* '{RE_CONDICAO_ESPECIAL}' THEN o.preco_varejo
+                 ELSE LEAST(o.preco_atacado, o.preco_varejo)
+            END
         WHEN o.preco_atacado > 0 THEN o.preco_atacado
         ELSE o.preco_varejo
     END) / ({SQL_UNIDADES_PACK})
@@ -88,8 +97,23 @@ def criar_visoes(cursor):
     cursor.execute(f"CREATE MATERIALIZED VIEW IF NOT EXISTS resumo_produtos AS {sql_agregados('SELECT * FROM ofertas_validas')}")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_resumo_produtos_ean ON resumo_produtos (ean)")
 
+# Mude quando a definição das visões mudar: CREATE ... IF NOT EXISTS não atualiza uma visão que já existe,
+# então o passo 5 apaga e recria as que estiverem em outra versão. A API (que também chama criar_visoes) nunca apaga.
+VERSAO_VISOES = "2"
+
+def recriar_visoes_desatualizadas(cursor):
+    cursor.execute("""SELECT obj_description(c.oid, 'pg_class') AS versao FROM pg_class c
+                      WHERE c.relname = 'ofertas_validas' AND c.relkind = 'm' AND pg_table_is_visible(c.oid)""")
+    linha = cursor.fetchone()
+    versao = None if linha is None else (linha["versao"] if isinstance(linha, dict) else linha[0])
+    if linha is not None and versao != VERSAO_VISOES:
+        cursor.execute("DROP MATERIALIZED VIEW IF EXISTS resumo_produtos")
+        cursor.execute("DROP MATERIALIZED VIEW IF EXISTS ofertas_validas")
+
 def atualizar_visoes(cursor):
     """Recalcula as visões depois que as ofertas mudaram. CONCURRENTLY: o app continua lendo enquanto isso."""
+    recriar_visoes_desatualizadas(cursor)
     criar_visoes(cursor)
+    cursor.execute(f"COMMENT ON MATERIALIZED VIEW ofertas_validas IS '{VERSAO_VISOES}'")
     cursor.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY ofertas_validas")
     cursor.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY resumo_produtos")

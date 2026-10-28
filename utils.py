@@ -114,8 +114,74 @@ def normalizar_data_iso(valor):
 CATEGORIAS_MASTER = [
     "Açougue e Peixaria", "Bebidas", "Bebidas Alcoólicas", "Bebê e Infantil",
     "Congelados e Pratos Prontos", "Frios e Laticínios", "Higiene e Cuidado Pessoal",
-    "Hortifrúti", "Limpeza", "Mercearia e Despensa", "Padaria e Confeitaria", "Pet Shop", "Bazar e Utilidades"
+    "Hortifrúti", "Limpeza", "Mercearia e Despensa", "Padaria e Confeitaria", "Pet Shop", "Bazar e Utilidades", "Saúde e Suplementos"
 ]
+
+
+# Categoria bruta de cada mercado -> categoria master. A primeira regra que casar vale (a ordem importa).
+# A categoria bruta é comparada sem acento, em minúsculas e com "-", "&" e "," trocados por espaço.
+_REGRAS_CATEGORIA = [
+    (r"alcool|vinho|cerveja|destilado|whisky|tequila|vodka|aguardente|adega|drinks|gin e sake", "Bebidas Alcoólicas"),
+    (r"cafes|achocolatado|bebida|refrigerante|suco|agua|energetico|isotonico|chas prontos", "Bebidas"),
+    (r"acougue|carnes|aves|peixes|suinos|peixaria|churrasco", "Açougue e Peixaria"),
+    (r"hortifruti|frutas|legumes|folhagens|verduras|organicos|temperos frescos|ovos|floricultura|flores", "Hortifrúti"),
+    (r"queijo|laticinio|frios|iogurte|manteiga|creme de leite|chantilly|leites", "Frios e Laticínios"),
+    (r"padaria|paes|bolos|panetone|colomba|rotisseria|salgados assados", "Padaria e Confeitaria"),
+    (r"congelad|sorvete|pratos? prontos?|pizzas|empanados|cozinha do mundo|restaurante|sobremesas congeladas", "Congelados e Pratos Prontos"),
+    (r"bebe|infantil|crianca", "Bebê e Infantil"),
+    (r"pet", "Pet Shop"),
+    (r"higiene e limpeza|limpeza|lavanderia|cuidado com a casa|cuidado com roupa|inseticida|lava louca", "Limpeza"),
+    (r"higiene|beleza|perfumaria|cabelo|corpo|manicure|maquiagem|depilat|banho", "Higiene e Cuidado Pessoal"),
+    (r"vitamina|suplemento|complemento alimentar|esporte", "Saúde e Suplementos"),
+    (r"bazar|utilidade|utensilio|casa|descartave|suprimentos|automotiv|papelaria|material escolar|eletr|vestuario|chinelo|brinquedo|jardinagem|bateria|ferramenta|cultura|camping", "Bazar e Utilidades"),
+    (r"mercearia|alimentos|doces|biscoitos|bombons|balas|massas|graos|conserva|tempero|molho|salgadinho|mel e geleia|sem gluten|base de plantas|zero|diet|integra|sobremesa|preparos|adocante|cestas|saudaveis|caras do brasil|oba", "Mercearia e Despensa"),
+]
+
+# Categorias que não dizem o que o produto é (marca, "GERAL", vazia ou o "ALIMENTOS" do Pão de Açúcar):
+# aí a categoria vem do nome do produto.
+_CATEGORIAS_GENERICAS = {"", "geral", "outros", "nestle", "alimentos", "oba", "caras do brasil", "produtos sem lactose"}
+_REGRAS_NOME = [
+    (r"\b(racao|petisco|areia (higienica|para gatos?)|caes|cachorros?|gatos?)\b", "Pet Shop"),
+    (r"\b(bebida|isotonic[ao]|refrigerante|suco|agua mineral)\b", "Bebidas"),
+    (r"\b(vinho|cerveja|vodka|whisky|cachaca|espumante|gin|licor|tequila|rum)\b", "Bebidas Alcoólicas"),
+    (r"\b(comprimidos?|comp|capsulas?|xarope|pomada|gotas|generico|mg/ml|\d+ ?mg)\b", "Saúde e Suplementos"),
+    (r"\b(carne|bovin[ao]|suin[ao]|bacon|frango|linguica|salmao|bacalhau|peixe|picanha|costela|hamburguer)\b", "Açougue e Peixaria"),
+    (r"\b(queijo|presunto|mussarela|iogurte|requeijao|manteiga|leite|peito de peru|salame|mortadela)\b", "Frios e Laticínios"),
+    (r"\b(pao|paes|panettone|bolo|torrada)\b", "Padaria e Confeitaria"),
+    (r"\b(congelad[ao]|sorvete|pizza|lasanha|crepe)\b", "Congelados e Pratos Prontos"),
+    (r"\b(shampoo|condicionador|sabonete|desodorante|absorvente|escova de dente|creme dental|aparelho de barbear|lencos umedecidos|curativos?|creme de pentear|fio dental|esmalte|preservativo|hastes?|papel higienico|palito de madeira)\b", "Higiene e Cuidado Pessoal"),
+    (r"\b(detergente|desinfetante|sabao|amaciante|desentupidor|agua sanitaria)\b", "Limpeza"),
+    (r"\b(fralda|fraldas|haste flexivel)\b", "Bebê e Infantil"),
+    (r"\b(algodao|disco de algodao|touca de banho|aparelho depilacao)\b", "Higiene e Cuidado Pessoal"),
+    (r"\b(tira manchas|alvejante|limpador|limpa|lustra|esponja|la de aco|bloco sanitario|anti ?mofo|lava ?roupas|lava ?louca|vassoura|rodo|papel toalha)\b", "Limpeza"),
+    (r"\b(caqui|banana|maca|uva|laranja|tomate|batata|alho|mandioca|pimentao|pinhao|ovos)\b", "Hortifrúti"),
+    (r"\b(biscoito|bolacha|mostarda|molho|massa|macarrao|cafe|arroz|feijao|acucar|farinha|aveia|polvilho|nectar|extrato|cereal|achocolatado|chocolate|atum|sardinha|azeite|oleo|milho|fusilli)\b", "Mercearia e Despensa"),
+    (r"\b(guardanapo|filme pvc|filme de pvc|pilha|cobertor|vela|taca|taças|jogo de|copo|prato|panela|toalha de mesa)\b", "Bazar e Utilidades"),
+]
+
+
+def _sem_acento(texto):
+    texto = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", re.sub(r"[-&,]", " ", texto.lower())).strip()
+
+
+def normalizar_categoria(categoria_bruta, nome_produto=""):
+    """Categoria master a partir da categoria que o mercado deu (e, se ela não ajuda, do nome do produto).
+
+    Devolve "Outros" quando não há como saber: é melhor do que colocar o produto na categoria errada.
+    """
+    cat = _sem_acento(categoria_bruta)
+    if cat in _CATEGORIAS_GENERICAS:
+        nome = _sem_acento(nome_produto)
+        for padrao, destino in _REGRAS_NOME:
+            if re.search(padrao, nome):
+                return destino
+        # "Alimentos" e afins são comida mesmo; "Nestlé"/"Geral"/vazio podem ser qualquer coisa
+        return "Mercearia e Despensa" if cat in ("alimentos", "oba", "caras do brasil", "produtos sem lactose") else "Outros"
+    for padrao, destino in _REGRAS_CATEGORIA:
+        if re.search(padrao, cat):
+            return destino
+    return "Outros"
 
 
 def normalizar_para_cache(nome):

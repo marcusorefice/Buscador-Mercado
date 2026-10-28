@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from psycopg2.extras import execute_batch, execute_values
 from sincronizar_typesense import sincronizar_com_typesense
 from ofertas_sql import atualizar_visoes
-from utils import parse_preco, normalizar_data_iso, read_json_file
+from utils import parse_preco, normalizar_data_iso, read_json_file, normalizar_categoria
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -249,7 +249,7 @@ def main():
                 ean,
                 info.get("nome_comum", ""),
                 info.get("marca", ""),
-                info.get("Categoria", "OUTROS"),
+                normalizar_categoria(info.get("Categoria"), info.get("nome_comum")),
                 info.get("subcategoria", ""),
                 info.get("tipo_produto", ""),
                 info.get("imagem", ""),

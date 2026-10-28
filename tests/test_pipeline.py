@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from utils import parse_preco, normalizar_data_iso, salvar_json_atomico, ler_json_seguro, ArquivoCorrompidoError
+from utils import parse_preco, normalizar_data_iso, salvar_json_atomico, ler_json_seguro, ArquivoCorrompidoError, normalizar_categoria, CATEGORIAS_MASTER
 
 passo4 = importlib.import_module("4_resolver_pendentes")
 passo5 = importlib.import_module("5_atualizar_banco")
@@ -136,6 +136,80 @@ class TestApiMontarProdutos(unittest.TestCase):
         self.assertEqual([o.Mercado for o in produto.Ofertas], ["Barato", "Caro"])
         self.assertEqual(produto.Menor_Preco, 7)
         self.assertEqual(produto.Tags, ["a", "b"])
+
+
+
+class TestNormalizarCategoria(unittest.TestCase):
+    def test_categorias_brutas_dos_mercados(self):
+        casos = {
+            "HORTIFRUTI": "Hortifrúti",
+            "HORTIFRÚTI": "Hortifrúti",
+            "HIGIENE-E-PERFUMARIA": "Higiene e Cuidado Pessoal",
+            "FRIOS & EMBUTIDOS": "Frios e Laticínios",
+            "ACOUGUE-E-PEIXARIA": "Açougue e Peixaria",
+            "BEBIDAS ALCOÓLICAS": "Bebidas Alcoólicas",
+            "CERVEJAS": "Bebidas Alcoólicas",
+            "DESCARTÁVEIS": "Bazar e Utilidades",
+            "PETSHOP": "Pet Shop",
+        }
+        for bruta, esperado in casos.items():
+            with self.subTest(bruta=bruta):
+                self.assertEqual(normalizar_categoria(bruta), esperado)
+
+    def test_categoria_generica_usa_o_nome(self):
+        # "NESTLE" é a marca, não a categoria: o produto pode ser qualquer coisa
+        self.assertEqual(normalizar_categoria("NESTLE", "Rivaroxabana 10mg com 30 Comprimidos"), "Saúde e Suplementos")
+        self.assertEqual(normalizar_categoria("NESTLE", "Ração Úmida para Cães Adultos Sabor Carne"), "Pet Shop")
+        self.assertEqual(normalizar_categoria("NESTLE", "Queijo Provolone Tirolez 160g"), "Frios e Laticínios")
+        self.assertEqual(normalizar_categoria("ALIMENTOS", "Bacalhau Morhua Desfiado 300g"), "Açougue e Peixaria")
+
+    def test_sem_pista_vira_outros(self):
+        self.assertEqual(normalizar_categoria("GERAL", "Difusor de Aromas 4house Vanilla 100ml"), "Outros")
+        self.assertEqual(normalizar_categoria(None, None), "Outros")
+
+    def test_categoria_master_nao_muda(self):
+        for categoria in CATEGORIAS_MASTER:
+            with self.subTest(categoria=categoria):
+                self.assertEqual(normalizar_categoria(categoria), categoria)
+
+
+
+class TestCondicaoEspecialEspelhada(unittest.TestCase):
+    def test_sql_e_app_usam_a_mesma_regra(self):
+        # A regra do preço com CPF/clube/compra mínima existe no SQL e no app: as duas precisam ser iguais
+        import re
+        from ofertas_sql import RE_CONDICAO_ESPECIAL
+        caminho = os.path.join(os.path.dirname(__file__), '..', 'comparador-app', 'precos.ts')
+        with open(caminho, encoding='utf-8') as f:
+            regra_app = re.search(r"const CONDICAO_ESPECIAL = /(.+)/i;", f.read()).group(1)
+        self.assertEqual(regra_app, RE_CONDICAO_ESPECIAL)
+
+
+
+class TestApiProtecoes(unittest.TestCase):
+    def test_limite_de_pedidos_por_janela(self):
+        api = importlib.import_module("api")
+        limite = api._LimiteDePedidos(maximo=2, janela_segundos=10)
+        self.assertEqual([limite.permitir("a", 0), limite.permitir("a", 1), limite.permitir("a", 2)], [True, True, False])
+        self.assertTrue(limite.permitir("b", 2))    # outra chave tem a própria conta
+        self.assertTrue(limite.permitir("a", 11))   # passada a janela, volta a valer
+
+    def test_debug_fica_escondido_sem_a_senha(self):
+        from starlette.testclient import TestClient
+        api = importlib.import_module("api")
+        cliente = TestClient(api.app)
+        senha_original, api.DEBUG_TOKEN = api.DEBUG_TOKEN, "senha-de-teste"
+        try:
+            self.assertEqual(cliente.get("/debug").status_code, 404)
+            self.assertEqual(cliente.get("/debug", headers={"X-Debug-Token": "errada"}).status_code, 404)
+        finally:
+            api.DEBUG_TOKEN = senha_original
+
+    def test_cors_nao_libera_sites_por_padrao(self):
+        from starlette.testclient import TestClient
+        api = importlib.import_module("api")
+        resposta = TestClient(api.app).get("/", headers={"Origin": "https://site-qualquer.com"})
+        self.assertNotIn("access-control-allow-origin", resposta.headers)
 
 
 if __name__ == "__main__":
