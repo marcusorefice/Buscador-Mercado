@@ -36,21 +36,18 @@ const theme = {
   },
 };
 
+// Só os mercados coletados hoje. Assaí, Fort, Roldão, Tauste e Tenda estão pausados (exigem OCR de encarte):
+// quando voltarem, é só reincluí-los aqui.
 const MARKETS = [
   'Todos os Mercados',
-  'Assaí Atacadista',
   'Atacadão',
   'Boa Supermercados',
   'Carrefour',
   'Covabra',
   'Dom Olívio',
-  'Fort Atacadista',
   'Oba Hortifruti',
   'Pão de Açúcar',
-  'Roldão Atacadista',
-  'São Vicente',
-  'Tauste Supermercado',
-  'Tenda Atacado'
+  'São Vicente'
 ];
 
 type Ordenacao = 'relevance' | 'discount' | 'price';

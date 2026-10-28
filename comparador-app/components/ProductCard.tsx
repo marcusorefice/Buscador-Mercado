@@ -11,7 +11,7 @@ type MarketName =
   | 'Boa Supermercados'
   | 'Carrefour'
   | 'Covabra'
-  | 'Dom Olívio'
+  | 'Dom Olivio'
   | 'Fort Atacadista'
   | 'Oba Hortifruti'
   | 'Pão de Açúcar'
@@ -27,7 +27,7 @@ const marketLogos: Record<MarketName, any> = {
   'Boa Supermercados': require('../assets/logos/boa.png'),
   'Carrefour': require('../assets/logos/carrefour.png'),
   'Covabra': require('../assets/logos/covabra.png'),
-  'Dom Olívio': require('../assets/logos/dom_olivio.png'),
+  'Dom Olivio': require('../assets/logos/dom_olivio.png'),
   'Fort Atacadista': require('../assets/logos/fort.png'),
   'Oba Hortifruti': require('../assets/logos/oba.png'),
   'Pão de Açúcar': require('../assets/logos/pao_de_acucar.png'),
