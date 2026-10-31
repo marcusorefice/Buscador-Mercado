@@ -4,7 +4,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi.requests import AsyncSession
-from utils import setup_logging, read_json_file
+from utils import setup_logging, read_json_file, ean_e_valido, ean_unico_no_html
 
 
 logger = setup_logging()
@@ -320,13 +320,13 @@ async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
                 html = res.text
                 # 1. Tenta padrão explícito (gtin, ean com 13 dígitos)
                 match = re.search(r'(?:gtin\d*|ean)["\s:]+["\s]*(\d{13})', html, re.IGNORECASE)
-                if match:
+                if match and ean_e_valido(match.group(1)):
                     result["ean"] = match.group(1)
                 else:
-                    # 2. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790 ou 871
-                    match_any = re.search(r'(789\d{10}|790\d{10}|871\d{10})', html)
-                    if match_any:
-                        result["ean"] = match_any.group(1)
+                    # 2. Fallback: só se a página tiver um único EAN (vitrines e kits trazem EANs de outros produtos)
+                    ean_unico = ean_unico_no_html(html)
+                    if ean_unico:
+                        result["ean"] = ean_unico
                 
                 # Extração de categorias
                 match_next = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html)

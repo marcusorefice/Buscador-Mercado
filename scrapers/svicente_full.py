@@ -5,7 +5,7 @@ import re
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from datetime import datetime
-from utils import setup_logging, read_json_file, ean_e_valido
+from utils import setup_logging, read_json_file, ean_e_valido, ean_unico_no_html
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -52,13 +52,14 @@ async def fetch_ean_from_product_page(session, product_id, semaforo_pdp):
             resp = await session.get(url, timeout=15)
             if resp.status_code == 200:
                 match = re.search(r'<td>C&oacute;digo</td>\s*<td>(\d{13,14})</td>', resp.text, re.IGNORECASE)
-                if match: return match.group(1)
+                if match and ean_e_valido(match.group(1)): return match.group(1)
 
                 match2 = re.search(r'(?:gtin\d*|ean|sku)["\s:]+["\s]*(\d{13})', resp.text, re.IGNORECASE)
-                if match2: return match2.group(1)
+                if match2 and ean_e_valido(match2.group(1)): return match2.group(1)
 
-                match_any = re.search(r'(789\d{10}|790\d{10})', resp.text)
-                if match_any: return match_any.group(1)
+                # Só aceita se a página tiver um único EAN (vitrines e kits trazem EANs de outros produtos)
+                ean_unico = ean_unico_no_html(resp.text)
+                if ean_unico: return ean_unico
         except Exception:
             pass
         return None

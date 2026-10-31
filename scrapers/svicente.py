@@ -5,7 +5,7 @@ import re
 from curl_cffi.requests import AsyncSession
 from bs4 import BeautifulSoup
 from datetime import datetime
-from utils import setup_logging, read_json_file, ean_e_valido
+from utils import setup_logging, read_json_file, ean_e_valido, ean_unico_no_html
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -73,18 +73,18 @@ async def fetch_ean_from_product_page(session, product_id):
         if resp.status_code == 200:
             # 1. Busca na tabela de código
             match = re.search(r'<td>C&oacute;digo</td>\s*<td>(\d{13,14})</td>', resp.text, re.IGNORECASE)
-            if match:
+            if match and ean_e_valido(match.group(1)):
                 return match.group(1)
 
             # 2. Busca padrão explícito JSON
             match2 = re.search(r'(?:gtin\d*|ean|sku)["\s:]+["\s]*(\d{13})', resp.text, re.IGNORECASE)
-            if match2:
+            if match2 and ean_e_valido(match2.group(1)):
                 return match2.group(1)
 
-            # 3. Fallback: Qualquer EAN brasileiro (789/790) no HTML (ex: urls de imagens)
-            match_any = re.search(r'(789\d{10}|790\d{10})', resp.text)
-            if match_any:
-                return match_any.group(1)
+            # 3. Fallback: só se a página tiver um único EAN (vitrines e kits trazem EANs de outros produtos)
+            ean_unico = ean_unico_no_html(resp.text)
+            if ean_unico:
+                return ean_unico
     except Exception as e:
         logger.warning(f"  [S. Vicente] Falha ao buscar EAN extra na página do produto ID {product_id}: {e}")
     

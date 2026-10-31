@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import ean_e_valido, setup_logging, read_json_file, normalizar_para_cache, preco_da_peca_vtex
+from utils import ean_e_valido, ean_unico_no_html, setup_logging, read_json_file, normalizar_para_cache, preco_da_peca_vtex
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -191,21 +191,21 @@ async def fetch_ean_from_pdp(session, url_pdp, sem_pdp):
                     for script in soup.find_all('script', type='application/ld+json'):
                         data = json.loads(script.string)
                         if isinstance(data, dict) and data.get('@type') == 'Product':
-                            ean = data.get('gtin13') or data.get('gtin') or data.get('sku')
-                            if ean and len(str(ean)) >= 12:
-                                return str(ean)
+                            ean = str(data.get('gtin13') or data.get('gtin') or '').strip()
+                            if ean_e_valido(ean):
+                                return ean
                 except Exception:
                     pass
 
                 # 2. Tenta padrão explícito (gtin, ean, sku com 13 digitos)
-                match = re.search(r'(?:gtin\d*|ean|sku)["\s:]+["\s]*(\d{13})', html, re.IGNORECASE)
-                if match:
+                match = re.search(r'(?:gtin\d*|ean)["\s:]+["\s]*(\d{13})', html, re.IGNORECASE)
+                if match and ean_e_valido(match.group(1)):
                     return match.group(1)
                 
-                # 3. Fallback: Qualquer sequência de 13 dígitos começando com 789 ou 790
-                match_any = re.search(r'(789\d{10}|790\d{10})', html)
-                if match_any:
-                    return match_any.group(1)
+                # 3. Fallback: só se a página tiver um único EAN (vitrines e kits trazem EANs de outros produtos)
+                ean_unico = ean_unico_no_html(html)
+                if ean_unico:
+                    return ean_unico
         except:
             pass
     return "N/A"

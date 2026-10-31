@@ -11,10 +11,38 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from utils import parse_preco, normalizar_data_iso, salvar_json_atomico, ler_json_seguro, ArquivoCorrompidoError, normalizar_categoria, CATEGORIAS_MASTER
+from utils import ean_e_valido, ean_unico_no_html, parse_preco, normalizar_data_iso, salvar_json_atomico, ler_json_seguro, ArquivoCorrompidoError, normalizar_categoria, CATEGORIAS_MASTER
 
 passo4 = importlib.import_module("4_resolver_pendentes")
 passo5 = importlib.import_module("5_atualizar_banco")
+from casamento_produtos import CasadorProdutos, equivalencias_automaticas, apoio_por_ean
+
+
+class TestEanEValido(unittest.TestCase):
+    def test_gtins_reais(self):
+        for ean in ["7891000100103", "80051220", "0000078946033", "0000042360407"]:
+            with self.subTest(ean=ean):
+                self.assertTrue(ean_e_valido(ean))
+
+    def test_codigo_interno_com_zeros_nao_e_ean(self):
+        # Códigos internos do Pão de Açúcar e do São Vicente: o mesmo número é um produto diferente em cada loja
+        for ean in ["0000000081641", "0000000037839", "0000002510606"]:
+            with self.subTest(ean=ean):
+                self.assertFalse(ean_e_valido(ean))
+
+
+class TestEanUnicoNoHtml(unittest.TestCase):
+    def test_um_ean_so(self):
+        self.assertEqual(ean_unico_no_html('<img src="/fotos/7891000100103.jpg"> "ean":"7891000100103"'), "7891000100103")
+
+    def test_varios_eans_nao_escolhe_nenhum(self):
+        # Página de kit ou com vitrine: o primeiro EAN pode ser de outro produto
+        html = 'Kit Melitta <a>7891021006125</a> vitrine <a>7891000100103</a>'
+        self.assertIsNone(ean_unico_no_html(html))
+
+    def test_ignora_numero_invalido_e_pedaco_de_numero_maior(self):
+        self.assertIsNone(ean_unico_no_html("id 7891000100104 e 178910001001039"))
+        self.assertIsNone(ean_unico_no_html(""))
 
 
 class TestParsePreco(unittest.TestCase):
@@ -212,5 +240,69 @@ class TestApiProtecoes(unittest.TestCase):
         self.assertNotIn("access-control-allow-origin", resposta.headers)
 
 
+
+class TestMontarProdutos(unittest.TestCase):
+    def test_quantidade_de_mercados_vem_do_ranking_mesmo_com_filtro(self):
+        api = importlib.import_module("api")
+        linha = {"ean": "789", "nome_comum": "Leite", "categoria": "Frios e Laticínios", "marca": "X", "imagem": "", "tags": "",
+                 "mercado": "Carrefour", "nome_original": "LEITE", "preco_varejo": 5.0, "preco_atacado": 5.0, "qtd_valor": "1",
+                 "medida": "UN", "unidade": "UN", "condicao": "1 UN", "data_atualizacao": "", "link_pdp": "",
+                 "preco_efetivo": 5.0, "qtd_mercados": 6}
+        produto = api._montar_produtos([linha])[0]
+        self.assertEqual(produto["Qtd_Mercados"], 6)
+        self.assertEqual(len(produto["Ofertas"]), 1)
+        sem_ranking = {k: v for k, v in linha.items() if k != "qtd_mercados"}  # /produtos/lote não traz a coluna
+        self.assertIsNone(api._montar_produtos([sem_ranking])[0]["Qtd_Mercados"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEquivalenciasPrincipal(unittest.TestCase):
+    """O principal de dois EANs com nome idêntico é o que mais mercados confirmam, não o menor número."""
+    BIBLIOTECA = {
+        "7891095911851": {"nome_comum": "Shampoo Dove Reconstrução + Aminoácido 370ml", "marca": "Dove"},
+        "7891150102637": {"nome_comum": "Shampoo Dove Reconstrução + Aminoácido 370ml", "marca": "Dove"},
+    }
+
+    def test_sem_apoio_vale_o_menor(self):
+        mapa = equivalencias_automaticas(CasadorProdutos(self.BIBLIOTECA))
+        self.assertEqual(mapa, {"7891150102637": "7891095911851"})
+
+    def test_com_apoio_vale_o_confirmado(self):
+        apoio = {"7891150102637": 1}
+        mapa = equivalencias_automaticas(CasadorProdutos(self.BIBLIOTECA), apoio=apoio)
+        self.assertEqual(mapa, {"7891095911851": "7891150102637"})
+
+    def test_apoio_conta_mercados_distintos(self):
+        itens = [
+            {"EAN": "7891150102637", "Mercado": "Atacadão"},
+            {"EAN": "7891150102637", "Mercado": "Atacadão"},
+            {"EAN": "7891150102637", "Mercado": "Carrefour"},
+            {"EAN": "N/A", "Mercado": "Covabra"},
+            {"EAN": "INT_ABC", "Mercado": "Covabra"},
+        ]
+        self.assertEqual(apoio_por_ean(itens), {"7891150102637": 2})
+
+
+class TestConflitosBiblioteca(unittest.TestCase):
+    def test_classificacao(self):
+        self.assertEqual(passo4.classificar_conflito({"Atacadão", "Carrefour"}, set()), "PROVAVEL_BIBLIOTECA_ERRADA")
+        self.assertEqual(passo4.classificar_conflito({"Atacadão"}, {"Oba", "Covabra"}), "PROVAVEL_ITEM_DO_MERCADO_ERRADO")
+        self.assertEqual(passo4.classificar_conflito({"Atacadão"}, set()), "REVISAR")
+
+    def test_relatorios_sao_gravados(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            caminho = os.path.join(pasta, "conflitos.csv")
+            n = passo4.gravar_conflitos_biblioteca(
+                [("789", "Lâmpada Ledvance", "SABONETE CLOY 80G", "Carrefour"), ("789", "Lâmpada Ledvance", "SABONETE CLOY 80G", "Covabra")],
+                {}, caminho)
+            self.assertEqual(n, 1)
+            with open(caminho, encoding="utf-8-sig") as f:
+                self.assertIn("PROVAVEL_BIBLIOTECA_ERRADA", f.read())
+            log = os.path.join(pasta, "eq.csv")
+            passo4.gravar_log_equivalencias({"2": "1"}, {"1": {"nome_comum": "A"}, "2": {"nome_comum": "A"}}, {"2": 1}, log)
+            with open(log, encoding="utf-8-sig") as f:
+                self.assertEqual(len(f.read().strip().splitlines()), 2)
+

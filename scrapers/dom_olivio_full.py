@@ -8,7 +8,7 @@ import base64
 from datetime import datetime
 import curl_cffi
 from curl_cffi.requests import AsyncSession
-from utils import setup_logging, read_json_file, CacheEanPdp
+from utils import setup_logging, read_json_file, CacheEanPdp, ean_unico_no_html
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -121,8 +121,9 @@ async def fetch_ean_from_pdp(session: AsyncSession, url_pdp: str, sem_pdp: async
         try:
             res = await session.get(url_pdp, timeout=15)
             if res.status_code == 200:
-                todos_eans = re.findall(r'\b(789\d{10}|790\d{10})\b', res.text)
-                if todos_eans: return todos_eans[0]
+                # Só aceita se a página tiver um único EAN (vitrines e kits trazem EANs de outros produtos)
+                ean_unico = ean_unico_no_html(res.text)
+                if ean_unico: return ean_unico
         except Exception: pass
     return "N/A"
 

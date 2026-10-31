@@ -288,6 +288,11 @@ def ean_e_valido(ean_str):
     
     # Bloqueia lixo como '0000000000000' ou '1111111111111'
     if len(set(ean_str)) == 1: return False
+
+    # Código interno da loja completado com zeros (ex.: '0000000081641', comum no Pão de Açúcar
+    # e no São Vicente). Cada loja numera do seu jeito, então o mesmo número junta produtos
+    # diferentes. Um GTIN de verdade tem pelo menos 8 dígitos úteis (EAN-8 com zeros continua valendo).
+    if len(ean_str.lstrip('0')) <= 7: return False
     
     # Bloqueia EANs de pesagem/balança (geralmente começam com 2, 02, 20-29 no Brasil)
     # Esses não são universais e causam agrupamento errado de hortifruti/açougue.
@@ -301,6 +306,18 @@ def ean_e_valido(ean_str):
     total = sum(int(padded[i]) * (3 if i % 2 == 0 else 1) for i in range(13))
     check_digit_calculado = str((10 - (total % 10)) % 10)
     return check_digit_calculado == padded[13]
+
+
+def ean_unico_no_html(html):
+    """
+    Último recurso para achar o EAN na página do produto: só devolve um EAN brasileiro (789/790)
+    se ele for o ÚNICO EAN válido na página. Páginas com vitrines ("quem viu também viu") ou kits
+    trazem vários EANs, e pegar o primeiro gravava o código de outro produto.
+    """
+    if not html:
+        return None
+    encontrados = {e for e in re.findall(r'(?<!\d)(789\d{10}|790\d{10})(?!\d)', html) if ean_e_valido(e)}
+    return encontrados.pop() if len(encontrados) == 1 else None
 
 
 def exibir_resumo_coleta(resumo_geral, logger_instance):
