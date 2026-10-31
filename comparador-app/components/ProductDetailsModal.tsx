@@ -9,6 +9,7 @@ import { useShoppingListStore } from './useShoppingListStore';
 import * as Clipboard from 'expo-clipboard';
 import { usePreferenciasStore, CEP_PADRAO } from './usePreferenciasStore';
 import { getPrecoCondicional } from '../precos';
+import { formatPrice } from '../formatar';
 
 interface ProductDetailsModalProps {
   visible: boolean;
@@ -32,10 +33,6 @@ const idadeDaOferta = (dataStr?: string): { texto: string; velha: boolean } | nu
   if (horas < 24) return { texto: `há ${Math.floor(horas)} h`, velha: false };
   const dias = Math.floor(horas / 24);
   return { texto: `há ${dias} ${dias === 1 ? 'dia' : 'dias'}`, velha: dias >= 2 };
-};
-
-const formatPrice = (value: number) => {
-  return value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
 export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visible, onDismiss, product, apiUrl }) => {

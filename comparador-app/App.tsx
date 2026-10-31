@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform, Alert, Image, Keyboard } from 'react-native';
-import { Provider as PaperProvider, DefaultTheme, Searchbar, Text, Chip, IconButton, Button, TextInput } from 'react-native-paper';
+import { Provider as PaperProvider, Searchbar, Text, Chip, IconButton, Button, TextInput } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { ProductList } from './components/ProductList';
@@ -14,52 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
-
-// --- CONFIGURAÇÃO DE AMBIENTE ---
-// EXPO_PUBLIC_API_URL (arquivo .env do app) sobrescreve tudo, ex.: API local ou outro túnel
-const API_URL = process.env.EXPO_PUBLIC_API_URL || (__DEV__ && Platform.OS !== 'web' // na web (navegador) usa sempre o Render
-  ? 'https://badness-impale-suitably.ngrok-free.dev' // ngrok: Ignora o Firewall do Windows e atualiza na hora!
-  : 'https://buscador-mercado.onrender.com');        // Render: App Oficial da Nuvem
-
-// As sugestões da busca (Typesense) vêm pela API em /autocompletar: o Android bloqueia HTTP sem
-// criptografia nos APKs, então o app não fala direto com o servidor do Typesense.
-
-// Quantos produtos vêm por vez; o resto carrega conforme a pessoa rola a lista
-const TAMANHO_PAGINA = 40;
-
-const theme = {
-  ...DefaultTheme,
-  colors: {
-    ...DefaultTheme.colors,
-    primary: '#E5293E', // Vermelho vibrante estilo app comercial
-    accent: '#ff4d5a',
-  },
-};
-
-// Só os mercados coletados hoje. Assaí, Fort, Roldão, Tauste e Tenda estão pausados (exigem OCR de encarte):
-// quando voltarem, é só reincluí-los aqui.
-const MARKETS = [
-  'Todos os Mercados',
-  'Atacadão',
-  'Boa Supermercados',
-  'Carrefour',
-  'Covabra',
-  'Dom Olivio', // sem acento: é o nome que a API grava, e o filtro compara o texto exato
-  'Oba Hortifruti',
-  'Pão de Açúcar',
-  'São Vicente'
-];
-
-type Ordenacao = 'relevance' | 'discount' | 'price';
-
-// O botão de ordenação abre um menu com todas as opções
-const ORDENACOES: Record<Ordenacao, { titulo: string; icone: string; descricao: string }> = {
-  relevance: { titulo: 'Em Alta', icone: 'fire', descricao: 'Os produtos mais procurados primeiro' },
-  discount: { titulo: 'Maiores Descontos', icone: 'percent', descricao: 'Maior queda de preço primeiro' },
-  price: { titulo: 'Menores Preços', icone: 'currency-usd', descricao: 'Do mais barato para o mais caro' },
-};
-
-const TAGS_PADRAO = ['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó'];
+import { API_URL, TAMANHO_PAGINA, theme, MARKETS, Ordenacao, ORDENACOES, TAGS_PADRAO } from './config';
 
 // Chips da tela inicial: o que a pessoa mais busca, depois o que todos mais buscam, depois o padrão
 const montarTags = (historico: Record<string, number>, populares: string[]): string[] => {
@@ -85,7 +40,7 @@ export default function App() {
   const [suggestionImage, setSuggestionImage] = useState<string | null>(null);
   const [suggestionImageBase64, setSuggestionImageBase64] = useState<string | null>(null);
   const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
-  const [dynamicTags, setDynamicTags] = useState<string[]>(['coca-cola', 'heineken', 'azeite', 'óleo', 'leite', 'café', 'papel higiênico', 'sabão em pó']);
+  const [dynamicTags, setDynamicTags] = useState<string[]>(TAGS_PADRAO);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const productsRef = useRef<Product[]>([]);
   const temMaisRef = useRef(false);
@@ -1035,4 +990,4 @@ const styles = StyleSheet.create({
   sidebarItemText: { fontSize: 16, color: '#333', fontWeight: '500' },
   sidebarFooter: { padding: 20, borderTopWidth: 1, borderTopColor: '#eee', alignItems: 'center' },
   versionText: { color: '#999', fontSize: 12, fontWeight: 'bold' },
-});
+});

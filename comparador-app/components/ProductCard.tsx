@@ -4,6 +4,7 @@ import { Card, Text, Title, IconButton } from 'react-native-paper';
 import { Product } from '../types';
 import { useShoppingListStore } from './useShoppingListStore';
 import { getUnidadesPack, vendidoPorPeso, descreverPeso, getPrecoCondicional } from '../precos';
+import { formatPrice } from '../formatar';
 
 type MarketName = 
   | 'Assaí Atacadista'
@@ -46,10 +47,6 @@ interface ProductCardProps {
   product: Product;
   onPress?: (product: Product) => void;
 }
-
-const formatPrice = (value: number) => {
-  return value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
 
 export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) => {
   const [imageError, setImageError] = React.useState(false);
@@ -110,6 +107,9 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
     }
     return melhor;
   }, [product.Ofertas, product.Menor_Preco]);
+
+  // Com filtro de mercado a API manda só a oferta do mercado escolhido, mas diz em quantos o produto existe
+  const totalMercados = Math.max(product.Qtd_Mercados || 0, product.Ofertas?.length || 0);
 
   const originalPrice = (product as any).Maior_Preco || maxOfferPrice;
   const currentPrice = product.Menor_Preco || 0;
@@ -226,7 +226,7 @@ export const ProductCard = React.memo(({ product, onPress }: ProductCardProps) =
 
           <View style={styles.footer}>
             <Text style={styles.offerCount}>
-              {product.Ofertas?.length === 1 ? 'Disponível em 1 mercado:' : `Disponíveis em ${product.Ofertas?.length || 0} mercados:`}
+              {totalMercados === 1 ? 'Disponível em 1 mercado:' : `Disponíveis em ${totalMercados} mercados${totalMercados > (product.Ofertas?.length || 0) ? ' · mostrando:' : ':'}`}
             </Text>
             {bestOffer && (
               <View style={styles.bestOfferInfo}>
