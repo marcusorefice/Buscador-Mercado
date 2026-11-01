@@ -12,6 +12,10 @@ Por isso o resultado fica guardado em duas visões materializadas, recalculadas 
 # é descartada: quase sempre é kit, combo, pack não detectado ou cadastro errado do mercado.
 FATOR_OUTLIER = 2.5
 
+# Preço por unidade abaixo disso é erro de cadastro (ex: Pão de Açúcar com "PÃO FRANCÊS COM GRÃOS" a R$ 0,03,
+# provavelmente o preço por grama) e fica de fora. Não vale para venda por peso (preço por kg).
+PRECO_MINIMO_UN = 0.10
+
 # Por quanto dividir o preço da oferta para chegar ao preço comparável:
 #  - pack vendido com o EAN da unidade (Red Bull "4 LATAS") -> 4 unidades
 #  - item vendido por peso: o preço gravado é o da peça/embalagem, Qtd_Valor é o peso dela -> preço por kg
@@ -64,6 +68,7 @@ SQL_OFERTAS_VALIDAS = f'''
     mesma_unidade AS (
         SELECT b.* FROM base b JOIN unidade_principal u ON u.ean = b.ean
         WHERE b.preco_efetivo IS NOT NULL AND COALESCE(NULLIF(UPPER(b.unidade), ''), 'UN') = u.unidade_norm
+          AND (u.unidade_norm = 'KG' OR b.preco_efetivo >= {PRECO_MINIMO_UN})
     ),
     medianas AS (
         SELECT ean, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY preco_efetivo) AS mediana, COUNT(*) AS n
@@ -99,7 +104,7 @@ def criar_visoes(cursor):
 
 # Mude quando a definição das visões mudar: CREATE ... IF NOT EXISTS não atualiza uma visão que já existe,
 # então o passo 5 apaga e recria as que estiverem em outra versão. A API (que também chama criar_visoes) nunca apaga.
-VERSAO_VISOES = "2"
+VERSAO_VISOES = "3"
 
 def recriar_visoes_desatualizadas(cursor):
     cursor.execute("""SELECT obj_description(c.oid, 'pg_class') AS versao FROM pg_class c

@@ -10,6 +10,7 @@ NOME_ALIAS = 'produtos'  # nome que o app usa na busca (collections/produtos/...
 
 def _criar_cliente():
     api_key = os.getenv("TYPESENSE_ADMIN_KEY")
+
     if not api_key:
         raise RuntimeError("TYPESENSE_ADMIN_KEY não definida no .env")
     host = os.getenv("TYPESENSE_HOST")

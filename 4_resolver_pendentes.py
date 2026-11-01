@@ -7,8 +7,9 @@ import re
 
 from buscador_ean import tentar_recuperar_ean
 from utils import ean_e_valido, otimizar_nome_produto, aplicar_title_case, ler_json_seguro, salvar_json_atomico, ArquivoCorrompidoError, parse_preco
+import csv
 import statistics
-from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, nomes_conferem, unidades_por_pack, normalizar_marca, ean_do_mercado_errado, e_combo
+from casamento_produtos import padronizar_multiplicacao, normalizar_sinonimos, CasadorProdutos, montar_equivalencias, apoio_por_ean, nomes_conferem, unidades_por_pack, normalizar_marca, ean_do_mercado_errado, e_combo
 from datetime import date
 import revisar_casamentos
 
@@ -21,6 +22,9 @@ ARQUIVO_BIBLIOTECA = os.path.join(DATA_DIR, "biblioteca_produtos.json")
 ARQUIVO_PROCESSADOS = os.path.join(DATA_DIR, "itens_prontos_para_comparar.json")
 ARQUIVO_QUARENTENA = os.path.join(DATA_DIR, "quarentena_anomalias.json")
 ARQUIVO_CACHE_WEB = os.path.join(DATA_DIR, "cache_buscas_web.json")
+# Relatórios para conferir a biblioteca (sobrescritos a cada execução)
+ARQUIVO_LOG_EQUIVALENCIAS = os.path.join(DATA_DIR, "equivalencias_log.csv")
+ARQUIVO_CONFLITOS_BIBLIOTECA = os.path.join(DATA_DIR, "conflitos_biblioteca.csv")
 
 # Busca de EAN na web (APIs). Desligue com "python 4_resolver_pendentes.py --sem-web" ou BUSCA_WEB_EAN=0 no .env
 BUSCA_WEB = "--sem-web" not in sys.argv and os.getenv("BUSCA_WEB_EAN", "1") != "0"
@@ -200,6 +204,44 @@ def checar_conflito_anomalia(nome_base, nome_novo):
     # Ignora divergências puras de nome (assinatura e similaridade de texto foram removidas)
     return False
 
+def classificar_conflito(mercados_novos, mercados_biblioteca):
+    """Quem provavelmente está errado num conflito de nome entre o EAN do scraper e a biblioteca.
+    mercados_novos: mercados do lote cujo nome conflita com a biblioteca; mercados_biblioteca: os que batem com ela."""
+    novos, antigos = len(set(mercados_novos)), len(set(mercados_biblioteca))
+    if novos >= 2 and antigos == 0:
+        return "PROVAVEL_BIBLIOTECA_ERRADA"
+    if antigos >= 1 and novos == 1:
+        return "PROVAVEL_ITEM_DO_MERCADO_ERRADO"
+    return "REVISAR"
+
+def gravar_csv(caminho, cabecalho, linhas):
+    with open(caminho, "w", newline="", encoding="utf-8-sig") as f:
+        escritor = csv.writer(f, delimiter=";")
+        escritor.writerow(cabecalho)
+        escritor.writerows(linhas)
+
+def gravar_log_equivalencias(equivalencias, biblioteca, apoio, caminho=ARQUIVO_LOG_EQUIVALENCIAS):
+    """Toda fusão automática de EANs fica registrada: um erro como o do Dove aparece no dia."""
+    linhas = [[sec, biblioteca.get(sec, {}).get("nome_comum", ""), apoio.get(sec, 0),
+               princ, biblioteca.get(princ, {}).get("nome_comum", ""), apoio.get(princ, 0)]
+              for sec, princ in sorted(equivalencias.items(), key=lambda x: x[1])]
+    gravar_csv(caminho, ["ean_secundario", "nome_secundario", "mercados_secundario", "ean_principal", "nome_principal", "mercados_principal"], linhas)
+
+def gravar_conflitos_biblioteca(conflitos, mercados_que_batem, caminho=ARQUIVO_CONFLITOS_BIBLIOTECA):
+    """conflitos: [(ean, nome_biblioteca, nome_do_item, mercado)]; mercados_que_batem: {ean: {mercados}}."""
+    por_ean = {}
+    for ean, nome_biblioteca, nome_item, mercado in conflitos:
+        por_ean.setdefault(ean, {"biblioteca": nome_biblioteca, "itens": [], "mercados": set()})
+        por_ean[ean]["itens"].append(nome_item)
+        por_ean[ean]["mercados"].add(mercado)
+    linhas = []
+    for ean, c in sorted(por_ean.items()):
+        batem = mercados_que_batem.get(ean, set())
+        linhas.append([ean, c["biblioteca"], " | ".join(sorted(set(c["itens"]))[:3]), len(c["mercados"]), len(batem),
+                       classificar_conflito(c["mercados"], batem)])
+    gravar_csv(caminho, ["ean", "nome_na_biblioteca", "nomes_novos_dos_mercados", "mercados_com_nome_novo", "mercados_com_nome_da_biblioteca", "sugestao"], linhas)
+    return len(linhas)
+
 async def main():
     if not os.path.exists(ARQUIVO_PENDENTES):
         logger.info("✅ Arquivo pendentes_ia.json não existe. Nenhum item para processar.")
@@ -240,7 +282,9 @@ async def main():
     logger.info("🧠 Montando o índice de casamento de nomes da biblioteca...")
     casador = CasadorProdutos(biblioteca, casamentos)
     # Mesmo produto com mais de um EAN: todos passam a usar o EAN principal (um card só no app)
-    equivalencias = montar_equivalencias(casador, casamentos)
+    apoio = apoio_por_ean(pendentes)
+    equivalencias = montar_equivalencias(casador, casamentos, apoio)
+    gravar_log_equivalencias(equivalencias, biblioteca, apoio)
     logger.info(f"   {len(equivalencias)} EANs repetidos serão unificados no EAN principal.")
     sugestoes_revisao = {}
     contagem_casamento = {"confirmado": 0, "auto": 0, "revisao": 0, "interno": 0, "web_rejeitado": 0}
@@ -352,6 +396,7 @@ async def main():
 
     # --- LOOP DE VALIDAÇÃO DA DEFESA AUTOMÁTICA ---
     itens_filtrados_por_ean = {}
+    conflitos_biblioteca = []
     for ean, lista_itens in itens_por_ean.items():
         itens_filtrados_por_ean[ean] = []
         for item in lista_itens:
@@ -365,6 +410,7 @@ async def main():
                 if checar_conflito_anomalia(nome_ouro, nome_item):
                     conflito = True
                     nome_conflito = nome_ouro
+                    conflitos_biblioteca.append((ean, biblioteca[ean].get("nome_comum", ""), nome_item, mercado_item))
             elif itens_filtrados_por_ean[ean]:
                 nome_primeiro = str(itens_filtrados_por_ean[ean][0].get("Produto", "")).upper()
                 if checar_conflito_anomalia(nome_primeiro, nome_item):
@@ -396,6 +442,10 @@ async def main():
                 itens_filtrados_por_ean[ean].append(item)
 
     itens_por_ean = {k: v for k, v in itens_filtrados_por_ean.items() if v}
+    if conflitos_biblioteca:
+        batem = {ean: {i["Mercado"] for i in itens if i.get("Mercado")} for ean, itens in itens_por_ean.items()}
+        n_conflitos = gravar_conflitos_biblioteca(conflitos_biblioteca, batem)
+        logger.warning(f"⚠️ {n_conflitos} EANs com nome em conflito com a biblioteca: veja {ARQUIVO_CONFLITOS_BIBLIOTECA}")
 
     # --- TENTATIVA DE RECUPERAÇÃO DE EANs FALTANTES ---
     if itens_sem_ean:

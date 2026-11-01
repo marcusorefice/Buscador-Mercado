@@ -1,7 +1,9 @@
 import psycopg2
 import sqlite3
 import json
+import re
 import os
+import sys
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
@@ -161,6 +163,23 @@ def aplicar_correcoes_ean(ean, nome_original, correcoes):
             return c.get("ean_correto", ean)
     return ean
 
+# Item sem EAN vendido por peça com o peso no nome ("BATATA PIRULITO 1 UN 35G", "LINGUIÇA 1 PORÇÃO 515G"):
+# vira venda por peso (Unidade KG + peso da peça), para o app mostrar o preço por kg como no Oba,
+# em vez de R$ 0,34 pela batatinha. Só INT_: com EAN o produto é comparado por unidade com outros mercados.
+RE_PECA_COM_PESO = re.compile(r"\b1\s+(?:UN|UNID|UNIDADE|PORÇÃO|PORCAO)\s+(\d+(?:[.,]\d+)?)\s*(G|KG)$", re.IGNORECASE)
+
+def peso_da_peca(ean, nome_original, qtd_valor, medida, unidade):
+    """(Qtd_Valor, Medida, Unidade) da oferta, convertendo a peça com peso no nome em venda por peso."""
+    if not ean.startswith("INT_") or unidade.upper() != "UN" or qtd_valor not in ("1", ""):
+        return qtd_valor, medida, unidade
+    m = RE_PECA_COM_PESO.search(str(nome_original).strip())
+    if not m:
+        return qtd_valor, medida, unidade
+    peso = float(m.group(1).replace(",", "."))
+    if peso <= 0:
+        return qtd_valor, medida, unidade
+    return f"{peso:g}", m.group(2).upper(), "KG"
+
 def preparar_ofertas(itens_crus, correcoes):
     """
     Converte os itens do passo 4 em linhas de oferta, uma por (ean, mercado).
@@ -190,16 +209,31 @@ def preparar_ofertas(itens_crus, correcoes):
         if item.get("Scraper_Origem") == "FULL":
             mercados_full.add(mercado)
 
+        qtd_valor, medida, unidade = peso_da_peca(
+            ean, nome_original, str(item.get("Qtd_Valor", "1")), str(item.get("Medida", "UN")), str(item.get("Unidade", "UN")))
+
         # Se o mesmo (ean, mercado) aparecer duas vezes no lote, o último vence
         # (o Postgres não aceita o mesmo registro duas vezes num único INSERT ... ON CONFLICT).
         ofertas[(ean, mercado)] = (
             ean, mercado, nome_original, p_varejo, p_atacado,
-            str(item.get("Qtd_Valor", "1")), str(item.get("Medida", "UN")), str(item.get("Unidade", "UN")),
+            qtd_valor, medida, unidade,
             item.get("Condicao", item.get("Condição", "")),
             normalizar_data_iso(item.get("Data_Hora")) if item.get("Data_Hora") else hoje,
             item.get("Link_PDP", ""),
         )
     return ofertas, eans_por_mercado, mercados_full
+
+LIMITE_LIMPEZA = 0.05  # a limpeza FULL não pode apagar mais que 5% das ofertas do mercado
+
+
+def limpeza_segura(total_no_banco, a_apagar, limite=LIMITE_LIMPEZA):
+    """True se apagar `a_apagar` de `total_no_banco` ofertas é um volume plausível.
+    Uma coleta que perdeu categorias (erro silencioso do scraper) faria o passo 5
+    apagar o catálogo inteiro daquele mercado; acima do limite a limpeza é pulada."""
+    if total_no_banco <= 0:
+        return True
+    return a_apagar / total_no_banco <= limite
+
 
 def calcular_novos_historicos(ofertas, ultimos_precos):
     """Só gera linha de histórico se for o primeiro registro ou se o preço mudou."""
@@ -341,6 +375,19 @@ def main():
                 # Proteção contra deleção em massa pelas raspagens diárias (que pegam só algumas ofertas)
                 if mercado_nome not in mercados_full:
                     logger.info(f"⏩ Limpeza ignorada para '{mercado_nome}' (Coleta diária/parcial não deleta o catálogo base do banco).")
+                    continue
+
+                # Trava: se a limpeza apagaria mais que o limite, o scraper provavelmente perdeu itens.
+                cursor_pg.execute("SELECT COUNT(*) FROM ofertas_atuais WHERE mercado = %s", (mercado_nome,))
+                total_no_banco = cursor_pg.fetchone()[0]
+                cursor_pg.execute(
+                    "SELECT COUNT(*) FROM ofertas_atuais WHERE mercado = %s AND NOT (ean = ANY(%s))",
+                    (mercado_nome, list(eans_ativos)))
+                a_apagar = cursor_pg.fetchone()[0]
+                if not limpeza_segura(total_no_banco, a_apagar) and "--forcar-limpeza" not in sys.argv:
+                    logger.warning(
+                        f"🛑 Limpeza BLOQUEADA para '{mercado_nome}': apagaria {a_apagar} de {total_no_banco} ofertas "
+                        f"(>{LIMITE_LIMPEZA:.0%}). Confira o scraper; se a queda é real, rode com --forcar-limpeza.")
                     continue
 
                 cursor_pg.execute('''

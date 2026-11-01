@@ -442,11 +442,23 @@ def gerar_id_interno(a: Assinatura):
 def _e_ean_real(ean):
     return not ean.startswith("INT_") and "_" not in ean
 
-def equivalencias_automaticas(casador: CasadorProdutos, nao_equivalentes=()):
+def apoio_por_ean(itens):
+    """{ean: nº de mercados distintos que trouxeram esse EAN direto do cadastro do site neste lote}."""
+    mercados = defaultdict(set)
+    for item in itens:
+        ean = str(item.get("EAN", item.get("ean", ""))).strip()
+        if ean.isdigit() and len(ean) >= 8 and item.get("Mercado"):
+            mercados[ean].add(item["Mercado"])
+    return {ean: len(m) for ean, m in mercados.items()}
+
+def equivalencias_automaticas(casador: CasadorProdutos, nao_equivalentes=(), apoio=None):
     """
     EANs cuja assinatura é IDÊNTICA (mesma marca, palavras, medida e pack) são o mesmo produto.
-    Retorna {ean_secundario: ean_principal}. O principal é o menor EAN do grupo (estável entre rodadas).
+    Retorna {ean_secundario: ean_principal}. O principal é o EAN que mais mercados confirmam direto
+    (`apoio`, de apoio_por_ean); no empate, o menor EAN (estável entre rodadas). Antes valia só o menor
+    número, e uma entrada nascida de EAN trocado (amendoim) ganhava do EAN certo do Dove.
     """
+    apoio = apoio or {}
     bloqueados = {frozenset(par) for par in nao_equivalentes}
     grupos = defaultdict(list)
     for ean, a in casador.assinaturas.items():
@@ -456,7 +468,7 @@ def equivalencias_automaticas(casador: CasadorProdutos, nao_equivalentes=()):
     for eans in grupos.values():
         if len(eans) < 2:
             continue
-        eans.sort()
+        eans.sort(key=lambda e: (-apoio.get(e, 0), e))
         principal = eans[0]
         for outro in eans[1:]:
             if frozenset((principal, outro)) not in bloqueados:
@@ -479,10 +491,10 @@ def sugerir_duplicatas(casador: CasadorProdutos, ja_resolvidos=()):
             sugestoes[par] = max(score, sugestoes.get(par, 0))
     return sorted(((min(p), max(p), s) for p, s in sugestoes.items()), key=lambda x: -x[2])
 
-def montar_equivalencias(casador: CasadorProdutos, casamentos_humanos):
+def montar_equivalencias(casador: CasadorProdutos, casamentos_humanos, apoio=None):
     """Junta as equivalências automáticas com as decisões humanas (que têm prioridade)."""
     humanos = casamentos_humanos or {}
-    mapa = equivalencias_automaticas(casador, humanos.get("nao_equivalentes", []))
+    mapa = equivalencias_automaticas(casador, humanos.get("nao_equivalentes", []), apoio)
     mapa.update(humanos.get("equivalentes", {}))
     # Resolve cadeias (A->B, B->C vira A->C) e evita ciclos
     resolvido = {}

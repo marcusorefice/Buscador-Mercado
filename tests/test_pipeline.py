@@ -126,6 +126,15 @@ class TestPasso5(unittest.TestCase):
         self.assertEqual(mercados_full, {"Carrefour"})
         self.assertEqual(eans_por_mercado["Covabra"], {"7891000100103"})
 
+    def test_peca_com_peso_vira_preco_por_kg(self):
+        self.assertEqual(passo5.peso_da_peca("INT_COVABRA_BATATA", "BATATA PIRULITO 1 UN 35G", "1", "UN", "UN"), ("35", "G", "KG"))
+        self.assertEqual(passo5.peso_da_peca("INT_COVABRA_LINGUICA", "LINGUIÇA TOSCANA 1 PORÇÃO 824G", "1", "UN", "UN"), ("824", "G", "KG"))
+        # Com EAN continua por unidade (é comparado com outros mercados); sem peso no nome também
+        self.assertEqual(passo5.peso_da_peca("7891000100103", "NUTELLA 1 UN 375G", "1", "UN", "UN"), ("1", "UN", "UN"))
+        self.assertEqual(passo5.peso_da_peca("INT_X", "ALFACE CRESPA 1 UN", "1", "UN", "UN"), ("1", "UN", "UN"))
+        ofertas, _, _ = passo5.preparar_ofertas([self.item(EAN="INT_COVABRA_BATATA", Produto="BATATA PIRULITO 1 UN 35G")], [])
+        self.assertEqual(ofertas[("INT_COVABRA_BATATA", "Covabra")][5:8], ("35", "G", "KG"))
+
     def test_historico_so_quando_preco_muda(self):
         ofertas, _, _ = passo5.preparar_ofertas([self.item()], [])
         chave = ("7891000100103", "Covabra")
@@ -306,3 +315,16 @@ class TestConflitosBiblioteca(unittest.TestCase):
             with open(log, encoding="utf-8-sig") as f:
                 self.assertEqual(len(f.read().strip().splitlines()), 2)
 
+
+class TestTravaLimpeza(unittest.TestCase):
+    def test_limites(self):
+        self.assertTrue(passo5.limpeza_segura(100, 5))
+        self.assertFalse(passo5.limpeza_segura(100, 6))
+        self.assertTrue(passo5.limpeza_segura(0, 0))
+        self.assertFalse(passo5.limpeza_segura(6532, 3200))
+
+    def test_scrapers_carrefour_nao_usam_biblioteca(self):
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scrapers")
+        for nome in ("carrefour.py", "carrefour_full.py"):
+            with open(os.path.join(base, nome), encoding="utf-8") as f:
+                self.assertNotIn("indice_reverso", f.read(), nome)
