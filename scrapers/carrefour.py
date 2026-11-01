@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import ean_e_valido, ean_unico_no_html, setup_logging, read_json_file, normalizar_para_cache, preco_da_peca_vtex
+from utils import ean_e_valido, ean_unico_no_html, setup_logging, read_json_file, preco_da_peca_vtex
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -58,7 +58,7 @@ def extrair_ean_pela_foto(url_imagem):
 async def capturar_sessao():
     return {"region-id-food": REGION_ID, "cep": CEP_COOKIE_VALUE}
 
-async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
+async def extrair_lote(session, ordem, pagina, sem, agora):
     # URL da lista que já traz os produtos e links das imagens
     url = f"{BASE_URL_CONFIG}/colecao/{CLUSTER_ID}.data?map=productClusterIds&count=50&page={pagina}&sort={ordem}&_routes=layout%2Fdefault%2Croutes%2Fcolecao.%24collectionId"
     
@@ -108,9 +108,10 @@ async def extrair_lote(session, ordem, pagina, sem, agora, indice_reverso):
                     else:
                         ean = ean_oficial
                         
-                    # Se ainda assim não tiver, olha no cache da biblioteca
+                    # Sem EAN confiável: fica "N/A" e a PDP resolve depois. Nunca deduzir pelo nome
+                    # (a biblioteca já foi envenenada assim).
                     if not ean:
-                        ean = indice_reverso.get(normalizar_para_cache(nome_cru), "N/A")
+                        ean = "N/A"
 
                     # Preços
                     off = sku_p.get('sellers', [{}])[0].get('commertialOffer', {})
@@ -242,11 +243,6 @@ async def enrich_eans_from_pdps(session, lista_produtos):
 async def extrair_dados():
     cookies = await capturar_sessao()
     
-    # Carrega biblioteca para fallback de EAN
-    bib_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'biblioteca_produtos.json')
-    biblioteca = read_json_file(bib_path)
-    indice_reverso = {normalizar_para_cache(v.get('nome_comum', '')): v.get('ean', 'N/A') for v in biblioteca.values()}
-
     logger.info(f"🚀 Iniciando extração Turbo Jundiaí (EAN via Imagem)...")
     lista_final, sem, agora = [], asyncio.Semaphore(5), datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
@@ -254,7 +250,7 @@ async def extrair_dados():
         tarefas = []
         for ordem in ["price_asc", "price_desc"]:
             for pg in range(1, 35): # Varre 34 páginas de cada lado (1700 produtos por ordem, cobrindo os 2664 totais)
-                tarefas.append(extrair_lote(session, ordem, pg, sem, agora, indice_reverso))
+                tarefas.append(extrair_lote(session, ordem, pg, sem, agora))
         
         resultados = await asyncio.gather(*tarefas)
         for r in resultados:

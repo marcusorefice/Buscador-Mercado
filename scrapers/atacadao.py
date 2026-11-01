@@ -135,13 +135,19 @@ async def motor_extracao_atacadao():
                     mapa_dados = {}
                     
                     if ids_produtos:
-                        query_ids = "&".join([f"fq=productId:{pid}" for pid in ids_produtos])
-                        url_legado = f"{URL_LEGACY}?{query_ids}&sc=1"
+                        query_ids = "&".join([f"fq=skuId:{pid}" for pid in ids_produtos])
+                        url_legado = f"{URL_LEGACY}?{query_ids}&sc=1&_from=0&_to={len(ids_produtos) - 1}"
                         
                         try:
                             resp_legado = await session.get(url_legado, timeout=30)
                             if resp_legado.status_code in [200, 206]:
                                 legacy_data = resp_legado.json()
+                                # O id do GraphQL é o do SKU (itemId), não o productId: pergunte pelo skuId e use o item de mesmo id,
+                                # senão a API devolve OUTRO produto e o EAN e o preço dele vão parar neste (bug achado em 30/10/2026).
+                                ids_sku = set(ids_produtos)
+                                legacy_data = [{**lp, 'productId': str(it.get('itemId')), 'items': [it]}
+                                               for lp in legacy_data for it in (lp.get('items') or [])
+                                               if str(it.get('itemId')) in ids_sku]
                                 
                                 for lp in legacy_data:
                                     pid = str(lp.get('productId', ''))

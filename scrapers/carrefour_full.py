@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 from curl_cffi import requests
-from utils import ean_e_valido, ean_unico_no_html, setup_logging, read_json_file, normalizar_para_cache, CacheEanPdp, preco_da_peca_vtex
+from utils import ean_e_valido, ean_unico_no_html, setup_logging, read_json_file, CacheEanPdp, preco_da_peca_vtex
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 logger = setup_logging()
@@ -94,7 +94,7 @@ async def obter_categorias_menu(session):
         logger.error(f"   ❌ Erro ao extrair categorias do menu: {e}")
     return []
 
-def _parse_produto(item, agora, indice_reverso, cat_path):
+def _parse_produto(item, agora, cat_path):
     try:
         p = item.get('node', item)
         nome_cru = p.get('name', p.get('productName', '')).upper().strip()
@@ -113,7 +113,7 @@ def _parse_produto(item, agora, indice_reverso, cat_path):
             ean = ean_oficial
 
         if not ean:
-            ean = indice_reverso.get(normalizar_para_cache(nome_cru), "N/A")
+            ean = "N/A"  # a PDP resolve depois; nunca deduzir pelo nome da biblioteca
 
         off = sku_p.get('sellers', [{}])[0].get('commertialOffer', {})
         p_v, p_a = float(off.get('ListPrice', 0)), float(off.get('Price', 0))
@@ -183,7 +183,7 @@ def _parse_produto(item, agora, indice_reverso, cat_path):
     except Exception:
         return None
 
-async def extrair_pagina_categoria(session, cat_path, ordem, pagina, sem, agora, indice_reverso):
+async def extrair_pagina_categoria(session, cat_path, ordem, pagina, sem, agora):
     _from = pagina * PAGE_SIZE
     _to = _from + PAGE_SIZE - 1
     
@@ -220,7 +220,7 @@ async def extrair_pagina_categoria(session, cat_path, ordem, pagina, sem, agora,
                 if produtos_raw:
                     lote = []
                     for p in produtos_raw:
-                        parsed = _parse_produto(p, agora, indice_reverso, cat_path)
+                        parsed = _parse_produto(p, agora, cat_path)
                         if parsed:
                             lote.append(parsed)
                     acabou = len(produtos_raw) < PAGE_SIZE
@@ -230,13 +230,13 @@ async def extrair_pagina_categoria(session, cat_path, ordem, pagina, sem, agora,
 
         return [], True
 
-async def varrer_categoria(session, cat_path, sem, agora, indice_reverso):
+async def varrer_categoria(session, cat_path, sem, agora):
     coletados = []
     logger.info(f"   🔍 Iniciando varredura na categoria: /{cat_path}")
     for ordem in ["orders_desc", "price_asc"]:
         for pagina in range(0, MAX_PAGES):
             lote, acabou = await extrair_pagina_categoria(
-                session, cat_path, ordem, pagina, sem, agora, indice_reverso
+                session, cat_path, ordem, pagina, sem, agora
             )
             if lote:
                 coletados.extend(lote)
@@ -332,13 +332,6 @@ async def enrich_eans_from_pdps(session, lista_produtos):
 async def extrair_dados():
     cookies = await capturar_sessao()
 
-    bib_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'biblioteca_produtos.json')
-    biblioteca = read_json_file(bib_path)
-    indice_reverso = {
-        normalizar_para_cache(v.get('nome_comum', '')): v.get('ean', 'N/A')
-        for v in biblioteca.values()
-    }
-
     logger.info("🚀 Iniciando extração COMPLETA Jundiaí (por categorias)...")
     agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
     sem = asyncio.Semaphore(8)  # concorrência de páginas
@@ -353,7 +346,7 @@ async def extrair_dados():
         logger.info(f"   🚀 Disparando tarefas simultâneas para {len(categorias)} categorias...")
 
         tarefas = [
-            varrer_categoria(session, cat, sem, agora, indice_reverso)
+            varrer_categoria(session, cat, sem, agora)
             for cat in categorias
         ]
         resultados = await asyncio.gather(*tarefas)
