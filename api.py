@@ -646,25 +646,35 @@ def buscas_populares(limite: int = Query(8, ge=1, le=20)):
         print(f"Erro em buscas populares: {e}")
         return {"termos": []}
 
+HISTORICO_POR_MERCADO = 15
+
 @app.get("/produtos/{ean}/historico")
 def obter_historico(ean: str, background_tasks: BackgroundTasks):
     # O app pede o histórico quando a pessoa abre um produto: conta como visualização para o "Em alta"
     background_tasks.add_task(_registrar_visualizacao, ean)
-    # data_hora é gravado em ISO (AAAA-MM-DD HH:MM:SS), então ordenar o texto ordena por data
+    # data_hora é gravado em ISO (AAAA-MM-DD HH:MM:SS), então ordenar o texto ordena por data.
+    # Limite por mercado (e não no total) para um mercado com muitas mudanças não esconder os outros.
+    # preco_varejo/preco_atacado vão junto para o app tirar o preço de CPF/clube (preco fica para o app antigo).
     with get_db_cursor() as cursor:
         cursor.execute("""
-            SELECT mercado,
-                   CASE
-                       WHEN preco_atacado > 0 AND preco_varejo > 0 THEN LEAST(preco_atacado, preco_varejo)
-                       WHEN preco_atacado > 0 THEN preco_atacado
-                       ELSE preco_varejo
-                   END as preco,
-                   data_hora
-            FROM historico_precos
-            WHERE ean = %s
+            SELECT mercado, preco, preco_varejo, preco_atacado, data_hora
+            FROM (
+                SELECT mercado,
+                       CASE
+                           WHEN preco_atacado > 0 AND preco_varejo > 0 THEN LEAST(preco_atacado, preco_varejo)
+                           WHEN preco_atacado > 0 THEN preco_atacado
+                           ELSE preco_varejo
+                       END::float AS preco,
+                       COALESCE(preco_varejo, 0)::float AS preco_varejo,
+                       COALESCE(preco_atacado, 0)::float AS preco_atacado,
+                       data_hora,
+                       ROW_NUMBER() OVER (PARTITION BY mercado ORDER BY data_hora DESC) AS n
+                FROM historico_precos
+                WHERE ean = %s
+            ) h
+            WHERE n <= %s
             ORDER BY data_hora DESC
-            LIMIT 50
-        """, (ean,))
+        """, (ean, HISTORICO_POR_MERCADO))
         return cursor.fetchall()
 
 class SugestaoRequest(BaseModel):
