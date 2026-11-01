@@ -22,6 +22,7 @@ export interface Product {
   Menor_Preco: number;
   Preco_Unitario?: number;
   Unidade_Ref?: string;
+  Qtd_Mercados?: number; // em quantos mercados existe (com filtro de mercado, Ofertas traz só o filtrado)
   Ofertas: Oferta[];
   weight?: string;
   volume?: string;

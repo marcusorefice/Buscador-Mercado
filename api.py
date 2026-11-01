@@ -337,6 +337,7 @@ class ProdutoAgrupadoResponse(BaseModel):
     Menor_Preco: float
     Preco_Unitario: Optional[float] = None
     Unidade_Ref: Optional[str] = None
+    Qtd_Mercados: Optional[int] = None  # em quantos mercados o produto existe (com filtro, Ofertas traz só o filtrado)
     Ofertas: List[OfertaResponse]
 
 @app.get("/debug")
@@ -372,6 +373,7 @@ def _montar_produtos(rows):
                 "Marca": row["marca"] or "",
                 "Imagem": _miniatura(row["imagem"] or ""),
                 "Tags": [t.strip() for t in raw_tags.split(',')] if raw_tags else [],
+                "Qtd_Mercados": row.get("qtd_mercados"),
                 "Ofertas": [],
                 "_precos": [],
             }
@@ -507,8 +509,8 @@ def _consultar_produtos(q, sort_by, market, limite, offset):
         ,
         ranking AS (
             -- Corta a página (top-N, rápido) e só então numera, na ordem em que vieram
-            SELECT ean, ROW_NUMBER() OVER () AS posicao FROM (
-                SELECT a.ean
+            SELECT ean, qtd_mercados, ROW_NUMBER() OVER () AS posicao FROM (
+                SELECT a.ean, a.qtd_mercados
                 FROM agregadas a
                 LEFT JOIN popularidade pop ON pop.ean = a.ean
                 LEFT JOIN produtos prod ON prod.ean = a.ean
@@ -518,7 +520,7 @@ def _consultar_produtos(q, sort_by, market, limite, offset):
             ) primeiros
         )
         -- Ofertas válidas só dos produtos do ranking, respeitando o mesmo filtro de mercado
-        SELECT {COLUNAS_OFERTA}
+        SELECT {COLUNAS_OFERTA}, r.qtd_mercados
         FROM ranking r
         JOIN ofertas_validas v ON v.ean = r.ean
         JOIN produtos p ON p.ean = v.ean
