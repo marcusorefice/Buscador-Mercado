@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, StyleSheet, ActivityIndicator, StatusBar, TouchableOpacity, ScrollView, Modal, Platform, Alert, Image, Keyboard } from 'react-native';
-import { Provider as PaperProvider, Searchbar, Text, Chip, IconButton, Button, TextInput } from 'react-native-paper';
+import { View, StyleSheet, StatusBar, TouchableOpacity, ScrollView, Platform, Keyboard } from 'react-native';
+import { Provider as PaperProvider, Searchbar, Text, Chip, IconButton, Button } from 'react-native-paper';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
 import { ProductList } from './components/ProductList';
 import { ProductDetailsModal } from './components/ProductDetailsModal';
 import { ShoppingListModal } from './components/ShoppingListModal';
 import { useShoppingListStore } from './components/useShoppingListStore';
-import { usePreferenciasStore, formatarCep, CEP_PADRAO } from './components/usePreferenciasStore';
 import { Product } from './types';
 import { SkeletonCard } from './components/SkeletonCard';
+import { ModalOpcoes } from './components/app/ModalOpcoes';
+import { ModalConfiguracoes } from './components/app/ModalConfiguracoes';
+import { ModalScanner } from './components/app/ModalScanner';
+import { MenuLateral } from './components/app/MenuLateral';
+import { ModalSugestao } from './components/app/ModalSugestao';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as ImagePicker from 'expo-image-picker';
-import Constants from 'expo-constants';
 import { API_URL, TAMANHO_PAGINA, theme, MARKETS, Ordenacao, ORDENACOES, TAGS_PADRAO } from './config';
 
 // Chips da tela inicial: o que a pessoa mais busca, depois o que todos mais buscam, depois o padrão
@@ -36,10 +37,6 @@ export default function App() {
   const [isCartVisible, setCartVisible] = useState(false);
   const [isSidebarVisible, setSidebarVisible] = useState(false);
   const [isSuggestionModalVisible, setSuggestionModalVisible] = useState(false);
-  const [suggestionText, setSuggestionText] = useState('');
-  const [suggestionImage, setSuggestionImage] = useState<string | null>(null);
-  const [suggestionImageBase64, setSuggestionImageBase64] = useState<string | null>(null);
-  const [isSendingSuggestion, setIsSendingSuggestion] = useState(false);
   const [dynamicTags, setDynamicTags] = useState<string[]>(TAGS_PADRAO);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const productsRef = useRef<Product[]>([]);
@@ -68,7 +65,6 @@ export default function App() {
   const [textSuggestions, setTextSuggestions] = useState<string[]>([]);
   
   const [isScanning, setIsScanning] = useState(false);
-  const [permission, requestPermission] = useCameraPermissions();
 
   // Lendo a quantidade de itens na lista usando Zustand
   const cartItemsCount = useShoppingListStore(state => state.list.length);
@@ -82,9 +78,6 @@ export default function App() {
   const [isMarketModalVisible, setMarketModalVisible] = useState(false);
   const [isSortModalVisible, setSortModalVisible] = useState(false);
   const [isSettingsVisible, setSettingsVisible] = useState(false);
-  const cepSalvo = usePreferenciasStore(state => state.cep);
-  const setCepSalvo = usePreferenciasStore(state => state.setCep);
-  const [cepDigitado, setCepDigitado] = useState('');
   // Busca que a pessoa pediu: só entra no histórico (e nos atalhos) se achar produtos
   const buscaPendenteRef = useRef('');
   // Quando a API corrige um erro de digitação (ex: heinekem -> heineken), guardamos os dois para avisar a pessoa
@@ -387,50 +380,6 @@ export default function App() {
     setModalVisible(true);
   }, []);
 
-  const handlePickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.7,
-      base64: true,
-    });
-    if (!result.canceled) {
-      setSuggestionImage(result.assets[0].uri);
-      setSuggestionImageBase64(result.assets[0].base64 ?? null);
-    }
-  };
-
-  const handleSendSuggestion = async () => {
-    if (!suggestionText.trim()) return;
-    setIsSendingSuggestion(true);
-    try {
-      // A sugestão vai para a nossa API, que repassa ao Discord.
-      // A URL do webhook fica só no servidor (qualquer um consegue extrair o que está dentro do APK).
-      const response = await fetch(`${API_URL}/sugestoes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-        body: JSON.stringify({
-          texto: suggestionText,
-          imagem_base64: suggestionImage ? suggestionImageBase64 : null,
-          imagem_nome: suggestionImage ? (suggestionImage.split('/').pop() || 'print.jpg') : null,
-        }),
-      });
-      
-      if (response.ok || response.status === 204) {
-        Alert.alert('Sucesso!', 'Sua sugestão foi enviada. Obrigado por ajudar a melhorar o app!');
-        setSuggestionModalVisible(false);
-        setSuggestionText('');
-        setSuggestionImage(null);
-        setSuggestionImageBase64(null);
-      } else {
-        throw new Error('Falha no envio');
-      }
-    } catch (error) {
-      Alert.alert('Erro', 'Não foi possível enviar a sugestão. Verifique sua conexão e tente novamente.');
-    } finally {
-      setIsSendingSuggestion(false);
-    }
-  };
-
   return (
     <SafeAreaProvider>
       <PaperProvider theme={theme}>
@@ -480,10 +429,7 @@ export default function App() {
                 icon="barcode-scan"
                 iconColor="#fff"
                 size={28}
-                onPress={() => {
-                  if (!permission?.granted) requestPermission();
-                  setIsScanning(true);
-                }}
+                onPress={() => setIsScanning(true)}
                 style={{ marginLeft: 8, marginRight: 0 }}
               />
             </View>
@@ -581,213 +527,44 @@ export default function App() {
             apiUrl={API_URL}
           />
 
-          <Modal visible={isMarketModalVisible} animationType="slide" transparent={true}>
-            <View style={styles.modalOverlay}>
-              <View style={styles.modalContent}>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Filtrar por Mercado</Text>
-                  <IconButton icon="close" onPress={() => setMarketModalVisible(false)} />
-                </View>
-                <ScrollView>
-                  {MARKETS.map(market => (
-                    <TouchableOpacity 
-                      key={market} 
-                      style={[styles.marketOption, selectedMarket === market && styles.marketOptionSelected]}
-                      onPress={() => {
-                        setSelectedMarket(market);
-                        setMarketModalVisible(false);
-                      }}
-                    >
-                      <Text style={[styles.marketOptionText, selectedMarket === market && styles.marketOptionTextSelected]}>
-                        {market}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            </View>
-          </Modal>
+          <ModalOpcoes
+            visible={isMarketModalVisible}
+            titulo="Filtrar por Mercado"
+            opcoes={MARKETS.map(m => ({ chave: m, titulo: m }))}
+            selecionada={selectedMarket}
+            onEscolher={setSelectedMarket}
+            onFechar={() => setMarketModalVisible(false)}
+          />
 
-          <Modal visible={isSortModalVisible} animationType="slide" transparent={true} onRequestClose={() => setSortModalVisible(false)}>
-            <View style={styles.modalOverlay}>
-              <View style={styles.modalContent}>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Ordenar por</Text>
-                  <IconButton icon="close" onPress={() => setSortModalVisible(false)} />
-                </View>
-                {(Object.keys(ORDENACOES) as Ordenacao[]).map(chave => (
-                  <TouchableOpacity
-                    key={chave}
-                    style={[styles.marketOption, sortBy === chave && styles.marketOptionSelected]}
-                    onPress={() => { setSortBy(chave); setSortModalVisible(false); }}
-                  >
-                    <Text style={[styles.marketOptionText, sortBy === chave && styles.marketOptionTextSelected]}>
-                      {ORDENACOES[chave].titulo}
-                    </Text>
-                    <Text style={styles.sortDescricao}>{ORDENACOES[chave].descricao}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          </Modal>
+          <ModalOpcoes
+            visible={isSortModalVisible}
+            titulo="Ordenar por"
+            opcoes={(Object.keys(ORDENACOES) as Ordenacao[]).map(chave => ({ chave, ...ORDENACOES[chave] }))}
+            selecionada={sortBy}
+            onEscolher={setSortBy}
+            onFechar={() => setSortModalVisible(false)}
+          />
 
-          {/* --- CONFIGURAÇÕES --- */}
-          <Modal visible={isSettingsVisible} animationType="slide" transparent={true} onRequestClose={() => setSettingsVisible(false)}>
-            <View style={styles.modalOverlay}>
-              <View style={styles.modalContent}>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>⚙️ Configurações</Text>
-                  <IconButton icon="close" onPress={() => setSettingsVisible(false)} />
-                </View>
-                <View style={{ padding: 20 }}>
-                  <Text style={styles.configRotulo}>Seu CEP</Text>
-                  <Text style={styles.configAjuda}>
-                    Alguns mercados (como o Atacadão) mostram preços diferentes conforme o CEP. Informe o seu para copiá-lo e colar no site do mercado.
-                  </Text>
-                  <TextInput
-                    mode="outlined"
-                    label="CEP"
-                    placeholder={CEP_PADRAO}
-                    value={cepDigitado}
-                    onChangeText={t => setCepDigitado(formatarCep(t))}
-                    keyboardType="number-pad"
-                    maxLength={9}
-                    style={{ backgroundColor: '#fff', marginBottom: 15 }}
-                    activeOutlineColor="#E5293E"
-                  />
-                  <Button
-                    mode="contained"
-                    buttonColor="#E5293E"
-                    disabled={cepDigitado !== '' && cepDigitado.length !== 9}
-                    onPress={() => { setCepSalvo(cepDigitado); setSettingsVisible(false); }}
-                  >
-                    Salvar
-                  </Button>
-                  {cepSalvo !== '' && (
-                    <Button textColor="#888" style={{ marginTop: 8 }} onPress={() => { setCepSalvo(''); setCepDigitado(''); }}>
-                      Voltar ao CEP padrão ({CEP_PADRAO})
-                    </Button>
-                  )}
-                </View>
-              </View>
-            </View>
-          </Modal>
+          <ModalConfiguracoes visible={isSettingsVisible} onFechar={() => setSettingsVisible(false)} />
 
-          {/* --- MODAL DA CÂMERA DE LEITURA DE EAN --- */}
-          <Modal visible={isScanning} animationType="slide" transparent={false} onRequestClose={() => setIsScanning(false)}>
-            <SafeAreaView style={{ flex: 1, backgroundColor: 'black' }} edges={['top', 'bottom']}>
-              <View style={styles.scannerHeader}>
-                <Text style={styles.scannerTitle}>Escanear Código de Barras</Text>
-                <IconButton icon="close" iconColor="white" size={24} onPress={() => setIsScanning(false)} />
-              </View>
-              {permission?.granted ? (
-                <View style={styles.scannerContainer}>
-                  <CameraView
-                    style={StyleSheet.absoluteFillObject}
-                    facing="back"
-                    barcodeScannerSettings={{ barcodeTypes: ["ean13", "ean8", "upc_a", "upc_e"] }}
-                    onBarcodeScanned={({ data }) => {
-                      setIsScanning(false);
-                      setSearchQuery(data);
-                      searchQueryRef.current = data;
-                      fetchProducts(data);
-                    }}
-                  />
-                  <View style={styles.scannerOverlay}>
-                    <View style={styles.scannerTarget} />
-                  </View>
-                </View>
-              ) : (
-                <View style={styles.centerContainer}>
-                  <Text style={{ color: 'white', marginBottom: 20 }}>Precisamos de acesso à câmera.</Text>
-                  <Button mode="contained" onPress={requestPermission} buttonColor="#E5293E">Conceder Permissão</Button>
-                </View>
-              )}
-            </SafeAreaView>
-          </Modal>
-          
-          {/* --- MENU LATERAL (SIDEBAR) --- */}
-          <Modal visible={isSidebarVisible} animationType="fade" transparent={true} onRequestClose={() => setSidebarVisible(false)}>
-            <View style={styles.sidebarOverlay}>
-              <View style={styles.sidebarContent}>
-                <View style={styles.sidebarHeader}>
-                  <Text style={styles.sidebarTitle}>Comparador Jundiaí</Text>
-                </View>
-                <ScrollView style={{ flex: 1, paddingTop: 10 }}>
-                  <TouchableOpacity 
-                    style={styles.sidebarItem} 
-                    onPress={() => {
-                      setSidebarVisible(false);
-                      setSuggestionModalVisible(true);
-                    }}
-                  >
-                    <IconButton icon="lightbulb-on-outline" size={24} iconColor="#555" style={{ margin: 0, marginRight: 10 }} />
-                    <Text style={styles.sidebarItemText}>Enviar Sugestão</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.sidebarItem} onPress={() => { setSidebarVisible(false); setCepDigitado(cepSalvo); setSettingsVisible(true); }}>
-                    <IconButton icon="cog-outline" size={24} iconColor="#555" style={{ margin: 0, marginRight: 10 }} />
-                    <Text style={styles.sidebarItemText}>Configurações</Text>
-                  </TouchableOpacity>
-                </ScrollView>
-                <View style={styles.sidebarFooter}>
-                  <Text style={styles.versionText}>Versão {Constants.expoConfig?.version || '1.0.0'}</Text>
-                </View>
-              </View>
-              <TouchableOpacity style={styles.sidebarCloseArea} activeOpacity={1} onPress={() => setSidebarVisible(false)} />
-            </View>
-          </Modal>
+          <ModalScanner
+            visible={isScanning}
+            onFechar={() => setIsScanning(false)}
+            onLido={codigo => {
+              setSearchQuery(codigo);
+              searchQueryRef.current = codigo;
+              fetchProducts(codigo);
+            }}
+          />
 
-          {/* --- MODAL DE SUGESTÕES (IN-APP) --- */}
-          <Modal visible={isSuggestionModalVisible} animationType="slide" transparent={true} onRequestClose={() => setSuggestionModalVisible(false)}>
-            <View style={styles.modalOverlay}>
-              <View style={styles.modalContent}>
-                <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>💡 Enviar Sugestão</Text>
-                  <IconButton icon="close" onPress={() => setSuggestionModalVisible(false)} />
-                </View>
-                <View style={{ padding: 20 }}>
-                  <Text style={{ marginBottom: 15, color: '#555', fontSize: 15, lineHeight: 22 }}>
-                    Encontrou algum erro ou tem uma ideia? Envie direto por aqui!
-                  </Text>
-                  <TextInput
-                    mode="outlined"
-                    label="Sua mensagem"
-                    placeholder="Descreva o problema ou a sugestão..."
-                    multiline
-                    numberOfLines={4}
-                    value={suggestionText}
-                    onChangeText={setSuggestionText}
-                    style={{ backgroundColor: '#fff', marginBottom: 15 }}
-                    activeOutlineColor="#E5293E"
-                  />
-                  
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
-                    <Button mode="outlined" icon="camera-image" onPress={handlePickImage} textColor="#555" style={{ flex: 1, borderColor: '#ccc' }}>
-                      {suggestionImage ? 'Trocar Imagem' : 'Anexar Print (Opcional)'}
-                    </Button>
-                    {suggestionImage && (
-                      <View style={{ marginLeft: 10, position: 'relative' }}>
-                        <Image source={{ uri: suggestionImage }} style={{ width: 40, height: 40, borderRadius: 8 }} />
-                        <IconButton 
-                          icon="close-circle" size={18} iconColor="#E5293E"
-                          style={{ position: 'absolute', top: -15, right: -15, margin: 0, backgroundColor: '#fff' }}
-                          onPress={() => setSuggestionImage(null)}
-                        />
-                      </View>
-                    )}
-                  </View>
+          <MenuLateral
+            visible={isSidebarVisible}
+            onFechar={() => setSidebarVisible(false)}
+            onSugestao={() => setSuggestionModalVisible(true)}
+            onConfiguracoes={() => setSettingsVisible(true)}
+          />
 
-                  <Button
-                    mode="contained" buttonColor="#E5293E" icon="send"
-                    loading={isSendingSuggestion} onPress={handleSendSuggestion}
-                    disabled={suggestionText.trim().length === 0 || isSendingSuggestion}
-                  >
-                    Enviar Mensagem
-                  </Button>
-                </View>
-              </View>
-            </View>
-          </Modal>
+          <ModalSugestao visible={isSuggestionModalVisible} onFechar={() => setSuggestionModalVisible(false)} />
 
         </SafeAreaView>
       </PaperProvider>
@@ -805,9 +582,6 @@ const styles = StyleSheet.create({
   vazioSub: { fontSize: 13, color: '#888', marginTop: 16, marginBottom: 8 },
   vazioChips: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
   vazioChip: { backgroundColor: '#fde8ea' },
-  sortDescricao: { fontSize: 12, color: '#888', marginTop: 2 },
-  configRotulo: { fontSize: 16, fontWeight: 'bold', color: '#333', marginBottom: 4 },
-  configAjuda: { fontSize: 13, color: '#666', lineHeight: 19, marginBottom: 14 },
   safeAreaWrapper: {
     flex: 1,
     backgroundColor: '#E5293E',
@@ -932,62 +706,4 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 6,
   },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.5)'
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '70%',
-    paddingBottom: 20,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  marketOption: {
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5',
-  },
-  marketOptionSelected: {
-    backgroundColor: '#fff0f2',
-  },
-  marketOptionText: {
-    fontSize: 16,
-    color: '#444',
-  },
-  marketOptionTextSelected: {
-    color: '#E5293E',
-    fontWeight: 'bold',
-  },
-  // Estilos do Scanner
-  scannerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, backgroundColor: 'black' },
-  scannerTitle: { color: 'white', fontSize: 18, fontWeight: 'bold' },
-  scannerContainer: { flex: 1, position: 'relative' },
-  scannerOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
-  scannerTarget: { width: 250, height: 150, borderWidth: 2, borderColor: '#E5293E', borderRadius: 12, backgroundColor: 'transparent' },
-  // Estilos do Menu Lateral
-  sidebarOverlay: { flex: 1, flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.5)' },
-  sidebarCloseArea: { flex: 1 },
-  sidebarContent: { width: '75%', maxWidth: 300, backgroundColor: '#fff', height: '100%', elevation: 16, shadowColor: '#000', shadowOffset: { width: 5, height: 0 }, shadowOpacity: 0.3, shadowRadius: 5 },
-  sidebarHeader: { backgroundColor: '#E5293E', padding: 20, paddingTop: Platform.OS === 'ios' ? 50 : 20, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  sidebarTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  sidebarItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 },
-  sidebarItemText: { fontSize: 16, color: '#333', fontWeight: '500' },
-  sidebarFooter: { padding: 20, borderTopWidth: 1, borderTopColor: '#eee', alignItems: 'center' },
-  versionText: { color: '#999', fontSize: 12, fontWeight: 'bold' },
 });
