@@ -29,3 +29,13 @@ export interface Product {
   unidade_medida?: string;
   Categoria?: string; // para não quebrar filtro antigo
 }
+
+// Um ponto de GET /produtos/{ean}/historico. preco = menor entre varejo e atacado da embalagem;
+// preco_varejo e preco_atacado vêm da API nova (o app trata a ausência deles).
+export interface PontoHistoricoApi {
+  mercado: string;
+  preco: number;
+  preco_varejo?: number;
+  preco_atacado?: number;
+  data_hora: string;
+}

@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, Modal, Image, ScrollView, ActivityIndicator, TouchableOpacity, ToastAndroid, Linking, Alert, Platform } from 'react-native';
 import { Text, Title, IconButton, Divider, Chip, Button } from 'react-native-paper';
-import { Product } from '../types';
+import { Product, PontoHistoricoApi } from '../types';
 import { getMarketLogo } from './ProductCard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import axios from 'axios';
@@ -10,6 +10,7 @@ import * as Clipboard from 'expo-clipboard';
 import { usePreferenciasStore, CEP_PADRAO } from './usePreferenciasStore';
 import { getPrecoCondicional } from '../precos';
 import { formatPrice } from '../formatar';
+import { HistoricoPrecos } from './detalhes/HistoricoPrecos';
 
 interface ProductDetailsModalProps {
   visible: boolean;
@@ -40,8 +41,9 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
   const [detailedProduct, setDetailedProduct] = React.useState<Product | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [selectedOfferIndex, setSelectedOfferIndex] = React.useState<number>(0);
-  const [history, setHistory] = React.useState<any[]>([]);
+  const [history, setHistory] = React.useState<PontoHistoricoApi[]>([]);
   const [loadingHistory, setLoadingHistory] = React.useState(false);
+  const [erroHistorico, setErroHistorico] = React.useState(false);
   const cepUsuario = usePreferenciasStore(state => state.cep);
   const cepAviso = cepUsuario || CEP_PADRAO;
   const [cepCopiado, setCepCopiado] = React.useState(false);
@@ -55,6 +57,8 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
       setDetailedProduct(product); 
       setIsLoading(true);
       setSelectedOfferIndex(0); // Reseta a seleção para a melhor oferta ao abrir
+      setHistory([]); // não mostra o histórico do produto anterior enquanto carrega
+      setErroHistorico(false);
 
       // Atrasar a busca levemente para não engasgar a animação de "Slide" do Modal
       const timer = setTimeout(() => {
@@ -80,29 +84,17 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
         if (product.EAN && product.EAN !== 'N/A') {
           const fetchHistory = async () => {
             setLoadingHistory(true);
+            setErroHistorico(false);
             try {
-              const res = await axios.get(`${apiUrl}/produtos/${product.EAN}/historico`, {
+              const res = await axios.get<PontoHistoricoApi[]>(`${apiUrl}/produtos/${product.EAN}/historico`, {
                 headers: { 'ngrok-skip-browser-warning': 'true', 'Bypass-Tunnel-Reminder': 'true' }
               });
-              
-              // Converte as datas de texto para tempo real e ordena: Mais recentes no topo
-              const sortedHistory = res.data.sort((a: any, b: any) => {
-                const parseToTimestamp = (dateStr: string) => {
-                  if (!dateStr) return 0;
-                  const [datePart, timePart = '00:00:00'] = dateStr.split(' ');
-                  if (datePart.includes('/')) {
-                    const [day, month, year] = datePart.split('/');
-                    return new Date(`${year}-${month}-${day}T${timePart}`).getTime();
-                  }
-                  return new Date(`${datePart}T${timePart}`).getTime();
-                };
-                return parseToTimestamp(b.data_hora) - parseToTimestamp(a.data_hora);
-              });
-
-              setHistory(sortedHistory);
+              // A ordenação e a limpeza ficam em HistoricoPrecos (resumirHistorico)
+              setHistory(Array.isArray(res.data) ? res.data : []);
             } catch (error) {
               console.error("Falha ao buscar histórico do produto:", error);
               setHistory([]);
+              setErroHistorico(true);
             } finally {
               setLoadingHistory(false);
             }
@@ -110,23 +102,13 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
           fetchHistory();
         } else {
           setHistory([]);
+          setErroHistorico(false);
         }
       }, 100);
 
       return () => clearTimeout(timer);
     }
   }, [visible, product, apiUrl]);
-
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '';
-    const [datePart] = dateStr.split(' ');
-    // Se vier no formato YYYY-MM-DD do banco, converte para BR
-    if (datePart.includes('-')) {
-      const [year, month, day] = datePart.split('-');
-      return `${day}/${month}/${year}`;
-    }
-    return datePart;
-  };
 
   const productToRender = detailedProduct || product;
 
@@ -432,31 +414,13 @@ export const ProductDetailsModal: React.FC<ProductDetailsModalProps> = ({ visibl
             
             <Divider style={styles.divider} />
 
-            <View style={styles.offersHeaderRow}>
-              <Text style={styles.offersHeader}>📉 Histórico de Preços</Text>
-              {loadingHistory && <ActivityIndicator size="small" color="#E5293E" />}
-            </View>
-
-            {!loadingHistory && history.length === 0 ? (
-              <Text style={styles.emptyHistory}>Nenhum histórico registrado para este produto.</Text>
-            ) : (
-              <View style={styles.historyContainer}>
-                {history.slice(0, 50).map((item, index) => (
-                  <View key={index} style={styles.historyRow}>
-                    <View style={styles.historyMarketInfo}>
-                      <Image source={getMarketLogo(item.mercado)} style={styles.historyMarketLogo} resizeMode="contain" />
-                      <View>
-                        <Text style={styles.historyMarketName}>{item.mercado}</Text>
-                        <Text style={styles.historyDate}>{formatDate(item.data_hora)}</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.historyPrice}>
-                      R$ {Number(item.preco).toFixed(2).replace('.', ',')}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
+            <HistoricoPrecos
+              key={productToRender.EAN}
+              historico={history}
+              ofertas={productToRender.Ofertas}
+              carregando={loadingHistory}
+              erro={erroHistorico}
+            />
 
           </View>
         </ScrollView>
@@ -756,50 +720,5 @@ const styles = StyleSheet.create({
     color: '#666',
     textDecorationLine: 'line-through',
     marginTop: 2,
-  },
-  historyContainer: {
-    backgroundColor: '#f9f9f9',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#eee',
-  },
-  historyRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  historyMarketInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  historyMarketLogo: {
-    width: 32,
-    height: 24,
-    marginRight: 12,
-  },
-  historyMarketName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#444',
-  },
-  historyDate: {
-    fontSize: 12,
-    color: '#888',
-  },
-  historyPrice: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#E5293E',
-  },
-  emptyHistory: {
-    color: '#888',
-    fontStyle: 'italic',
-    textAlign: 'center',
-    marginTop: 10,
   },
 });
